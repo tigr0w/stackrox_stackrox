@@ -22,14 +22,14 @@ import PageTitle from 'Components/PageTitle';
 import useURLStringUnion from 'hooks/useURLStringUnion';
 import EmptyStateTemplate from 'Components/PatternFly/EmptyStateTemplate';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
-import ImagePageVulnerabilities from './ImagePageVulnerabilities';
-import ImagePageResources from './ImagePageResources';
-import { detailsTabValues } from '../types';
-import { getOverviewCvesPath } from '../searchUtils';
 import ImageDetailBadges, {
     ImageDetails,
     imageDetailsFragment,
 } from '../components/ImageDetailBadges';
+import { getOverviewCvesPath } from '../searchUtils';
+import { detailsTabValues } from '../types';
+import ImagePageResources from './ImagePageResources';
+import ImagePageVulnerabilities from './ImagePageVulnerabilities';
 
 const workloadCveOverviewImagePath = getOverviewCvesPath({
     cveStatusTab: 'Observed',
