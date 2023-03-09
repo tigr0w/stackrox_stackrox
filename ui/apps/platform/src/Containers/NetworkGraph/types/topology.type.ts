@@ -15,6 +15,11 @@ export type CustomNodeModel =
     | CIDRBlockNodeModel
     | ExtraneousNodeModel;
 
+export type CustomSingleNodeModel =
+    | DeploymentNodeModel
+    | ExternalEntitiesNodeModel
+    | CIDRBlockNodeModel;
+
 export type NamespaceNodeModel = Override<NodeModel, { data: NamespaceData }>;
 
 export type DeploymentNodeModel = Override<NodeModel, { data: DeploymentData }>;
@@ -42,6 +47,8 @@ export type NamespaceData = {
     type: 'NAMESPACE';
     collapsible: boolean;
     showContextMenu: boolean;
+    namespace: string;
+    cluster: string;
 };
 
 export type NetworkPolicyState = 'none' | 'both' | 'ingress' | 'egress';
@@ -67,6 +74,7 @@ export type DeploymentData = {
     showPolicyState: boolean;
     isExternallyConnected: boolean;
     showExternalState: boolean;
+    isFadedOut: boolean;
 };
 
 export type ExternalGroupData = {
@@ -79,6 +87,7 @@ export type ExternalEntitiesData = {
     type: 'EXTERNAL_ENTITIES';
     id: string;
     outEdges: OutEdges;
+    isFadedOut: boolean;
 };
 
 export type CIDRBlockData = {
@@ -90,6 +99,7 @@ export type CIDRBlockData = {
         name: string;
     };
     outEdges: OutEdges;
+    isFadedOut: boolean;
 };
 
 export type ExtraneousData = {

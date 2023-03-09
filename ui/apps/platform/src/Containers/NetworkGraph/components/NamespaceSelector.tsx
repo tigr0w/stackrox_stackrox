@@ -1,10 +1,11 @@
 import React, { useCallback, ChangeEvent } from 'react';
-import { Badge, Select, SelectOption, SelectVariant } from '@patternfly/react-core';
+import { Badge, Button, Select, SelectOption, SelectVariant } from '@patternfly/react-core';
 
 import useSelectToggle from 'hooks/patternfly/useSelectToggle';
 import { Namespace } from 'hooks/useFetchClusterNamespaces';
 import { NamespaceWithDeployments } from 'hooks/useFetchNamespaceDeployments';
 import { NamespaceIcon } from '../common/NetworkGraphIcons';
+import { getDeploymentLookupMap, getDeploymentsAllowedByNamespaces } from '../utils/hierarchyUtils';
 
 function filterElementsWithValueProp(
     filterValue: string,
@@ -39,7 +40,7 @@ function NamespaceSelector({
     const {
         isOpen: isNamespaceOpen,
         toggleSelect: toggleIsNamespaceOpen,
-        closeSelect: closeNamespaceSelect,
+        closeSelect,
     } = useSelectToggle();
 
     const onFilterNamespaces = useCallback(
@@ -62,22 +63,20 @@ function NamespaceSelector({
         [namespaces]
     );
 
-    const deploymentLookup: Record<string, string[]> = deploymentsByNamespace.reduce((acc, ns) => {
-        const deployments = ns.deployments.map((deployment) => deployment.name);
-        return { ...acc, [ns.metadata.name]: deployments };
-    }, {});
+    const clusterSelected = Boolean(searchFilter?.Cluster);
+    const isEmptyCluster = clusterSelected && namespaces.length === 0;
+
+    const deploymentLookupMap = getDeploymentLookupMap(deploymentsByNamespace);
 
     const onNamespaceSelect = (_, selected) => {
-        closeNamespaceSelect();
-
         const newSelection = selectedNamespaces.find((nsFilter) => nsFilter === selected)
             ? selectedNamespaces.filter((nsFilter) => nsFilter !== selected)
             : selectedNamespaces.concat(selected);
 
-        const newDeploymentLookup = Object.fromEntries(
-            Object.entries(deploymentLookup).filter(([key]) => newSelection.includes(key))
+        const allowedDeployments = getDeploymentsAllowedByNamespaces(
+            deploymentLookupMap,
+            newSelection
         );
-        const allowedDeployments = Object.values(newDeploymentLookup).flat(1);
 
         const filteredSelectedDeployments = selectedDeployments.filter((deployment) =>
             allowedDeployments.includes(deployment)
@@ -86,6 +85,14 @@ function NamespaceSelector({
         const modifiedSearchObject = { ...searchFilter };
         modifiedSearchObject.Namespace = newSelection;
         modifiedSearchObject.Deployment = filteredSelectedDeployments;
+        setSearchFilter(modifiedSearchObject);
+    };
+
+    const onClearSelections = () => {
+        const modifiedSearchObject = { ...searchFilter };
+        delete modifiedSearchObject.Namespace;
+        delete modifiedSearchObject.Deployment;
+        closeSelect();
         setSearchFilter(modifiedSearchObject);
     };
 
@@ -114,7 +121,9 @@ function NamespaceSelector({
             placeholderText={
                 <span>
                     <NamespaceIcon className="pf-u-mr-xs" />{' '}
-                    <span style={{ position: 'relative', top: '1px' }}>Namespaces</span>
+                    <span style={{ position: 'relative', top: '1px' }}>
+                        {isEmptyCluster ? 'No namespaces' : 'Namespaces'}
+                    </span>
                 </span>
             }
             toggleAriaLabel="Select namespaces"
@@ -124,6 +133,11 @@ function NamespaceSelector({
             maxHeight="275px"
             hasInlineFilter
             isPlain
+            footer={
+                <Button variant="link" isInline onClick={onClearSelections}>
+                    Clear selections
+                </Button>
+            }
         >
             {namespaceSelectOptions}
         </Select>

@@ -57,6 +57,12 @@ var (
 
 // CreateSensor takes in a client interface and returns a sensor instantiation
 func CreateSensor(cfg *CreateOptions) (*sensor.Sensor, error) {
+	if env.ResyncDisabled.BooleanSetting() {
+		log.Infof("Running sensor with Kubernetes re-sync disabled")
+	} else {
+		log.Infof("Running sesnor with Kubernetes re-sync enabled. Re-sync time: %s", cfg.resyncPeriod.String())
+	}
+
 	admCtrlSettingsMgr := admissioncontroller.NewSettingsManager(resources.DeploymentStoreSingleton(), resources.PodStoreSingleton())
 
 	var helmManagedConfig *central.HelmManagedConfigInit
@@ -106,7 +112,7 @@ func CreateSensor(cfg *CreateOptions) (*sensor.Sensor, error) {
 
 	imageCache := expiringcache.NewExpiringCache(env.ReprocessInterval.DurationSetting())
 	policyDetector := detector.New(enforcer, admCtrlSettingsMgr, resources.DeploymentStoreSingleton(), resources.ServiceAccountStoreSingleton(), imageCache, auditLogEventsInput, auditLogCollectionManager, resources.NetworkPolicySingleton())
-	pipeline := eventpipeline.New(cfg.k8sClient, configHandler, policyDetector, k8sNodeName.Setting(), cfg.resyncPeriod, cfg.traceWriter, storeProvider)
+	pipeline := eventpipeline.New(cfg.k8sClient, configHandler, policyDetector, k8sNodeName.Setting(), cfg.resyncPeriod, cfg.traceWriter, storeProvider, cfg.eventPipelineQueueSize)
 	admCtrlMsgForwarder := admissioncontroller.NewAdmCtrlMsgForwarder(admCtrlSettingsMgr, pipeline)
 
 	imageService := image.NewService(imageCache, registry.Singleton())
@@ -135,7 +141,8 @@ func CreateSensor(cfg *CreateOptions) (*sensor.Sensor, error) {
 		reprocessor.NewHandler(admCtrlSettingsMgr, policyDetector, imageCache),
 	}
 	if features.RHCOSNodeScanning.Enabled() {
-		components = append(components, compliance.NewNodeInventoryHandler(complianceService.NodeInventories()))
+		matcher := compliance.NewNodeIDMatcher(storeProvider.Nodes())
+		components = append(components, compliance.NewNodeInventoryHandler(complianceService.NodeInventories(), matcher))
 	}
 
 	if !cfg.localSensor {

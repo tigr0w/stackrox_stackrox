@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +11,8 @@ import (
 	"github.com/cenkalti/backoff/v3"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/compliance/collection/auditlog"
+	"github.com/stackrox/rox/compliance/collection/intervals"
+	cmetrics "github.com/stackrox/rox/compliance/collection/metrics"
 	"github.com/stackrox/rox/compliance/collection/nodeinventorizer"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/generated/storage"
@@ -19,6 +22,7 @@ import (
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/k8sutil"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/mtls"
 	"github.com/stackrox/rox/pkg/orchestrators"
 	"github.com/stackrox/rox/pkg/protoutils"
@@ -107,32 +111,15 @@ func startAuditLogCollection(ctx context.Context, client sensor.ComplianceServic
 	return auditReader
 }
 
-// manageSendingToSensor sends everything from sensorC channel to sensor
-func manageSendingToSensor(ctx context.Context, cli sensor.ComplianceServiceClient, sensorC <-chan *sensor.MsgFromCompliance) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case sc := <-sensorC:
-			client, _, err := initializeStream(ctx, cli)
-			if err != nil && ctx.Err() == nil {
-				// error even after retries
-				log.Fatalf("unable to establish send stream to sensor: %v", err)
-			}
-			if err := client.Send(sc); err != nil {
-				log.Errorf("failed sending nodeScanV2 to sensor: %v", err)
-			}
-		}
-	}
-}
-
-func manageReceiveStream(ctx context.Context, cli sensor.ComplianceServiceClient, sig *concurrency.Signal) {
+func manageStream(ctx context.Context, cli sensor.ComplianceServiceClient, sig *concurrency.Signal, sensorC <-chan *sensor.MsgFromCompliance) {
 	for {
 		select {
 		case <-ctx.Done():
 			sig.Signal()
 			return
 		default:
+			// initializeStream must only be called once across all Compliance components,
+			// as multiple calls would overwrite associations on the Sensor side.
 			client, config, err := initializeStream(ctx, cli)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -141,39 +128,55 @@ func manageReceiveStream(ctx context.Context, cli sensor.ComplianceServiceClient
 				}
 				log.Fatalf("error initializing stream to sensor: %v", err)
 			}
+			// A second Context is introduced for cancelling the goroutine if runRecv returns.
+			// runRecv only returns on errors, upon which the client will get reinitialized,
+			// orphaning manageSendToSensor in the process.
+			ctx2, cancelFn := context.WithCancel(ctx)
+			if sensorC != nil {
+				go manageSendToSensor(ctx2, client, sensorC)
+			}
 			if err := runRecv(ctx, client, config); err != nil {
 				log.Errorf("error running recv: %v", err)
+			}
+			cancelFn() // runRecv is blocking, so the context is safely cancelled before the next  call to initializeStream
+		}
+	}
+}
+
+func manageSendToSensor(ctx context.Context, cli sensor.ComplianceService_CommunicateClient, sensorC <-chan *sensor.MsgFromCompliance) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sc := <-sensorC:
+			if err := cli.Send(sc); err != nil {
+				log.Errorf("failed sending node scan to sensor: %v", err)
 			}
 		}
 	}
 }
 
-func manageNodeScanLoop(ctx context.Context, rescanInterval time.Duration, scanner nodeinventorizer.NodeInventorizer) <-chan *sensor.MsgFromCompliance {
+func manageNodeScanLoop(ctx context.Context, i intervals.NodeScanIntervals, scanner nodeinventorizer.NodeInventorizer) <-chan *sensor.MsgFromCompliance {
 	sensorC := make(chan *sensor.MsgFromCompliance)
 	nodeName := getNode()
 	go func() {
 		defer close(sensorC)
-		t := time.NewTicker(rescanInterval)
-
-		// first scan should happen on start
-		msg, err := scanNode(nodeName, scanner)
-		if err != nil {
-			log.Errorf("error running scanNode: %v", err)
-		} else {
-			sensorC <- msg
-		}
-
+		t := time.NewTicker(i.Initial())
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				log.Infof("starting a node scan for node %q", nodeName)
 				msg, err := scanNode(nodeName, scanner)
 				if err != nil {
 					log.Errorf("error running scanNode: %v", err)
 				} else {
 					sensorC <- msg
 				}
+				interval := i.Next()
+				cmetrics.ObserveRescanInterval(interval, getNode())
+				t.Reset(interval)
 			}
 		}
 	}()
@@ -185,10 +188,12 @@ func scanNode(nodeName string, scanner nodeinventorizer.NodeInventorizer) (*sens
 	if err != nil {
 		return nil, err
 	}
-	return &sensor.MsgFromCompliance{
+	msg := &sensor.MsgFromCompliance{
 		Node: nodeName,
 		Msg:  &sensor.MsgFromCompliance_NodeInventory{NodeInventory: result},
-	}, nil
+	}
+	cmetrics.ObserveInventoryProtobufMessage(msg)
+	return msg, nil
 }
 
 func initialClientAndConfig(ctx context.Context, cli sensor.ComplianceServiceClient) (sensor.ComplianceService_CommunicateClient, *sensor.MsgToCompliance_ScrapeConfig, error) {
@@ -248,6 +253,15 @@ func initializeStream(ctx context.Context, cli sensor.ComplianceServiceClient) (
 func main() {
 	log.Infof("Running StackRox Version: %s", version.GetMainVersion())
 
+	// Set the random seed based on the current time.
+	rand.Seed(time.Now().UnixNano())
+
+	if features.RHCOSNodeScanning.Enabled() {
+		// Start the prometheus metrics server
+		metrics.NewDefaultHTTPServer().RunForever()
+		metrics.GatherThrottleMetricsForever(metrics.ComplianceSubsystem.String())
+	}
+
 	clientconn.SetUserAgent(clientconn.Compliance)
 
 	conn, err := clientconn.AuthenticatedGRPCConnection(env.AdvertisedEndpoint.Setting(), mtls.SensorSubject)
@@ -268,14 +282,11 @@ func main() {
 
 	stoppedSig := concurrency.NewSignal()
 
-	go manageReceiveStream(ctx, cli, &stoppedSig)
+	sensorC := make(chan *sensor.MsgFromCompliance)
+	defer close(sensorC)
+	go manageStream(ctx, cli, &stoppedSig, sensorC)
 
 	if features.RHCOSNodeScanning.Enabled() {
-		log.Infof("Node Rescan interval: %v", env.NodeRescanInterval.DurationSetting())
-		sensorC := make(chan *sensor.MsgFromCompliance)
-		defer close(sensorC)
-		go manageSendingToSensor(ctx, cli, sensorC)
-
 		var scanner nodeinventorizer.NodeInventorizer
 		if features.UseFakeNodeInventory.Enabled() {
 			log.Infof("Using FakeNodeInventorizer")
@@ -284,7 +295,9 @@ func main() {
 			log.Infof("Using NodeInventoryCollector")
 			scanner = &nodeinventorizer.NodeInventoryCollector{}
 		}
-		nodeInventoriesC := manageNodeScanLoop(ctx, env.NodeRescanInterval.DurationSetting(), scanner)
+
+		i := intervals.NewNodeScanIntervalFromEnv()
+		nodeInventoriesC := manageNodeScanLoop(ctx, i, scanner)
 
 		// multiplex producers (nodeInventoriesC) into the output channel (sensorC)
 		go func() {

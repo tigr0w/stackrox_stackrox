@@ -1,3 +1,5 @@
+//go:build sql_integration
+
 package datastore
 
 import (
@@ -6,12 +8,19 @@ import (
 
 	"github.com/stackrox/rox/central/role"
 	"github.com/stackrox/rox/central/role/resources"
+	"github.com/stackrox/rox/central/role/store"
+	PermissionSetPGStore "github.com/stackrox/rox/central/role/store/permissionset/postgres"
 	permissionSetStore "github.com/stackrox/rox/central/role/store/permissionset/rocksdb"
+	postgresRolePGStore "github.com/stackrox/rox/central/role/store/role/postgres"
 	roleStore "github.com/stackrox/rox/central/role/store/role/rocksdb"
+	postgresSimpleAccessScopeStore "github.com/stackrox/rox/central/role/store/simpleaccessscope/postgres"
 	simpleAccessScopeStore "github.com/stackrox/rox/central/role/store/simpleaccessscope/rocksdb"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/bolthelper"
+	"github.com/stackrox/rox/pkg/declarativeconfig"
+	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/testutils"
@@ -69,13 +78,16 @@ func TestRoleDataStore(t *testing.T) {
 type roleDataStoreTestSuite struct {
 	suite.Suite
 
-	hasNoneCtx  context.Context
-	hasReadCtx  context.Context
-	hasWriteCtx context.Context
+	hasNoneCtx             context.Context
+	hasReadCtx             context.Context
+	hasWriteCtx            context.Context
+	hasWriteDeclarativeCtx context.Context
 
 	dataStore DataStore
 	boltDB    *bolt.DB
 	rocksie   *rocksdb.RocksDB
+
+	postgresTest *pgtest.TestPostgres
 
 	existingRole          *storage.Role
 	existingPermissionSet *storage.PermissionSet
@@ -87,42 +99,60 @@ func (s *roleDataStoreTestSuite) SetupTest() {
 	s.hasReadCtx = sac.WithGlobalAccessScopeChecker(context.Background(),
 		sac.AllowFixedScopes(
 			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
+			// TODO: ROX-14398 Replace Role with Access
 			sac.ResourceScopeKeys(resources.Role)))
 	s.hasWriteCtx = sac.WithGlobalAccessScopeChecker(context.Background(),
 		sac.AllowFixedScopes(
 			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
+			// TODO: ROX-14398 Replace Role with Access
 			sac.ResourceScopeKeys(resources.Role)))
+	s.hasWriteDeclarativeCtx = declarativeconfig.WithModifyDeclarativeResource(s.hasWriteCtx)
 
 	s.initDataStore()
 }
 
 func (s *roleDataStoreTestSuite) initDataStore() {
 	var err error
-	s.boltDB, err = bolthelper.NewTemp(s.T().Name() + "-bolt.db")
-	s.Require().NoError(err)
-	s.rocksie = rocksdbtest.RocksDBForT(s.T())
+	var roleStorage store.RoleStore
+	var permissionSetStorage store.PermissionSetStore
+	var accessScopeStorage store.SimpleAccessScopeStore
+	if env.PostgresDatastoreEnabled.BooleanSetting() {
+		s.postgresTest = pgtest.ForT(s.T())
+		s.Require().NotNil(s.postgresTest)
+		roleStorage = postgresRolePGStore.New(s.postgresTest.DB)
+		permissionSetStorage = PermissionSetPGStore.New(s.postgresTest.DB)
+		accessScopeStorage = postgresSimpleAccessScopeStore.New(s.postgresTest.DB)
+	} else {
+		s.boltDB, err = bolthelper.NewTemp(s.T().Name() + "-bolt.db")
+		s.Require().NoError(err)
+		s.rocksie = rocksdbtest.RocksDBForT(s.T())
 
-	roleStorage, err := roleStore.New(s.rocksie)
-	s.Require().NoError(err)
-	permissionSetStorage, err := permissionSetStore.New(s.rocksie)
-	s.Require().NoError(err)
-	scopeStorage, err := simpleAccessScopeStore.New(s.rocksie)
-	s.Require().NoError(err)
+		roleStorage, err = roleStore.New(s.rocksie)
+		s.Require().NoError(err)
+		permissionSetStorage, err = permissionSetStore.New(s.rocksie)
+		s.Require().NoError(err)
+		accessScopeStorage, err = simpleAccessScopeStore.New(s.rocksie)
+		s.Require().NoError(err)
+	}
 
-	s.dataStore = New(roleStorage, permissionSetStorage, scopeStorage)
+	s.dataStore = New(roleStorage, permissionSetStorage, accessScopeStorage)
 
 	// Insert a permission set, access scope, and role into the test DB.
 	s.existingPermissionSet = getValidPermissionSet("permissionset.existing", "existing permissionset")
 	s.Require().NoError(permissionSetStorage.Upsert(s.hasWriteCtx, s.existingPermissionSet))
 	s.existingScope = getValidAccessScope("scope.existing", "existing scope")
-	s.Require().NoError(scopeStorage.Upsert(s.hasWriteCtx, s.existingScope))
+	s.Require().NoError(accessScopeStorage.Upsert(s.hasWriteCtx, s.existingScope))
 	s.existingRole = getValidRole("existing role", s.existingPermissionSet.GetId(), s.existingScope.GetId())
 	s.Require().NoError(roleStorage.Upsert(s.hasWriteCtx, s.existingRole))
 }
 
 func (s *roleDataStoreTestSuite) TearDownTest() {
-	rocksdbtest.TearDownRocksDB(s.rocksie)
-	testutils.TearDownDB(s.boltDB)
+	if env.PostgresDatastoreEnabled.BooleanSetting() {
+		s.postgresTest.Close()
+	} else {
+		rocksdbtest.TearDownRocksDB(s.rocksie)
+		testutils.TearDownDB(s.boltDB)
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -210,11 +240,24 @@ func (s *roleDataStoreTestSuite) TestRoleReadOperations() {
 
 func (s *roleDataStoreTestSuite) TestRoleWriteOperations() {
 	goodRole := getValidRole("valid role", s.existingPermissionSet.GetId(), s.existingScope.GetId())
+	secondExistingPermissionSet := getValidPermissionSet("permissionset.existingtoo", "second permission set")
+	updatedGoodRole := getValidRole("valid role", secondExistingPermissionSet.GetId(), s.existingScope.GetId())
 	badRole := &storage.Role{Name: "invalid role"}
 	cloneRole := getValidRole(s.existingRole.GetName(), s.existingPermissionSet.GetId(), s.existingScope.GetId())
 	updatedAdminRole := getValidRole(role.Admin, s.existingPermissionSet.GetId(), s.existingScope.GetId())
+	declarativeRole := getValidRole("declarative role", s.existingPermissionSet.GetId(), s.existingScope.GetId())
+	declarativeRole.Traits = &storage.Traits{
+		Origin: storage.Traits_DECLARATIVE,
+	}
+	badDeclarativeRole := getInvalidRole("invalid declarative role")
+	badDeclarativeRole.Traits = &storage.Traits{
+		Origin: storage.Traits_DECLARATIVE,
+	}
 
-	err := s.dataStore.AddRole(s.hasWriteCtx, badRole)
+	err := s.dataStore.AddPermissionSet(s.hasWriteCtx, secondExistingPermissionSet)
+	s.NoError(err, "failed to add second permission set needed for test")
+
+	err = s.dataStore.AddRole(s.hasWriteCtx, badRole)
 	s.ErrorIs(err, errox.InvalidArgs, "invalid role for Add*() yields an error")
 
 	err = s.dataStore.AddRole(s.hasWriteCtx, cloneRole)
@@ -238,8 +281,14 @@ func (s *roleDataStoreTestSuite) TestRoleWriteOperations() {
 	err = s.dataStore.UpdateRole(s.hasWriteCtx, badRole)
 	s.ErrorIs(err, errox.InvalidArgs, "invalid role for Update*() yields an error")
 
-	err = s.dataStore.UpdateRole(s.hasWriteCtx, goodRole)
+	err = s.dataStore.UpdateRole(s.hasWriteCtx, updatedGoodRole)
 	s.NoError(err)
+
+	datastoreGoodRole, found, err := s.dataStore.GetRole(s.hasReadCtx, goodRole.GetName())
+	s.NoError(err)
+	s.True(found)
+	s.Equal(updatedGoodRole.GetPermissionSetId(), datastoreGoodRole.GetPermissionSetId(),
+		"successful Update*() call should update the value in datastore")
 
 	err = s.dataStore.RemoveRole(s.hasWriteCtx, goodRole.GetName())
 	s.NoError(err)
@@ -249,6 +298,57 @@ func (s *roleDataStoreTestSuite) TestRoleWriteOperations() {
 
 	err = s.dataStore.AddRole(s.hasWriteCtx, goodRole)
 	s.NoError(err, "adding a role with name that used to exist is not an error")
+
+	err = s.dataStore.AddRole(s.hasWriteCtx, declarativeRole)
+	s.NoError(err, "adding a role declaratively is not an error")
+
+	err = s.dataStore.UpdateRole(s.hasWriteCtx, declarativeRole)
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to modify imperatively declarative role is an error")
+
+	err = s.dataStore.UpdateRole(s.hasWriteDeclarativeCtx, goodRole)
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to modify declaratively imperative role is an error")
+
+	err = s.dataStore.UpdateRole(s.hasWriteDeclarativeCtx, declarativeRole)
+	s.NoError(err, "attempting to modify declaratively declarative role is not an error")
+
+	err = s.dataStore.RemoveRole(s.hasWriteCtx, declarativeRole.GetName())
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to delete imperatively declarative role is an error")
+
+	err = s.dataStore.RemoveRole(s.hasWriteDeclarativeCtx, goodRole.GetName())
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to delete declaratively imperative role is an error")
+
+	err = s.dataStore.RemoveRole(s.hasWriteDeclarativeCtx, declarativeRole.GetName())
+	s.NoError(err, "attempting to delete declaratively declarative role is not an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteCtx, declarativeRole)
+	s.ErrorIs(err, errox.NotAuthorized, "upserting imperatively declarative role is an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteDeclarativeCtx, declarativeRole)
+	s.NoError(err, "attempting to upsert declaratively declarative role is not an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteDeclarativeCtx, declarativeRole)
+	s.NoError(err, "re-upserting declaratively declarative role is not an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteCtx, declarativeRole)
+	s.ErrorIs(err, errox.NotAuthorized, "re-upserting imperatively declarative role is an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteDeclarativeCtx, goodRole)
+	s.ErrorIs(err, errox.NotAuthorized, "upserting declaratively imperative role is an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteCtx, goodRole)
+	s.NoError(err, "attempting to upsert imperatively imperative role is not an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteCtx, goodRole)
+	s.NoError(err, "re-upserting imperatively imperative role is not an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteDeclarativeCtx, goodRole)
+	s.ErrorIs(err, errox.NotAuthorized, "re-upserting declaratively imperative role is an error")
+
+	err = s.dataStore.UpsertRole(s.hasWriteCtx, badRole)
+	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Upsert*() yields an error(imperative resource)")
+
+	err = s.dataStore.UpsertRole(s.hasWriteDeclarativeCtx, badDeclarativeRole)
+	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Upsert*() yields an error(declarative resource)")
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -338,9 +438,27 @@ func (s *roleDataStoreTestSuite) TestPermissionSetReadOperations() {
 
 func (s *roleDataStoreTestSuite) TestPermissionSetWriteOperations() {
 	goodPermissionSet := getValidPermissionSet("permissionset.new", "new valid permissionset")
+	updatedGoodPermissionSet := goodPermissionSet.Clone()
+	updatedGoodPermissionSet.ResourceToAccess = map[string]storage.Access{
+		resources.Namespace.String(): storage.Access_READ_WRITE_ACCESS,
+	}
 	badPermissionSet := getInvalidPermissionSet("permissionset.new", "new invalid permissionset")
-	mimicPermissionSet := getValidPermissionSet("permissionset.new", "existing permissionset")
-	clonePermissionSet := getValidPermissionSet("permissionset.existing", "new existing permissionset")
+	mimicPermissionSet := &storage.PermissionSet{
+		Id:   goodPermissionSet.Id,
+		Name: "existing permissionset",
+	}
+	clonePermissionSet := &storage.PermissionSet{
+		Id:   s.existingPermissionSet.Id,
+		Name: "new existing permissionset",
+	}
+	declarativePermissionSet := getValidPermissionSet("permissionset.declarative", "declarative permissionset")
+	declarativePermissionSet.Traits = &storage.Traits{
+		Origin: storage.Traits_DECLARATIVE,
+	}
+	badDeclarativePermissionSet := getInvalidPermissionSet("permissionset.declarative.invalid", "invalid declarative role")
+	badDeclarativePermissionSet.Traits = &storage.Traits{
+		Origin: storage.Traits_DECLARATIVE,
+	}
 	updatedAdminPermissionSet := getValidPermissionSet(role.EnsureValidAccessScopeID("admin"), role.Admin)
 
 	err := s.dataStore.AddPermissionSet(s.hasWriteCtx, badPermissionSet)
@@ -350,7 +468,12 @@ func (s *roleDataStoreTestSuite) TestPermissionSetWriteOperations() {
 	s.ErrorIs(err, errox.AlreadyExists, "adding permission set with an existing ID yields an error")
 
 	err = s.dataStore.AddPermissionSet(s.hasWriteCtx, mimicPermissionSet)
-	s.ErrorIs(err, errox.AlreadyExists, "adding permission set with an existing name yields an error")
+	// With postgres the unique constraint catches this.
+	if env.PostgresDatastoreEnabled.BooleanSetting() {
+		assert.ErrorContains(s.T(), err, "violates unique constraint")
+	} else {
+		s.ErrorIs(err, errox.AlreadyExists, "adding permission set with an existing name yields an error")
+	}
 
 	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, goodPermissionSet)
 	s.ErrorIs(err, errox.NotFound, "updating non-existing permission set yields an error")
@@ -371,10 +494,23 @@ func (s *roleDataStoreTestSuite) TestPermissionSetWriteOperations() {
 	s.ErrorIs(err, errox.InvalidArgs, "invalid permission set for Update*() yields an error")
 
 	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, mimicPermissionSet)
-	s.ErrorIs(err, errox.AlreadyExists, "introducing a name collision with Update*() yields an error")
+	// With postgres the unique constraint catches this.
+	if env.PostgresDatastoreEnabled.BooleanSetting() {
+		assert.ErrorContains(s.T(), err, "violates unique constraint")
+	} else {
+		s.ErrorIs(err, errox.AlreadyExists, "introducing a name collision with Update*() yields an error")
+	}
 
-	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, goodPermissionSet)
+	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, updatedGoodPermissionSet)
 	s.NoError(err)
+
+	datastoreGoodPermissionSet, found, err := s.dataStore.GetPermissionSet(s.hasReadCtx, goodPermissionSet.GetId())
+	s.NoError(err)
+	s.True(found)
+	namespaceAccess, ok := datastoreGoodPermissionSet.GetResourceToAccess()[resources.Namespace.String()]
+	s.True(ok)
+	s.Equal(storage.Access_READ_WRITE_ACCESS, namespaceAccess,
+		"successful Update*() call should update the value in datastore")
 
 	err = s.dataStore.RemovePermissionSet(s.hasWriteCtx, goodPermissionSet.GetId())
 	s.NoError(err)
@@ -384,6 +520,59 @@ func (s *roleDataStoreTestSuite) TestPermissionSetWriteOperations() {
 
 	err = s.dataStore.AddPermissionSet(s.hasWriteCtx, goodPermissionSet)
 	s.NoError(err, "adding a permission set with ID and name that used to exist is not an error")
+
+	err = s.dataStore.AddPermissionSet(s.hasWriteCtx, declarativePermissionSet)
+	s.NoError(err, "adding a permission set declaratively is not an error")
+
+	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, declarativePermissionSet)
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to modify imperatively declarative permission set is an error")
+
+	err = s.dataStore.UpdatePermissionSet(s.hasWriteDeclarativeCtx, goodPermissionSet)
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to modify declaratively imperative permission set is an error")
+
+	err = s.dataStore.UpdatePermissionSet(s.hasWriteDeclarativeCtx, declarativePermissionSet)
+	s.NoError(err, "attempting to modify declaratively declarative permission set is not an error")
+
+	err = s.dataStore.RemovePermissionSet(s.hasWriteCtx, declarativePermissionSet.GetId())
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to delete imperatively declarative permission set is an error")
+
+	err = s.dataStore.RemovePermissionSet(s.hasWriteDeclarativeCtx, goodPermissionSet.GetId())
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to delete declaratively imperative permission set is an error")
+
+	err = s.dataStore.RemovePermissionSet(s.hasWriteDeclarativeCtx, declarativePermissionSet.GetId())
+	s.NoError(err, "attempting to delete declaratively declarative permission set is not an error")
+
+	s.Len(permissionSets, 1, "removed permission set should be absent in the subsequent Get*()")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteCtx, declarativePermissionSet)
+	s.ErrorIs(err, errox.NotAuthorized, "upserting imperatively declarative role is an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteDeclarativeCtx, declarativePermissionSet)
+	s.NoError(err, "attempting to upsert declaratively declarative role is not an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteDeclarativeCtx, declarativePermissionSet)
+	s.NoError(err, "re-upserting declaratively declarative role is not an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteCtx, declarativePermissionSet)
+	s.ErrorIs(err, errox.NotAuthorized, "re-upserting imperatively declarative role is an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteDeclarativeCtx, goodPermissionSet)
+	s.ErrorIs(err, errox.NotAuthorized, "upserting declaratively imperative role is an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteCtx, goodPermissionSet)
+	s.NoError(err, "attempting to upsert imperatively imperative role is not an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteCtx, goodPermissionSet)
+	s.NoError(err, "re-upserting imperatively imperative role is not an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteDeclarativeCtx, goodPermissionSet)
+	s.ErrorIs(err, errox.NotAuthorized, "re-upserting declaratively imperative role is an error")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteCtx, badPermissionSet)
+	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Upsert*() yields an error(imperative resource)")
+
+	err = s.dataStore.UpsertPermissionSet(s.hasWriteDeclarativeCtx, badDeclarativePermissionSet)
+	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Upsert*() yields an error(declarative resource)")
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -477,11 +666,30 @@ func (s *roleDataStoreTestSuite) TestAccessScopeReadOperations() {
 
 func (s *roleDataStoreTestSuite) TestAccessScopeWriteOperations() {
 	goodScope := getValidAccessScope("scope.new", "new valid scope")
+	updatedGoodScope := goodScope.Clone()
+	updatedIncludedClusters := []string{"clusterA"}
+	updatedGoodScope.Rules = &storage.SimpleAccessScope_Rules{
+		IncludedClusters: updatedIncludedClusters,
+	}
 	badScope := getInvalidAccessScope("scope.new", "new invalid scope")
-	mimicScope := getValidAccessScope("scope.new", "existing scope")
-	cloneScope := getValidAccessScope("scope.existing", "new existing scope")
-	updatedDefaultScope := getValidAccessScope("io.stackrox.authz.accessscope.denyall",
+	mimicScope := &storage.SimpleAccessScope{
+		Id:   goodScope.Id,
+		Name: "existing scope",
+	}
+	cloneScope := &storage.SimpleAccessScope{
+		Id:   s.existingScope.Id,
+		Name: "new existing scope",
+	}
+	updatedDefaultScope := getValidAccessScope("ffffffff-ffff-fff4-f5ff-fffffffffffe",
 		role.AccessScopeExcludeAll.GetName())
+	declarativeScope := getValidAccessScope("scope.declarative", "new declarative scope")
+	declarativeScope.Traits = &storage.Traits{
+		Origin: storage.Traits_DECLARATIVE,
+	}
+	badDeclarativeScope := getInvalidAccessScope("scope.declarative-invalid", "new invalid declarative scope")
+	badDeclarativeScope.Traits = &storage.Traits{
+		Origin: storage.Traits_DECLARATIVE,
+	}
 
 	err := s.dataStore.AddAccessScope(s.hasWriteCtx, badScope)
 	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Add*() yields an error")
@@ -490,7 +698,12 @@ func (s *roleDataStoreTestSuite) TestAccessScopeWriteOperations() {
 	s.ErrorIs(err, errox.AlreadyExists, "adding scope with an existing ID yields an error")
 
 	err = s.dataStore.AddAccessScope(s.hasWriteCtx, mimicScope)
-	s.ErrorIs(err, errox.AlreadyExists, "adding scope with an existing name yields an error")
+	// With postgres the unique constraint catches this.
+	if env.PostgresDatastoreEnabled.BooleanSetting() {
+		assert.ErrorContains(s.T(), err, "violates unique constraint")
+	} else {
+		s.ErrorIs(err, errox.AlreadyExists, "adding scope with an existing name yields an error")
+	}
 
 	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, goodScope)
 	s.ErrorIs(err, errox.NotFound, "updating non-existing scope yields an error")
@@ -511,10 +724,21 @@ func (s *roleDataStoreTestSuite) TestAccessScopeWriteOperations() {
 	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Update*() yields an error")
 
 	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, mimicScope)
-	s.ErrorIs(err, errox.AlreadyExists, "introducing a name collision with Update*() yields an error")
+	// With postgres the unique constraint catches this.
+	if env.PostgresDatastoreEnabled.BooleanSetting() {
+		assert.ErrorContains(s.T(), err, "violates unique constraint")
+	} else {
+		s.ErrorIs(err, errox.AlreadyExists, "introducing a name collision with Update*() yields an error")
+	}
 
-	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, goodScope)
+	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, updatedGoodScope)
 	s.NoError(err)
+
+	datastoreGoodAccessScope, found, err := s.dataStore.GetAccessScope(s.hasReadCtx, updatedGoodScope.GetId())
+	s.NoError(err)
+	s.True(found)
+	s.Equal(updatedIncludedClusters, datastoreGoodAccessScope.GetRules().GetIncludedClusters(),
+		"successful Update*() call should update the value in datastore")
 
 	err = s.dataStore.RemoveAccessScope(s.hasWriteCtx, goodScope.GetId())
 	s.NoError(err)
@@ -524,6 +748,57 @@ func (s *roleDataStoreTestSuite) TestAccessScopeWriteOperations() {
 
 	err = s.dataStore.AddAccessScope(s.hasWriteCtx, goodScope)
 	s.NoError(err, "adding a scope with ID and name that used to exist is not an error")
+
+	err = s.dataStore.AddAccessScope(s.hasWriteCtx, declarativeScope)
+	s.NoError(err, "adding an access scope declaratively is not an error")
+
+	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, declarativeScope)
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to modify imperatively declarative access scope is an error")
+
+	err = s.dataStore.UpdateAccessScope(s.hasWriteDeclarativeCtx, goodScope)
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to modify declaratively imperative access scope is an error")
+
+	err = s.dataStore.UpdateAccessScope(s.hasWriteDeclarativeCtx, declarativeScope)
+	s.NoError(err, "attempting to modify declaratively declarative access scope is not an error")
+
+	err = s.dataStore.RemoveAccessScope(s.hasWriteCtx, declarativeScope.GetId())
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to delete imperatively declarative access scope is an error")
+
+	err = s.dataStore.RemoveAccessScope(s.hasWriteDeclarativeCtx, goodScope.GetId())
+	s.ErrorIs(err, errox.NotAuthorized, "attempting to delete declaratively imperative access scope is an error")
+
+	err = s.dataStore.RemoveAccessScope(s.hasWriteDeclarativeCtx, declarativeScope.GetId())
+	s.NoError(err, "attempting to delete declaratively declarative access scope is not an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteCtx, declarativeScope)
+	s.ErrorIs(err, errox.NotAuthorized, "upserting imperatively declarative access scope is an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteDeclarativeCtx, declarativeScope)
+	s.NoError(err, "attempting to upsert declaratively declarative access scope is not an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteDeclarativeCtx, declarativeScope)
+	s.NoError(err, "re-upserting declaratively declarative access scope is not an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteCtx, declarativeScope)
+	s.ErrorIs(err, errox.NotAuthorized, "re-upserting imperatively declarative access scope is an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteDeclarativeCtx, goodScope)
+	s.ErrorIs(err, errox.NotAuthorized, "upserting declaratively imperative access scope is an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteCtx, goodScope)
+	s.NoError(err, "attempting to upsert imperatively imperative access scope is not an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteCtx, goodScope)
+	s.NoError(err, "re-upserting imperatively imperative access scope is not an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteDeclarativeCtx, goodScope)
+	s.ErrorIs(err, errox.NotAuthorized, "re-upserting declaratively imperative access scope is an error")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteCtx, badScope)
+	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Upsert*() yields an error(imperative resource)")
+
+	err = s.dataStore.UpsertAccessScope(s.hasWriteDeclarativeCtx, badDeclarativeScope)
+	s.ErrorIs(err, errox.InvalidArgs, "invalid scope for Upsert*() yields an error(declarative resource)")
 }
 
 ////////////////////////////////////////////////////////////////////////////////

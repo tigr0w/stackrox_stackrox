@@ -58,7 +58,7 @@
 #image:
 #  # The image registry to use. Unless overridden in the more specific configs, this
 #  # determines the base registry for each image referenced in this config file.
-#  registry: stackrox.io
+#  registry: [< required "" .MainRegistry >]
 #
 ## Settings regarding the installation environment
 #env:
@@ -188,11 +188,6 @@
 #      host: null
 #
 #  db:
-#    # If enabled, a new central will use a Postgres database as its backing datastore either via a new Central DB pod
-#    # or with an external deployment (see below).
-#    # NOTE: Using Postgres as a datastore is in Tech Preview.
-#    enabled: false
-#
 #    # External signifies that a Postgres wire-compatible database has already been deployed and a Central DB pod
 #    # does not need to be deployed
 #    external: false
@@ -204,7 +199,7 @@
 #      connectionString: null
 #      minConns: 10
 #      maxConns: 90
-#      statementTimeoutMs: 60000
+#      statementTimeoutMs: 1200000
 #
 #  # The admin password setting for communication with Central's DB.
 #  # When a value is set explicitly, this is always used, even on upgrade.

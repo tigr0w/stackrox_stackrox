@@ -26,6 +26,7 @@ import (
 
 // Dispatcher is responsible for processing resource events, and returning the sensor events that should be emitted
 // in response.
+//
 //go:generate mockgen-wrapper
 type Dispatcher interface {
 	ProcessEvent(obj, oldObj interface{}, action central.ResourceAction) *component.ResourceEvent
@@ -72,7 +73,6 @@ func NewDispatcherRegistry(
 	serviceAccountStore := ServiceAccountStoreSingleton()
 	deploymentStore := storeProvider.deploymentStore
 	podStore := storeProvider.podStore
-	nodeStore := storeProvider.nodeStore
 	nsStore := newNamespaceStore()
 	netPolicyStore := NetworkPolicySingleton()
 	endpointManager := storeProvider.endpointManager
@@ -89,7 +89,7 @@ func NewDispatcherRegistry(
 		osRouteDispatcher:         newRouteDispatcher(serviceStore, portExposureReconciler),
 		secretDispatcher:          newSecretDispatcher(registryStore),
 		networkPolicyDispatcher:   newNetworkPolicyDispatcher(netPolicyStore, deploymentStore),
-		nodeDispatcher:            newNodeDispatcher(deploymentStore, nodeStore, endpointManager),
+		nodeDispatcher:            newNodeDispatcher(deploymentStore, storeProvider.nodeStore, endpointManager),
 		serviceAccountDispatcher:  newServiceAccountDispatcher(serviceAccountStore),
 		clusterOperatorDispatcher: newClusterOperatorDispatcher(namespaces),
 

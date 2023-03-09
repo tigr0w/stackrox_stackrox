@@ -4,46 +4,50 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/metrics"
 )
 
 const bucketKey = "Bucket"
 
 func init() {
+	if !env.PostgresDatastoreEnabled.BooleanSetting() {
+		prometheus.MustRegister(
+			FreePageN,
+			PendingPageN,
+			FreeAlloc,
+			FreelistInuse,
+			TxN,
+			OpenTxN,
+			TxStatsPageCount,
+			TxStatsPageAlloc,
+			TxStatsCursorCount,
+			TxStatsNodeCount,
+			TxStatsNodeDeref,
+			TxStatsRebalance,
+			TxStatsRebalanceSeconds,
+			TxStatsSplit,
+			TxStatsSpill,
+			TxStatsSpillSeconds,
+			TxStatsWrite,
+			TxStatsWriteTime,
+			BranchPageN,
+			BranchOverflowN,
+			LeafPageN,
+			LeafOverflowN,
+			KeyN,
+			Depth,
+			BranchAlloc,
+			BranchInuse,
+			LeafAlloc,
+			LeafInuse,
+			BucketN,
+			InlineBucketN,
+			InlineBucketInuse,
+		)
+	}
+
 	prometheus.MustRegister(
-		FreePageN,
-		PendingPageN,
-		FreeAlloc,
-		FreelistInuse,
-		TxN,
-		OpenTxN,
-		TxStatsPageCount,
-		TxStatsPageAlloc,
-		TxStatsCursorCount,
-		TxStatsNodeCount,
-		TxStatsNodeDeref,
-		TxStatsRebalance,
-		TxStatsRebalanceSeconds,
-		TxStatsSplit,
-		TxStatsSpill,
-		TxStatsSpillSeconds,
-		TxStatsWrite,
-		TxStatsWriteTime,
-		BranchPageN,
-		BranchOverflowN,
-		LeafPageN,
-		LeafOverflowN,
-		KeyN,
-		Depth,
-		BranchAlloc,
-		BranchInuse,
-		LeafAlloc,
-		LeafInuse,
-		BucketN,
-		InlineBucketN,
-		InlineBucketInuse,
-		BoltDBSize,
-		RocksDBSize,
 		PostgresTableCounts,
 		PostgresIndexSize,
 		PostgresTableTotalSize,
@@ -205,6 +209,11 @@ var (
 
 // SetGaugeInt sets a value for a gauge from an int
 func SetGaugeInt(gauge prometheus.Gauge, value int) {
+	gauge.Set(float64(value))
+}
+
+// SetGaugeInt64 sets a value for a gauge from an int64
+func SetGaugeInt64(gauge prometheus.Gauge, value int64) {
 	gauge.Set(float64(value))
 }
 

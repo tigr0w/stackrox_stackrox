@@ -8,6 +8,7 @@ import (
 )
 
 // DataStore is the datastore for groups.
+//
 //go:generate mockgen-wrapper
 type DataStore interface {
 	Get(ctx context.Context, props *storage.GroupProperties) (*storage.Group, error)
@@ -18,6 +19,7 @@ type DataStore interface {
 
 	Add(ctx context.Context, group *storage.Group) error
 	Update(ctx context.Context, group *storage.Group, force bool) error
+	Upsert(ctx context.Context, group *storage.Group) error
 	Mutate(ctx context.Context, remove, update, add []*storage.Group, force bool) error
 	Remove(ctx context.Context, props *storage.GroupProperties, force bool) error
 	RemoveAllWithAuthProviderID(ctx context.Context, authProviderID string, force bool) error

@@ -5,6 +5,7 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/fixtures"
+	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	"github.com/stackrox/rox/pkg/scanners/clairify/mock"
 	v1 "github.com/stackrox/scanner/generated/scanner/api/v1"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,7 @@ func TestConvertNodeToVulnRequest(t *testing.T) {
 		osImage          string
 		kubeletVersion   string
 		kubeProxyVersion string
+		nodeInventory    *storage.NodeInventory
 
 		expected *v1.GetNodeVulnerabilitiesRequest
 	}{
@@ -64,6 +66,54 @@ func TestConvertNodeToVulnRequest(t *testing.T) {
 				},
 			},
 		},
+		{
+			nodeInventory: &storage.NodeInventory{
+				Components: &storage.NodeInventory_Components{
+					Namespace:       "rhcos:4.11",
+					RhelContentSets: []string{"rhel-8-for-x86_64-appstream-rpms", "rhel-8-for-x86_64-baseos-rpms"},
+					RhelComponents: []*storage.NodeInventory_Components_RHELComponent{
+						{
+							Id:        int64(1),
+							Name:      "vim-minimal",
+							Namespace: "rhel:8",
+							Version:   "2:7.4.629-6.el8",
+							Arch:      "x86_64",
+							Module:    "",
+							AddedBy:   "",
+						},
+					},
+				},
+			},
+			containerRuntime: &storage.ContainerRuntimeInfo{
+				Type:    storage.ContainerRuntime_UNKNOWN_CONTAINER_RUNTIME,
+				Version: "containerd://1.2.8",
+			},
+			expected: &v1.GetNodeVulnerabilitiesRequest{
+				Runtime: &v1.GetNodeVulnerabilitiesRequest_ContainerRuntime{
+					Name:    "containerd",
+					Version: "1.2.8",
+				},
+				Components: &v1.Components{
+					Namespace:       "rhcos:4.11",
+					RhelContentSets: []string{"rhel-8-for-x86_64-appstream-rpms", "rhel-8-for-x86_64-baseos-rpms"},
+					RhelComponents: []*v1.RHELComponent{
+						{
+							Id:          int64(1),
+							Name:        "vim-minimal",
+							Namespace:   "rhel:8",
+							Version:     "2:7.4.629-6.el8",
+							Arch:        "x86_64",
+							Module:      "",
+							AddedBy:     "",
+							Cpes:        nil,
+							Executables: []*v1.Executable{},
+						},
+					},
+					OsComponents:       nil,
+					LanguageComponents: nil,
+				},
+			},
+		},
 	} {
 		node := &storage.Node{
 			ContainerRuntime: testCase.containerRuntime,
@@ -72,7 +122,7 @@ func TestConvertNodeToVulnRequest(t *testing.T) {
 			KubeletVersion:   testCase.kubeletVersion,
 			KubeProxyVersion: testCase.kubeProxyVersion,
 		}
-		assert.Equal(t, testCase.expected, convertNodeToVulnRequest(node))
+		assert.Equal(t, testCase.expected, convertNodeToVulnRequest(node, testCase.nodeInventory))
 	}
 }
 
@@ -216,6 +266,7 @@ func TestConvertNodeVulnerabilities(t *testing.T) {
 }
 
 func TestConvertFeatures(t *testing.T) {
+	pgtest.SkipIfPostgresEnabled(t)
 	// metadata is based on the fixture used below.
 	metadata := &storage.ImageMetadata{
 		V1: &storage.V1Metadata{

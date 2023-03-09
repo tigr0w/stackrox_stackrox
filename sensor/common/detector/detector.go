@@ -41,6 +41,7 @@ var (
 )
 
 // Detector is the sensor component that syncs policies from Central and runs detection
+//
 //go:generate mockgen-wrapper
 type Detector interface {
 	common.SensorComponent
@@ -206,6 +207,8 @@ func (d *detectorImpl) Stop(err error) {
 	_ = d.auditStopper.Client().Stopped().Wait()
 	_ = d.serializerStopper.Client().Stopped().Wait()
 }
+
+func (d *detectorImpl) Notify(common.SensorComponentEvent) {}
 
 func (d *detectorImpl) Capabilities() []centralsensor.SensorCapability {
 	return []centralsensor.SensorCapability{centralsensor.SensorDetectionCap}

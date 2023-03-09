@@ -18,6 +18,7 @@ import (
 	"github.com/stackrox/rox/pkg/networkgraph"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/timestamp"
+	"github.com/stackrox/rox/sensor/common"
 	"github.com/stackrox/rox/sensor/common/clusterentities"
 	"github.com/stackrox/rox/sensor/common/detector"
 	"github.com/stackrox/rox/sensor/common/externalsrcs"
@@ -120,8 +121,8 @@ type processListeningIndicator struct {
 	protocol storage.L4Protocol
 }
 
-func (i *processListeningIndicator) toProto(ts timestamp.MicroTS) *storage.ProcessListeningOnPort {
-	proto := &storage.ProcessListeningOnPort{
+func (i *processListeningIndicator) toProto(ts timestamp.MicroTS) *storage.ProcessListeningOnPortFromSensor {
+	proto := &storage.ProcessListeningOnPortFromSensor{
 		Port:     uint32(i.port),
 		Protocol: i.protocol,
 		Process: &storage.ProcessIndicatorUniqueKey{
@@ -229,6 +230,8 @@ func (m *networkFlowManager) Stop(_ error) {
 func (m *networkFlowManager) Capabilities() []centralsensor.SensorCapability {
 	return nil
 }
+
+func (m *networkFlowManager) Notify(common.SensorComponentEvent) {}
 
 func (m *networkFlowManager) ResponsesC() <-chan *central.MsgFromSensor {
 	return m.sensorUpdates
@@ -604,8 +607,8 @@ func computeUpdatedEndpoints(current map[containerEndpointIndicator]timestamp.Mi
 	return updates
 }
 
-func computeUpdatedProcesses(current map[processListeningIndicator]timestamp.MicroTS, previous map[processListeningIndicator]timestamp.MicroTS) []*storage.ProcessListeningOnPort {
-	var updates []*storage.ProcessListeningOnPort
+func computeUpdatedProcesses(current map[processListeningIndicator]timestamp.MicroTS, previous map[processListeningIndicator]timestamp.MicroTS) []*storage.ProcessListeningOnPortFromSensor {
+	var updates []*storage.ProcessListeningOnPortFromSensor
 
 	for pl, currTS := range current {
 		prevTS, ok := previous[pl]

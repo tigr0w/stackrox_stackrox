@@ -45,6 +45,7 @@ import (
 	cveService "github.com/stackrox/rox/central/cve/service"
 	"github.com/stackrox/rox/central/cve/suppress"
 	debugService "github.com/stackrox/rox/central/debug/service"
+	"github.com/stackrox/rox/central/declarativeconfig"
 	deploymentDatastore "github.com/stackrox/rox/central/deployment/datastore"
 	deploymentService "github.com/stackrox/rox/central/deployment/service"
 	detectionService "github.com/stackrox/rox/central/detection/service"
@@ -98,6 +99,7 @@ import (
 	processBaselineDataStore "github.com/stackrox/rox/central/processbaseline/datastore"
 	processBaselineService "github.com/stackrox/rox/central/processbaseline/service"
 	processIndicatorService "github.com/stackrox/rox/central/processindicator/service"
+	processListeningOnPorts "github.com/stackrox/rox/central/processlisteningonport/service"
 	"github.com/stackrox/rox/central/pruning"
 	rbacService "github.com/stackrox/rox/central/rbac/service"
 	reportConfigurationService "github.com/stackrox/rox/central/reportconfigurations/service"
@@ -166,7 +168,6 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz/or"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
-	"github.com/stackrox/rox/pkg/grpc/client/authn/basic"
 	"github.com/stackrox/rox/pkg/grpc/errors"
 	"github.com/stackrox/rox/pkg/grpc/routes"
 	"github.com/stackrox/rox/pkg/httputil"
@@ -316,7 +317,6 @@ func startServices() {
 	pruning.Singleton().Start()
 	gatherer.Singleton().Start()
 	vulnRequestManager.Singleton().Start()
-	centralclient.InstanceConfig().Gatherer().Start()
 
 	go registerDelayedIntegrations(iiStore.DelayedIntegrations)
 }
@@ -394,17 +394,11 @@ func servicesToRegister(registry authproviders.Registry, authzTraceSink observe.
 		servicesToRegister = append(servicesToRegister, clusterCVEService.Singleton())
 		servicesToRegister = append(servicesToRegister, imageCVEService.Singleton())
 		servicesToRegister = append(servicesToRegister, nodeCVEService.Singleton())
-
-		if features.ObjectCollections.Enabled() {
-			servicesToRegister = append(servicesToRegister, collectionService.Singleton())
-		}
-
+		servicesToRegister = append(servicesToRegister, collectionService.Singleton())
+		servicesToRegister = append(servicesToRegister, policyCategoryService.Singleton())
+		servicesToRegister = append(servicesToRegister, processListeningOnPorts.Singleton())
 	} else {
 		servicesToRegister = append(servicesToRegister, cveService.Singleton())
-	}
-
-	if features.NewPolicyCategories.Enabled() && env.PostgresDatastoreEnabled.BooleanSetting() {
-		servicesToRegister = append(servicesToRegister, policyCategoryService.Singleton())
 	}
 
 	autoTriggerUpgrades := sensorUpgradeService.Singleton().AutoUpgradeSetting()
@@ -426,13 +420,6 @@ func servicesToRegister(registry authproviders.Registry, authzTraceSink observe.
 		servicesToRegister = append(servicesToRegister, developmentService.Singleton())
 	}
 
-	if cfg := centralclient.InstanceConfig(); cfg.Enabled() {
-		gs := cfg.Gatherer()
-		gs.AddGatherer(authProviderDS.Gather)
-		gs.AddGatherer(signatureIntegrationDS.Gather)
-		gs.AddGatherer(roleDataStore.Gather)
-		gs.AddGatherer(clusterDataStore.Gather)
-	}
 	return servicesToRegister
 }
 
@@ -484,6 +471,10 @@ func startGRPCServer() {
 	}
 
 	basicAuthProvider := userpass.RegisterAuthProviderOrPanic(authProviderRegisteringCtx, basicAuthMgr, registry)
+
+	if features.DeclarativeConfiguration.Enabled() {
+		declarativeconfig.ManagerSingleton(registry).ReconcileDeclarativeConfigurations()
+	}
 
 	clusterInitBackend := backend.Singleton()
 	serviceMTLSExtractor, err := service.NewExtractorWithCertValidation(clusterInitBackend)
@@ -537,19 +528,29 @@ func startGRPCServer() {
 	)
 	config.HTTPInterceptors = append(config.HTTPInterceptors, observe.AuthzTraceHTTPInterceptor(authzTraceSink))
 
-	if cfg := centralclient.InstanceConfig(); cfg.Enabled() {
-		config.HTTPInterceptors = append(config.HTTPInterceptors, cfg.GetHTTPInterceptor())
-		config.UnaryInterceptors = append(config.UnaryInterceptors, cfg.GetGRPCInterceptor())
-		// Central adds itself to the tenant group, with no group properties:
-		cfg.Telemeter().Group(cfg.GroupID, cfg.ClientID, nil)
-		// Add the local admin user as well, with no extra group properties:
-		cfg.Telemeter().Group(cfg.GroupID, cfg.HashUserID(basic.DefaultUsername, basicAuthProvider.ID()), nil)
-	}
-
 	// Before authorization is checked, we want to inject the sac client into the context.
 	config.PreAuthContextEnrichers = append(config.PreAuthContextEnrichers,
 		centralSAC.GetEnricher().GetPreAuthContextEnricher(authzTraceSink),
 	)
+
+	telemetryCtx := sac.WithGlobalAccessScopeChecker(context.Background(),
+		sac.AllowFixedScopes(
+			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
+			// TODO: ROX-12750 Replace Config with Administration.
+			sac.ResourceScopeKeys(resources.Config)))
+
+	if cds, err := configDS.Singleton().GetConfig(telemetryCtx); err == nil || cds == nil {
+		if t := cds.GetPublicConfig().GetTelemetry(); t == nil || t.GetEnabled() {
+			if cfg := centralclient.Enable(); cfg.Enabled() {
+				centralclient.RegisterCentralClient(&config, basicAuthProvider.ID())
+				gs := cfg.Gatherer()
+				gs.AddGatherer(authProviderDS.Gather)
+				gs.AddGatherer(signatureIntegrationDS.Gather)
+				gs.AddGatherer(roleDataStore.Gather)
+				gs.AddGatherer(clusterDataStore.Gather)
+			}
+		}
+	}
 
 	server := pkgGRPC.NewAPI(config)
 	server.Register(servicesToRegister(registry, authzTraceSink)...)

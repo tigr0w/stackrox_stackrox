@@ -12,6 +12,7 @@ import {
     TimesCircleIcon,
 } from '@patternfly/react-icons';
 
+import { ClusterProviderMetadata } from 'types/cluster.proto';
 import { getDate } from 'utils/dateUtils';
 import { CertExpiryStatus } from './clusterTypes';
 
@@ -293,40 +294,33 @@ const upgradeStates: UpgradeStates = {
 };
 
 export function formatKubernetesVersion(orchestratorMetadata: { version: string }) {
-    return orchestratorMetadata?.version || 'Not applicable';
+    return orchestratorMetadata?.version || 'Not available';
 }
 
 export function formatBuildDate(orchestratorMetadata) {
     return orchestratorMetadata?.buildDate
         ? getDate(orchestratorMetadata.buildDate)
-        : 'Not applicable';
+        : 'Not available';
 }
 
-type ProviderMetadata = {
-    region: string;
-    aws?: any;
-    azure?: any;
-    google?: any;
-};
-
-export function formatCloudProvider(providerMetadata: ProviderMetadata) {
+export function formatCloudProvider(providerMetadata: ClusterProviderMetadata) {
     if (providerMetadata) {
         const { region } = providerMetadata;
 
-        if (providerMetadata.aws) {
+        if ('aws' in providerMetadata) {
             return `AWS ${region}`;
         }
 
-        if (providerMetadata.azure) {
+        if ('azure' in providerMetadata) {
             return `Azure ${region}`;
         }
 
-        if (providerMetadata.google) {
+        if ('google' in providerMetadata) {
             return `GCP ${region}`;
         }
     }
 
-    return 'Not applicable';
+    return 'Not available';
 }
 
 const shortLivedCertMaxDays = 14;

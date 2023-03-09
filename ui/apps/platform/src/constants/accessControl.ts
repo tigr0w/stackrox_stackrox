@@ -7,22 +7,6 @@ export const READ_WRITE_ACCESS = 'READ_WRITE_ACCESS';
 
 export type AccessLevel = 'NO_ACCESS' | 'READ_ACCESS' | 'READ_WRITE_ACCESS';
 
-const defaultRoles = {
-    Admin: true,
-    Analyst: true,
-    'Continuous Integration': true,
-    None: true,
-    'Scope Manager': true,
-    'Sensor Creator': true,
-    'Vulnerability Management Approver': true,
-    'Vulnerability Management Requester': true,
-    'Vulnerability Report Creator': true,
-};
-
-export function getIsDefaultRoleName(name: string): boolean {
-    return Boolean(defaultRoles[name]);
-}
-
 export const authProviderLabels = {
     auth0: 'Auth0',
     oidc: 'OpenID Connect',
@@ -110,17 +94,17 @@ export const resourceSubstitutions: Record<string, string[]> = {
 // TODO: ROX-13888 Remove Policy, VulnerabilityReports.
 // TODO: ROX-12750 update with new list of replaced/deprecated resources
 export const resourceRemovalReleaseVersions = new Map<ResourceName, string>([
-    ['AllComments', '3.75'],
-    ['ComplianceRuns', '3.75'],
-    ['Config', '3.75'],
-    ['DebugLogs', '3.75'],
-    ['NetworkGraphConfig', '3.75'],
-    ['ProbeUpload', '3.75'],
-    ['ScannerBundle', '3.75'],
-    ['ScannerDefinitions', '3.75'],
-    ['SensorUpgradeConfig', '3.75'],
-    ['ServiceIdentity', '3.75'],
-    ['VulnerabilityReports', '3.76'],
+    ['AllComments', '4.0'],
+    ['ComplianceRuns', '4.0'],
+    ['Config', '4.0'],
+    ['DebugLogs', '4.0'],
+    ['NetworkGraphConfig', '4.0'],
+    ['ProbeUpload', '4.0'],
+    ['ScannerBundle', '4.0'],
+    ['ScannerDefinitions', '4.0'],
+    ['SensorUpgradeConfig', '4.0'],
+    ['ServiceIdentity', '4.0'],
+    ['VulnerabilityReports', '4.1'],
 ]);
 
 // TODO(ROX-11453): Remove this mapping once the old resources are fully deprecated.

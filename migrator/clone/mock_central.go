@@ -8,17 +8,18 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/migrator/clone/postgres"
+	pgClone "github.com/stackrox/rox/migrator/clone/postgres"
 	"github.com/stackrox/rox/migrator/clone/rocksdb"
 	migGorm "github.com/stackrox/rox/migrator/postgres/gorm"
 	migVer "github.com/stackrox/rox/migrator/version"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fileutils"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/mathutil"
 	"github.com/stackrox/rox/pkg/migrations"
 	migrationtestutils "github.com/stackrox/rox/pkg/migrations/testutils"
+	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgadmin"
 	"github.com/stackrox/rox/pkg/postgres/pgconfig"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
@@ -54,7 +55,7 @@ type mockCentral struct {
 	tp        *pgtest.TestPostgres
 	// Set version function has to be provided by test itself.
 	setVersion  func(t *testing.T, ver *versionPair)
-	adminConfig *pgxpool.Config
+	adminConfig *postgres.Config
 	// May need to run both databases if testing case of upgrading from rocks version to a postgres version
 	runBoth    bool
 	updateBoth bool
@@ -85,7 +86,7 @@ func createCentral(t *testing.T, runBoth bool) *mockCentral {
 		pgtest.CreateDatabase(t, migrations.GetCurrentClone())
 
 		source := pgtest.GetConnectionString(mock.t)
-		mock.adminConfig, _ = pgxpool.ParseConfig(source)
+		mock.adminConfig, _ = postgres.ParseConfig(source)
 	}
 	return &mock
 }
@@ -114,6 +115,15 @@ func (m *mockCentral) migrateWithVersion(ver *versionPair, breakpoint string, fo
 	m.runMigrator(breakpoint, forceRollback, false)
 }
 
+// legacyUpgrade emulates the legacy database upgrade.
+func (m *mockCentral) legacyUpgrade(t *testing.T, ver *versionPair) {
+	require.NoError(t, os.Setenv(env.PostgresDatastoreEnabled.EnvVar(), strconv.FormatBool(false)))
+	m.setVersion(t, ver)
+	m.runMigrator("", "", false)
+	m.runCentral()
+	require.NoError(t, os.Setenv(env.PostgresDatastoreEnabled.EnvVar(), strconv.FormatBool(true)))
+}
+
 func (m *mockCentral) upgradeCentral(ver *versionPair, breakpoint string) {
 	curVer := &versionPair{version: version.GetMainVersion(), seqNum: migrations.CurrentDBVersionSeqNum()}
 	m.migrateWithVersion(ver, breakpoint, "")
@@ -126,17 +136,17 @@ func (m *mockCentral) upgradeCentral(ver *versionPair, breakpoint string) {
 
 	if env.PostgresDatastoreEnabled.BooleanSetting() && m.runBoth {
 		if version.CompareVersions(curVer.version, "3.0.57.0") >= 0 {
-			if pgadmin.CheckIfDBExists(m.adminConfig, postgres.PreviousClone) {
-				m.verifyClonePostgres(postgres.PreviousClone, curVer)
+			if pgadmin.CheckIfDBExists(m.adminConfig, pgClone.TempClone) {
+				m.verifyClonePostgres(pgClone.TempClone, curVer)
 			}
 		} else {
-			assert.False(m.t, pgadmin.CheckIfDBExists(m.adminConfig, postgres.PreviousClone))
+			assert.False(m.t, pgadmin.CheckIfDBExists(m.adminConfig, pgClone.TempClone))
 		}
 	} else if env.PostgresDatastoreEnabled.BooleanSetting() {
 		if version.CompareVersions(curVer.version, "3.0.57.0") >= 0 {
-			m.verifyClonePostgres(postgres.PreviousClone, curVer)
+			m.verifyClonePostgres(pgClone.PreviousClone, curVer)
 		} else {
-			assert.False(m.t, pgadmin.CheckIfDBExists(m.adminConfig, postgres.PreviousClone))
+			assert.False(m.t, pgadmin.CheckIfDBExists(m.adminConfig, pgClone.PreviousClone))
 		}
 	} else {
 		if version.CompareVersions(curVer.version, "3.0.57.0") >= 0 {
@@ -168,7 +178,7 @@ func (m *mockCentral) upgradeDB(path, clone, pgClone string) {
 			require.LessOrEqual(m.t, currDBSeq, migrations.CurrentDBVersionSeqNum())
 		}
 
-		require.NoError(m.t, os.WriteFile(filepath.Join(path, "db"), []byte(fmt.Sprintf("%d", migrations.CurrentDBVersionSeqNum())), 0644))
+		require.NoError(m.t, os.WriteFile(filepath.Join(path, "db"), []byte(fmt.Sprintf("%d", mathutil.MinInt(migrations.LastRocksDBVersionSeqNum(), migrations.CurrentDBVersionSeqNum()))), 0644))
 	}
 }
 
@@ -178,7 +188,7 @@ func (m *mockCentral) runMigrator(breakPoint string, forceRollback string, unsup
 	if env.PostgresDatastoreEnabled.BooleanSetting() {
 		source := pgtest.GetConnectionString(m.t)
 		sourceMap, _ := pgconfig.ParseSource(source)
-		config, err := pgxpool.ParseConfig(source)
+		config, err := postgres.ParseConfig(source)
 		require.NoError(m.t, err)
 
 		dbm = NewPostgres(m.mountPath, forceRollback, config, sourceMap)
@@ -230,6 +240,9 @@ func (m *mockCentral) runMigrator(breakPoint string, forceRollback string, unsup
 	}
 
 	require.NoError(m.t, dbm.Persist(clone, pgClone, m.updateBoth))
+	if m.updateBoth {
+		migrations.SealLegacyDB(migrations.CurrentPath())
+	}
 
 	if !env.PostgresDatastoreEnabled.BooleanSetting() {
 		m.verifyDBVersion(migrations.CurrentPath(), migrations.CurrentDBVersionSeqNum())
@@ -238,7 +251,7 @@ func (m *mockCentral) runMigrator(breakPoint string, forceRollback string, unsup
 }
 
 func (m *mockCentral) runCentral() {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() || m.updateBoth {
+	if !env.PostgresDatastoreEnabled.BooleanSetting() {
 		require.NoError(m.t, migrations.SafeRemoveDBWithSymbolicLink(filepath.Join(m.mountPath, ".backup")))
 		if version.CompareVersions(version.GetMainVersion(), "3.0.57.0") >= 0 {
 			migrations.SetCurrent(migrations.CurrentPath())
@@ -269,7 +282,7 @@ func (m *mockCentral) restoreCentral(ver *versionPair, breakPoint string, rocksT
 	m.runMigrator("", "", false)
 
 	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		m.verifyClonePostgres(postgres.BackupClone, curVer)
+		m.verifyClonePostgres(pgClone.BackupClone, curVer)
 	} else {
 		m.verifyClone(rocksdb.BackupClone, curVer)
 	}
@@ -312,7 +325,7 @@ func (m *mockCentral) restore(ver *versionPair, rocksToPostgres bool) {
 
 func (m *mockCentral) verifyCurrent() {
 	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		m.verifyClonePostgres(postgres.CurrentClone, &versionPair{version: version.GetMainVersion(), seqNum: migrations.CurrentDBVersionSeqNum()})
+		m.verifyClonePostgres(pgClone.CurrentClone, &versionPair{version: version.GetMainVersion(), seqNum: migrations.CurrentDBVersionSeqNum()})
 	} else {
 		m.verifyClone(rocksdb.CurrentClone, &versionPair{version: version.GetMainVersion(), seqNum: migrations.CurrentDBVersionSeqNum()})
 	}
@@ -379,10 +392,10 @@ func (m *mockCentral) runMigratorWithBreaksInPersist(breakpoint string) {
 	if env.PostgresDatastoreEnabled.BooleanSetting() {
 		source := pgtest.GetConnectionString(m.t)
 		sourceMap, _ := pgconfig.ParseSource(source)
-		config, err := pgxpool.ParseConfig(source)
+		config, err := postgres.ParseConfig(source)
 		require.NoError(m.t, err)
 
-		dbm := postgres.New("", config, sourceMap)
+		dbm := pgClone.New("", config, sourceMap)
 		err = dbm.Scan()
 		require.NoError(m.t, err)
 		clone, _, err := dbm.GetCloneToMigrate(nil, false)
@@ -391,14 +404,14 @@ func (m *mockCentral) runMigratorWithBreaksInPersist(breakpoint string) {
 
 		var prev string
 		switch clone {
-		case postgres.CurrentClone:
+		case pgClone.CurrentClone:
 			return
-		case postgres.PreviousClone:
+		case pgClone.PreviousClone:
 			prev = ""
-		case postgres.RestoreClone:
-			prev = postgres.BackupClone
-		case postgres.TempClone:
-			prev = postgres.PreviousClone
+		case pgClone.RestoreClone:
+			prev = pgClone.BackupClone
+		case pgClone.TempClone:
+			prev = pgClone.PreviousClone
 		}
 
 		// Connect to different database for admin functions
@@ -411,11 +424,11 @@ func (m *mockCentral) runMigratorWithBreaksInPersist(breakpoint string) {
 		if breakpoint == breakAfterRemove {
 			return
 		}
-		_ = pgadmin.RenameDB(connectPool, prev, postgres.CurrentClone)
+		_ = pgadmin.RenameDB(connectPool, prev, pgClone.CurrentClone)
 		if breakpoint == breakBeforeCommitCurrent {
 			return
 		}
-		_ = pgadmin.RenameDB(connectPool, postgres.CurrentClone, clone)
+		_ = pgadmin.RenameDB(connectPool, pgClone.CurrentClone, clone)
 	} else {
 		dbm := rocksdb.New(m.mountPath, "")
 		err := dbm.Scan()
@@ -450,7 +463,7 @@ func (m *mockCentral) runMigratorWithBreaksInPersist(breakpoint string) {
 
 func (m *mockCentral) removePreviousClone() {
 	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		pgtest.DropDatabase(m.t, postgres.PreviousClone)
+		pgtest.DropDatabase(m.t, pgClone.PreviousClone)
 	} else {
 		_ = migrations.SafeRemoveDBWithSymbolicLink(filepath.Join(migrations.DBMountPath(), rocksdb.PreviousClone))
 	}

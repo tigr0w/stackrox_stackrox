@@ -9,6 +9,29 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
 
 ### Added Features
 
+- ROX-15102: new `public_config.telemetry` boolean property of the `/v1/config`
+  endpoint request that allows for querying the state, enabling or disabling the
+  configured telemetry collection.
+
+### Removed Features
+
+- ROX-14336: product `BuildDate` attribute was removed. It won't be returned by
+`/debug/versions.json` endpoint and `roxctl version --json` command.
+
+### Deprecated Features
+- Deprecated `/v1/telemetry/configure` service.
+- The `expiration` field in the `Exclusion` proto has been deprecated and will be removed in a future release.
+
+### Technical Changes
+- The k8s-istio.zip file inside scanner-vuln-updates.zip (the file downloaded from https://install.stackrox.io/scanner/scanner-vuln-updates.zip for updating Scanner vulnerabilities in offline-mode)
+  is no longer needed. We will continue to populate it to support older versions of the product, but it will be ignored.
+- The time interval used to determine the frequency to scan orchestrator-level components (Kubernetes, OpenShift, Istio) is now configurable
+  via ROX_ORCHESTRATOR_VULN_SCAN_INTERVAL.
+
+## [3.74.0]
+
+### Added Features
+
 - ROX-13814: A new "Public Kubernetes Registry" image integration is now available as a replacement
   for the (now deprecated) "Public Kubernetes GCR" image integration.
 
@@ -20,26 +43,40 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
 ### Deprecated Features
 - ROX-12620: We continue to simplify access control management by grouping some permissions in permission sets. As a result:
   - The permission `WorkflowAdministration` will deprecate the permissions `Policy, VulnerabilityReports`.
+- ROX-14398: We continue to simplify access control management by grouping some permissions in permission sets. As a result:
+  - The permission `Access` will deprecate the permissions `Role`.
+  - The default role `Scope Manager` will be removed.
 
-- ROX-14400: product `BuildDate` attribute is deprecated and will be removed in `3.75` release. It won't be returned by
+- ROX-14400: product `BuildDate` attribute is deprecated and will be removed in `4.0` release. It won't be returned by
 `/debug/versions.json` endpoint and `roxctl version --json` command.
 
 ### Required Actions
-- The permission `WorkflowAdministration` will replace `Policy, VulnerabilityReports` in permission sets starting with the 3.76 release.
+- The permission `WorkflowAdministration` will replace `Policy, VulnerabilityReports` in permission sets starting with the 4.1 release.
   You should preemptively start replacing the `Policy` and `VulnerabilityReports` resources within your permission sets in favor of `WorkflowAdministration`.
-  During the migration of the permission sets within the 3.76, the `WorfklowAdministration` permission will have the lowest access permission granted for either `Policy` or `VulnerabilityReports`.
-  As an example, a permission set with `WRITE Policy` and `READ VulnerabilityReports` access will have `READ WorkflowAdministration` access after the migration within the 3.76 release, leading to
+  During the migration of the permission sets within the 4.1, the `WorfklowAdministration` permission will have the lowest access permission granted for either `Policy` or `VulnerabilityReports`.
+  As an example, a permission set with `WRITE Policy` and `READ VulnerabilityReports` access will have `READ WorkflowAdministration` access after the migration within the 4.1 release, leading to
   potentially unwanted side-effects and missing access if you did not update your permission sets beforehand.
+- The permission `Access` will replace `Role` in permission sets starting with the 4.1 release. You should preemptively start replacing
+  the `Role` resource within your permission sets in favor of `Access`. During the migration of the permission sets within the 4.1, the
+  `Access` permission will have the lowest access permission granted for either `Access` or `Role`. As an example, a permission set with
+  `READ Access` and `WRITE Role` will have `READ Access` after the migration, leading to potentially unwanted side-effects and missing access
+  if the permission sets were not updated beforehand.
+- The default `ScopeManager` role will be removed starting with release 4.1. During the migration, Authentication provider rules referencing that role
+  will be updated to use the `None` role. Should Authentication Provider rules reference the `ScopeManager` role for other purposes than
+  Vulnerability Report management, a similar role should be manually created and referenced in the Authentication provider rules instead of `ScopeManager`.
 
 - ROX-13814: The "Public Kubernetes GCR" image integration is now deprecated in line with
   [upstream](https://kubernetes.io/blog/2022/11/28/registry-k8s-io-faster-cheaper-ga/).
 
 ### Technical Changes
-- ROX-12967: Re-introduce `rpm` to the main image in order to be able parse installed packages on RHCOS nodes (from Compliance container)
-- The k8s-istio.zip file inside of scanner-vuln-updates.zip (the file downloaded from https://install.stackrox.io/scanner/scanner-vuln-updates.zip for updating Scanner vulnerabilities in offline-mode)
-  is no longer needed. We will continue to populate it to support older versions of the product, but it will be ignored.
-- The time interval used to determine the frequency to scan orchestrator-level components (Kubernetes, OpenShift, Istio) is now configurable
-  via ROX_ORCHESTRATOR_VULN_SCAN_INTERVAL.
+- ROX-12967: Re-introduce `rpm` to the main image in order to be able to parse installed packages on RHCOS nodes (from Compliance container)
+
+### Major Upcoming Changes
+- The 3.74.z set of releases will be the last major release in the 3.x series. The next release will be 4.0.
+- Postgres will become the backing database as of 4.0.
+- Restoring a backup taken on a 3.y release will no longer be supported starting from 4.1.
+- The stackrox-db PVC will no longer be used starting from 4.1. All users must upgrade from a 3.y release to 4.0 prior to
+  upgrading to a later release in order to properly migrate to Postgres.
 
 ## [3.73.1]
 
