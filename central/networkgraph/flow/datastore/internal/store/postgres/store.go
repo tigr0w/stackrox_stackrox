@@ -84,6 +84,14 @@ const (
 	AND a.ClusterId = b.ClusterId
       AND a.Flow_Id <> b.Max_Flow;
 	`
+
+	pruneNetworkFlowsSrcStmt = `DELETE FROM %s child WHERE NOT EXISTS
+		(SELECT 1 from deployments parent WHERE child.Props_SrcEntity_Id::uuid = parent.id AND parent.clusterid = $1) 
+		AND LastSeenTimestamp < $2`
+
+	pruneNetworkFlowsDestStmt = `DELETE FROM %s child WHERE NOT EXISTS
+		(SELECT 1 from deployments parent WHERE child.Props_DstEntity_Id::uuid = parent.id AND parent.clusterid = $1) 
+		AND LastSeenTimestamp < $2`
 )
 
 var (
@@ -565,55 +573,40 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, keyMat
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	deleteTime := timestamp.Now().Add(30 * time.Minute * -1)
+
 	conn, release, err := s.acquireConn(ctx, ops.Remove, "NetworkFlow")
 	if err != nil {
 		return err
 	}
 	defer release()
 
-	// TODO(ROX-9921) Look at refactoring how these predicates work as an overall refactor of flows.
-	// This operation matches if the either the dest or src deployment no longer exists AND then
-	// if the last seen time is outside a time window.  Since we do not yet know what deployments exist
-	// in Postgres we cannot fully do this work in SQL.  Additionally, there may be issues with the synchronization
-	// of when flow is created vs a deployment deleted that may also make that problematic.
-	if keyMatchFn != nil {
-		partitionWalkStmt := fmt.Sprintf(walkStmt, s.partitionName, s.partitionName)
-		rows, err := conn.Query(ctx, partitionWalkStmt)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		// keyMatchFn is passed in to the readRows method in order to filter down to rows referencing
-		// deleted deployments.
-		deleteFlows, err := s.readRows(rows, keyMatchFn)
-		if err != nil {
-			return err
-		}
-
-		for _, flow := range deleteFlows {
-			if valueMatchFn != nil && !valueMatchFn(flow) {
-				continue
-			}
-			// This is a cleanup operation so we can make it slow for now
-			tx, err := conn.Begin(ctx)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(ctx, deleteStmtWithTime, flow.GetProps().GetSrcEntity().GetType(), flow.GetProps().GetSrcEntity().GetId(), flow.GetProps().GetDstEntity().GetType(), flow.GetProps().GetDstEntity().GetId(), flow.GetProps().GetDstPort(), flow.GetProps().GetL4Protocol(), s.clusterID, pgutils.NilOrTime(flow.GetLastSeenTimestamp()))
-
-			if err != nil {
-				if err := tx.Rollback(ctx); err != nil {
-					return err
-				}
-				return err
-			}
-
-			if err := tx.Commit(ctx); err != nil {
-				return err
-			}
-		}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
 	}
 
+	pruneStmt := fmt.Sprintf(pruneNetworkFlowsSrcStmt, s.partitionName)
+	// To avoid a full scan with an OR delete source and destination flows separately
+	if _, err := tx.Exec(ctx, pruneStmt, s.clusterID, pgutils.NilOrTime(deleteTime.GogoProtobuf())); err != nil {
+		if err := tx.Rollback(ctx); err != nil {
+			return err
+		}
+		return err
+	}
+
+	pruneStmt = fmt.Sprintf(pruneNetworkFlowsDestStmt, s.partitionName)
+	if _, err := tx.Exec(ctx, pruneStmt, s.clusterID, pgutils.NilOrTime(deleteTime.GogoProtobuf())); err != nil {
+		if err := tx.Rollback(ctx); err != nil {
+			return err
+		}
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	
 	return nil
 }
 
