@@ -25,6 +25,9 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
   to fetch vulnerability updates from Central. The flag will be removed as part of the 4.2.0 release.
 
 ### Technical Changes
+- Active Vulnerability Management has been moved behind that ROX_ACTIVE_VULN_MGMT flag and has been defaulted to false due to
+  performance. If Active Vulnerability Management is desired, then a user may set this flag to true and it will be reactivated;
+  however, it is recommended to increase the memory limit of Central.
 - The k8s-istio.zip file inside scanner-vuln-updates.zip (the file downloaded from https://install.stackrox.io/scanner/scanner-vuln-updates.zip for updating Scanner vulnerabilities in offline-mode)
   is no longer needed. We will continue to populate it to support older versions of the product, but it will be ignored.
 - The time interval used to determine the frequency to scan orchestrator-level components (Kubernetes, OpenShift, Istio) is now configurable
