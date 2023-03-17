@@ -8,11 +8,11 @@ import (
 
 	"github.com/stackrox/rox/central/cve/converter/utils"
 	dackboxTestUtils "github.com/stackrox/rox/central/dackbox/testutils"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/dackbox/edges"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fixtures"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	sacTestUtils "github.com/stackrox/rox/pkg/sac/testutils"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	"github.com/stackrox/rox/pkg/search"

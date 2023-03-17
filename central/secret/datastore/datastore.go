@@ -6,7 +6,6 @@ import (
 
 	"github.com/blevesearch/bleve"
 	"github.com/pkg/errors"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/secret/internal/index"
 	"github.com/stackrox/rox/central/secret/internal/store"
 	pgStore "github.com/stackrox/rox/central/secret/internal/store/postgres"
@@ -17,6 +16,7 @@ import (
 	"github.com/stackrox/rox/pkg/postgres"
 	rocksdbBase "github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	searchPkg "github.com/stackrox/rox/pkg/search"
 )
 

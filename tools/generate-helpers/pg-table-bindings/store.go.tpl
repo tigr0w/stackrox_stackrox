@@ -30,8 +30,8 @@ import (
     "github.com/pkg/errors"
     {{- if not $inMigration}}
     "github.com/stackrox/rox/central/metrics"
-    "github.com/stackrox/rox/central/role/resources"
     pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
+    "github.com/stackrox/rox/pkg/sac/resources"
     {{- else }}
     pkgSchema "github.com/stackrox/rox/migrator/migrations/frozenschema/v73"
     {{- end}}

@@ -13,7 +13,6 @@ import (
 	namespaceMockDS "github.com/stackrox/rox/central/namespace/datastore/mocks"
 	netPolMockDS "github.com/stackrox/rox/central/networkpolicies/datastore/mocks"
 	notifierMocks "github.com/stackrox/rox/central/notifier/processor/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	secretMocks "github.com/stackrox/rox/central/secret/datastore/mocks"
 	serviceAccountMocks "github.com/stackrox/rox/central/serviceaccount/datastore/mocks"
 	v1 "github.com/stackrox/rox/generated/api/v1"
@@ -22,6 +21,7 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authn"
 	mockIdentity "github.com/stackrox/rox/pkg/grpc/authn/mocks"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
 )

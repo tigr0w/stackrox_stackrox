@@ -6,7 +6,6 @@ import (
 	"github.com/stackrox/rox/central/globaldb"
 	groupDS "github.com/stackrox/rox/central/group/datastore"
 	rolePkg "github.com/stackrox/rox/central/role"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/role/store"
 	PermissionSetPGStore "github.com/stackrox/rox/central/role/store/permissionset/postgres"
 	permissionSetPGStore "github.com/stackrox/rox/central/role/store/permissionset/rocksdb"
@@ -19,6 +18,7 @@ import (
 	permissionsUtils "github.com/stackrox/rox/pkg/auth/permissions/utils"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
 )

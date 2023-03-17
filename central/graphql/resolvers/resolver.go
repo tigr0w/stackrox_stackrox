@@ -51,7 +51,6 @@ import (
 	k8srolebindingStore "github.com/stackrox/rox/central/rbac/k8srolebinding/datastore"
 	riskDataStore "github.com/stackrox/rox/central/risk/datastore"
 	roleDataStore "github.com/stackrox/rox/central/role/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	secretDataStore "github.com/stackrox/rox/central/secret/datastore"
 	serviceAccountDataStore "github.com/stackrox/rox/central/serviceaccount/datastore"
 	"github.com/stackrox/rox/central/views/imagecve"
@@ -67,6 +66,7 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/or"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
+	"github.com/stackrox/rox/pkg/sac/resources"
 )
 
 // Resolver is the root GraphQL resolver

@@ -8,11 +8,11 @@ import (
 	"github.com/stackrox/rox/central/activecomponent/datastore/internal/store"
 	"github.com/stackrox/rox/central/activecomponent/datastore/search"
 	sacFilters "github.com/stackrox/rox/central/activecomponent/sac"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/dackbox/graph"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/filtered"
 )

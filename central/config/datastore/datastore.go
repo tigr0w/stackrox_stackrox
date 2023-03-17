@@ -6,10 +6,10 @@ import (
 
 	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/central/config/store"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 )
 
 // DataStore is the entry point for modifying Config data.

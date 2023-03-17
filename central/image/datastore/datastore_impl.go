@@ -12,7 +12,6 @@ import (
 	"github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/central/ranking"
 	riskDS "github.com/stackrox/rox/central/risk/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
@@ -21,6 +20,7 @@ import (
 	imageTypes "github.com/stackrox/rox/pkg/images/types"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 )

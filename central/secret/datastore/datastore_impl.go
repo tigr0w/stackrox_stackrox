@@ -3,7 +3,6 @@ package datastore
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/secret/internal/index"
 	"github.com/stackrox/rox/central/secret/internal/store"
 	"github.com/stackrox/rox/central/secret/search"
@@ -13,6 +12,7 @@ import (
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	searchPkg "github.com/stackrox/rox/pkg/search"
 )
 

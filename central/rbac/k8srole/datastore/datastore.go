@@ -11,12 +11,12 @@ import (
 	pgStore "github.com/stackrox/rox/central/rbac/k8srole/internal/store/postgres"
 	"github.com/stackrox/rox/central/rbac/k8srole/internal/store/rocksdb"
 	"github.com/stackrox/rox/central/rbac/k8srole/search"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	pkgRocksDB "github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	searchPkg "github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 )

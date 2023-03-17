@@ -5,9 +5,9 @@ import (
 
 	"github.com/pkg/errors"
 	groupDataStore "github.com/stackrox/rox/central/group/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/telemetry/phonehome"
 )
