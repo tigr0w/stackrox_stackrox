@@ -81,6 +81,7 @@ func init() {
 		// TODO: ROX-14398 Replace Role with Access
 		&storage.SimpleAccessScope{}:      resources.Role,
 		&storage.StoredLicenseKey{}:       resources.Access,
+		&storage.SystemInfo{}:             resources.Administration,
 		&storage.TelemetryConfiguration{}: resources.Administration,
 		&storage.TokenMetadata{}:          resources.Integration,
 		&storage.User{}:                   resources.Access,
