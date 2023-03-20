@@ -12,7 +12,6 @@ import (
 	"github.com/stackrox/rox/central/metrics"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/logging"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres"
@@ -324,19 +323,7 @@ func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.TestSingleUU
 func (s *storeImpl) Delete(ctx context.Context, key string) error {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "TestSingleUUIDKeyStruct")
 
-	var sacQueryFilter *v1.Query
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.Modify(targetResource))
-	if err != nil {
-		return err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return err
-	}
-
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(key).ProtoQuery(),
 	)
 
@@ -347,40 +334,12 @@ func (s *storeImpl) Delete(ctx context.Context, key string) error {
 func (s *storeImpl) DeleteByQuery(ctx context.Context, query *v1.Query) error {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "TestSingleUUIDKeyStruct")
 
-	var sacQueryFilter *v1.Query
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.Modify(targetResource))
-	if err != nil {
-		return err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return err
-	}
-
-	q := search.ConjunctionQuery(
-		sacQueryFilter,
-		query,
-	)
-
-	return pgSearch.RunDeleteRequestForSchema(ctx, schema, q, s.db)
+	return pgSearch.RunDeleteRequestForSchema(ctx, schema, query, s.db)
 }
 
 // DeleteMany removes the objects associated to the specified IDs from the store.
 func (s *storeImpl) DeleteMany(ctx context.Context, identifiers []string) error {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "TestSingleUUIDKeyStruct")
-
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.Modify(targetResource))
-	if err != nil {
-		return err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return err
-	}
 
 	// Batch the deletes
 	localBatchSize := deleteBatchSize
@@ -395,10 +354,7 @@ func (s *storeImpl) DeleteMany(ctx context.Context, identifiers []string) error 
 		}
 
 		identifierBatch := identifiers[:localBatchSize]
-		q := search.ConjunctionQuery(
-			sacQueryFilter,
-			search.NewQueryBuilder().AddDocIDs(identifierBatch...).ProtoQuery(),
-		)
+		q := search.NewQueryBuilder().AddDocIDs(identifierBatch...).ProtoQuery()
 
 		if err := pgSearch.RunDeleteRequestForSchema(ctx, schema, q, s.db); err != nil {
 			return errors.Wrapf(err, "unable to delete the records.  Successfully deleted %d out of %d", numRecordsToDelete-len(identifiers), numRecordsToDelete)
@@ -415,39 +371,14 @@ func (s *storeImpl) DeleteMany(ctx context.Context, identifiers []string) error 
 func (s *storeImpl) Count(ctx context.Context) (int, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "TestSingleUUIDKeyStruct")
 
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.View(targetResource))
-	if err != nil {
-		return 0, err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-
-	if err != nil {
-		return 0, err
-	}
-
-	return pgSearch.RunCountRequestForSchema(ctx, schema, sacQueryFilter, s.db)
+	return pgSearch.RunCountRequestForSchema(ctx, schema, search.EmptyQuery(), s.db)
 }
 
 // Exists returns if the ID exists in the store.
 func (s *storeImpl) Exists(ctx context.Context, key string) (bool, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "TestSingleUUIDKeyStruct")
 
-	var sacQueryFilter *v1.Query
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.View(targetResource))
-	if err != nil {
-		return false, err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return false, err
-	}
-
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(key).ProtoQuery(),
 	)
 
@@ -461,20 +392,7 @@ func (s *storeImpl) Exists(ctx context.Context, key string) (bool, error) {
 func (s *storeImpl) Get(ctx context.Context, key string) (*storage.TestSingleUUIDKeyStruct, bool, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "TestSingleUUIDKeyStruct")
 
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.View(targetResource))
-	if err != nil {
-		return nil, false, err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return nil, false, err
-	}
-
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(key).ProtoQuery(),
 	)
 
@@ -490,28 +408,7 @@ func (s *storeImpl) Get(ctx context.Context, key string) (*storage.TestSingleUUI
 func (s *storeImpl) GetByQuery(ctx context.Context, query *v1.Query) ([]*storage.TestSingleUUIDKeyStruct, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetByQuery, "TestSingleUUIDKeyStruct")
 
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.ResourceWithAccess{
-		Resource: targetResource,
-		Access:   storage.Access_READ_ACCESS,
-	})
-	if err != nil {
-		return nil, err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return nil, err
-	}
-	pagination := query.GetPagination()
-	q := search.ConjunctionQuery(
-		sacQueryFilter,
-		query,
-	)
-	q.Pagination = pagination
-
-	rows, err := pgSearch.RunGetManyQueryForSchema[storage.TestSingleUUIDKeyStruct](ctx, schema, q, s.db)
+	rows, err := pgSearch.RunGetManyQueryForSchema[storage.TestSingleUUIDKeyStruct](ctx, schema, query, s.db)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -529,22 +426,7 @@ func (s *storeImpl) GetMany(ctx context.Context, identifiers []string) ([]*stora
 		return nil, nil, nil
 	}
 
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.ResourceWithAccess{
-		Resource: targetResource,
-		Access:   storage.Access_READ_ACCESS,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return nil, nil, err
-	}
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(identifiers...).ProtoQuery(),
 	)
 
@@ -580,18 +462,8 @@ func (s *storeImpl) GetMany(ctx context.Context, identifiers []string) ([]*stora
 // GetIDs returns all the IDs for the store.
 func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.TestSingleUUIDKeyStructIDs")
-	var sacQueryFilter *v1.Query
 
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	scopeTree, err := scopeChecker.EffectiveAccessScope(permissions.View(targetResource))
-	if err != nil {
-		return nil, err
-	}
-	sacQueryFilter, err = sac.BuildNonVerboseClusterNamespaceLevelSACQueryFilter(scopeTree)
-	if err != nil {
-		return nil, err
-	}
-	result, err := pgSearch.RunSearchRequestForSchema(ctx, schema, sacQueryFilter, s.db)
+	result, err := pgSearch.RunSearchRequestForSchema(ctx, schema, search.EmptyQuery(), s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -618,8 +490,7 @@ func (s *storeImpl) GetAll(ctx context.Context) ([]*storage.TestSingleUUIDKeyStr
 
 // Walk iterates over all of the objects in the store and applies the closure.
 func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.TestSingleUUIDKeyStruct) error) error {
-	var sacQueryFilter *v1.Query
-	fetcher, closer, err := pgSearch.RunCursorQueryForSchema[storage.TestSingleUUIDKeyStruct](ctx, schema, sacQueryFilter, s.db)
+	fetcher, closer, err := pgSearch.RunCursorQueryForSchema[storage.TestSingleUUIDKeyStruct](ctx, schema, search.EmptyQuery(), s.db)
 	if err != nil {
 		return err
 	}

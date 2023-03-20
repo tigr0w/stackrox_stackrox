@@ -276,14 +276,7 @@ func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.SimpleAccess
 func (s *storeImpl) Delete(ctx context.Context, id string) error {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "SimpleAccessScope")
 
-	var sacQueryFilter *v1.Query
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return sac.ErrResourceAccessDenied
-	}
-
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(id).ProtoQuery(),
 	)
 
@@ -294,30 +287,12 @@ func (s *storeImpl) Delete(ctx context.Context, id string) error {
 func (s *storeImpl) DeleteByQuery(ctx context.Context, query *v1.Query) error {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "SimpleAccessScope")
 
-	var sacQueryFilter *v1.Query
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return sac.ErrResourceAccessDenied
-	}
-
-	q := search.ConjunctionQuery(
-		sacQueryFilter,
-		query,
-	)
-
-	return pgSearch.RunDeleteRequestForSchema(ctx, schema, q, s.db)
+	return pgSearch.RunDeleteRequestForSchema(ctx, schema, query, s.db)
 }
 
 // DeleteMany removes the objects associated to the specified IDs from the store.
 func (s *storeImpl) DeleteMany(ctx context.Context, identifiers []string) error {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.RemoveMany, "SimpleAccessScope")
-
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_WRITE_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return sac.ErrResourceAccessDenied
-	}
 
 	// Batch the deletes
 	localBatchSize := deleteBatchSize
@@ -332,10 +307,7 @@ func (s *storeImpl) DeleteMany(ctx context.Context, identifiers []string) error 
 		}
 
 		identifierBatch := identifiers[:localBatchSize]
-		q := search.ConjunctionQuery(
-			sacQueryFilter,
-			search.NewQueryBuilder().AddDocIDs(identifierBatch...).ProtoQuery(),
-		)
+		q := search.NewQueryBuilder().AddDocIDs(identifierBatch...).ProtoQuery()
 
 		if err := pgSearch.RunDeleteRequestForSchema(ctx, schema, q, s.db); err != nil {
 			return errors.Wrapf(err, "unable to delete the records.  Successfully deleted %d out of %d", numRecordsToDelete-len(identifiers), numRecordsToDelete)
@@ -352,28 +324,14 @@ func (s *storeImpl) DeleteMany(ctx context.Context, identifiers []string) error 
 func (s *storeImpl) Count(ctx context.Context) (int, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Count, "SimpleAccessScope")
 
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return 0, nil
-	}
-
-	return pgSearch.RunCountRequestForSchema(ctx, schema, sacQueryFilter, s.db)
+	return pgSearch.RunCountRequestForSchema(ctx, schema, search.EmptyQuery(), s.db)
 }
 
 // Exists returns if the ID exists in the store.
 func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Exists, "SimpleAccessScope")
 
-	var sacQueryFilter *v1.Query
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return false, nil
-	}
-
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(id).ProtoQuery(),
 	)
 
@@ -387,15 +345,7 @@ func (s *storeImpl) Exists(ctx context.Context, id string) (bool, error) {
 func (s *storeImpl) Get(ctx context.Context, id string) (*storage.SimpleAccessScope, bool, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "SimpleAccessScope")
 
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return nil, false, nil
-	}
-
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(id).ProtoQuery(),
 	)
 
@@ -415,14 +365,7 @@ func (s *storeImpl) GetMany(ctx context.Context, identifiers []string) ([]*stora
 		return nil, nil, nil
 	}
 
-	var sacQueryFilter *v1.Query
-
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return nil, nil, nil
-	}
 	q := search.ConjunctionQuery(
-		sacQueryFilter,
 		search.NewQueryBuilder().AddDocIDs(identifiers...).ProtoQuery(),
 	)
 
@@ -458,13 +401,8 @@ func (s *storeImpl) GetMany(ctx context.Context, identifiers []string) ([]*stora
 // GetIDs returns all the IDs for the store.
 func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.GetAll, "storage.SimpleAccessScopeIDs")
-	var sacQueryFilter *v1.Query
 
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return nil, nil
-	}
-	result, err := pgSearch.RunSearchRequestForSchema(ctx, schema, sacQueryFilter, s.db)
+	result, err := pgSearch.RunSearchRequestForSchema(ctx, schema, search.EmptyQuery(), s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -479,12 +417,7 @@ func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 
 // Walk iterates over all of the objects in the store and applies the closure.
 func (s *storeImpl) Walk(ctx context.Context, fn func(obj *storage.SimpleAccessScope) error) error {
-	var sacQueryFilter *v1.Query
-	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS).Resource(targetResource)
-	if !scopeChecker.IsAllowed() {
-		return nil
-	}
-	fetcher, closer, err := pgSearch.RunCursorQueryForSchema[storage.SimpleAccessScope](ctx, schema, sacQueryFilter, s.db)
+	fetcher, closer, err := pgSearch.RunCursorQueryForSchema[storage.SimpleAccessScope](ctx, schema, search.EmptyQuery(), s.db)
 	if err != nil {
 		return err
 	}
