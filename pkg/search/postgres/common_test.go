@@ -13,6 +13,7 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	mappings "github.com/stackrox/rox/pkg/search/options/deployments"
 	"github.com/stackrox/rox/pkg/search/postgres/aggregatefunc"
@@ -208,7 +209,8 @@ func TestMultiTableQueries(t *testing.T) {
 		},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
-			actual, err := standardizeQueryAndPopulatePath(c.q, deploymentBaseSchema, SEARCH)
+			ctx := sac.WithAllAccess(context.Background())
+			actual, err := standardizeQueryAndPopulatePath(ctx, c.q, deploymentBaseSchema, SEARCH)
 			if c.expectedError != "" {
 				assert.Error(t, err, c.expectedError)
 			} else {
