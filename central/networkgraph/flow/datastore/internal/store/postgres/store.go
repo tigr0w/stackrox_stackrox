@@ -594,6 +594,10 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, keyMat
 		}
 		return err
 	}
+	// Commit so that if the destination one fails, the source one should have less work to do on the retry.
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	pruneStmt = fmt.Sprintf(pruneNetworkFlowsDestStmt, s.partitionName)
 	if _, err := tx.Exec(ctx, pruneStmt, s.clusterID, pgutils.NilOrTime(deleteTime.GogoProtobuf())); err != nil {
@@ -606,7 +610,7 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, keyMat
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
