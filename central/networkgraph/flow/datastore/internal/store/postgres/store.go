@@ -568,7 +568,7 @@ func (s *flowStoreImpl) RemoveMatchingFlows(ctx context.Context, keyMatchFn func
 	})
 }
 
-func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, keyMatchFn func(props *storage.NetworkFlowProperties) bool, valueMatchFn func(flow *storage.NetworkFlow) bool) error {
+func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, _ func(props *storage.NetworkFlowProperties) bool, _ func(flow *storage.NetworkFlow) bool) error {
 	// These remove operations can overlap.  Using a lock to avoid deadlocks in the database.
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -599,6 +599,12 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, keyMat
 		return err
 	}
 
+	// Start a new transaction for the destination deletes
+	tx, err = conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+
 	pruneStmt = fmt.Sprintf(pruneNetworkFlowsDestStmt, s.partitionName)
 	if _, err := tx.Exec(ctx, pruneStmt, s.clusterID, pgutils.NilOrTime(deleteTime.GogoProtobuf())); err != nil {
 		if err := tx.Rollback(ctx); err != nil {
@@ -607,11 +613,7 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, keyMat
 		return err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-
-	return nil
+	return tx.Commit(ctx)
 }
 
 // RemoveStaleFlows - remove stale duplicate network flows
