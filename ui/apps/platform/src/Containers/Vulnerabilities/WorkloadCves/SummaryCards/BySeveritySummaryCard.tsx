@@ -1,5 +1,6 @@
 import React from 'react';
 import { Card, CardBody, CardTitle, Flex, Grid, GridItem, Text } from '@patternfly/react-core';
+import { SVGIconProps } from '@patternfly/react-icons/dist/esm/createIcon';
 
 import SeverityIcons from 'Components/PatternFly/SeverityIcons';
 
@@ -7,8 +8,9 @@ import { VulnerabilitySeverity } from 'types/cve.proto';
 import { vulnerabilitySeverityLabels } from 'messages/common';
 
 export type BySeveritySummaryCardProps = {
+    className?: string;
     title: string;
-    severityCounts: Record<VulnerabilitySeverity, number>;
+    severityCounts: Omit<Record<VulnerabilitySeverity, number>, 'UNKNOWN_VULNERABILITY_SEVERITY'>;
     hiddenSeverities: Set<VulnerabilitySeverity>;
 };
 
@@ -23,12 +25,13 @@ const disabledColor100 = 'var(--pf-global--disabled-color--100)';
 const disabledColor200 = 'var(--pf-global--disabled-color--200)';
 
 function BySeveritySummaryCard({
+    className = '',
     title,
     severityCounts,
     hiddenSeverities,
 }: BySeveritySummaryCardProps) {
     return (
-        <Card isCompact>
+        <Card className={className} isCompact>
             <CardTitle>{title}</CardTitle>
             <CardBody>
                 <Grid className="pf-u-pl-sm">
@@ -48,7 +51,7 @@ function BySeveritySummaryCard({
                             text = 'No results';
                         }
 
-                        const Icon = SeverityIcons[severity];
+                        const Icon: React.FC<SVGIconProps> | undefined = SeverityIcons[severity];
 
                         return (
                             <GridItem key={severity} span={6}>
@@ -57,7 +60,7 @@ function BySeveritySummaryCard({
                                     spaceItems={{ default: 'spaceItemsSm' }}
                                     alignItems={{ default: 'alignItemsCenter' }}
                                 >
-                                    <Icon color={hasNoResults ? textColor : undefined} />
+                                    {Icon && <Icon color={hasNoResults ? textColor : undefined} />}
                                     <Text style={{ color: textColor }}>{text}</Text>
                                 </Flex>
                             </GridItem>

@@ -200,7 +200,7 @@ Run the following in your working directory of choice:
 ```
 git clone git@github.com:stackrox/stackrox.git
 cd stackrox
-MAIN_IMAGE_TAG=VERSION_TO_USE ./deploy/k8s/deploy.sh
+MAIN_IMAGE_TAG=VERSION_TO_USE ./deploy/deploy.sh
 ```
 
 After a few minutes, all resources should be deployed.
@@ -224,7 +224,7 @@ Run the following in your working directory of choice:
 ```
 git clone git@github.com:stackrox/stackrox.git
 cd stackrox
-MAIN_IMAGE_TAG=VERSION_TO_USE ./deploy/openshift/deploy.sh
+MAIN_IMAGE_TAG=VERSION_TO_USE ./deploy/deploy.sh
 ```
 
 After a few minutes, all resources should be deployed. The process will complete with this message.
@@ -244,7 +244,7 @@ Run the following in your working directory of choice:
 ```
 git clone git@github.com:stackrox/stackrox.git
 cd stackrox
-MAIN_IMAGE_TAG=latest ./deploy/k8s/deploy-local.sh
+MAIN_IMAGE_TAG=latest ./deploy/deploy-local.sh
 ```
 
 After a few minutes, all resources should be deployed.
@@ -302,6 +302,7 @@ The following tools are necessary to test code and build image(s):
 * [Bats](https://github.com/sstephenson/bats) is used to run certain shell tests.
   You can obtain it with `brew install bats` or `npm install -g bats`.
 * [oc](https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/) OpenShift cli tool
+* [shellcheck](https://github.com/koalaman/shellcheck#installing) for shell scripts linting.
 
 **Xcode - macOS Only**
 
@@ -377,7 +378,7 @@ $ export SKIP_UI_BUILD=1
 $ roxkubectx
 
 # To deploy locally, call:
-$ ./deploy/k8s/deploy-local.sh
+$ ./deploy/deploy-local.sh
 
 # Now you can access StackRox dashboard at https://localhost:8000
 # or simply call another workflow script:

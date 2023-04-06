@@ -3,6 +3,12 @@ package env
 import "time"
 
 var (
+	// RHCOSNodeScanning enables phase 1 functions of "Full host level vulnerability scanning for RHCOS nodes" (ROX-10818)
+	RHCOSNodeScanning = RegisterBooleanSetting("ROX_RHCOS_NODE_SCANNING", true)
+
+	// NodeScanningEndpoint is used to provide Compliance with the Node Scanner that is used to carry out Node Scans
+	NodeScanningEndpoint = RegisterSetting("ROX_NODE_SCANNING_ENDPOINT", WithDefault("127.0.0.1:8444"))
+
 	// NodeScanningInterval is the base value of the interval duration between node scans.
 	NodeScanningInterval = registerDurationSetting("ROX_NODE_SCANNING_INTERVAL", 4*time.Hour)
 
@@ -23,4 +29,7 @@ var (
 
 	// NodeScanningMaxBackoff is the upper boundary of backoff. Defaults to 5m in seconds, being 50% of Kubernetes restart policy stability timer.
 	NodeScanningMaxBackoff = registerDurationSetting("ROX_NODE_SCANNING_MAX_BACKOFF", 300*time.Second)
+
+	// NodeInventoryContainerEnabled is used to tell compliance whether a connection to the node-inventory container should be attempted
+	NodeInventoryContainerEnabled = RegisterBooleanSetting("ROX_CALL_NODE_INVENTORY_ENABLED", true)
 )

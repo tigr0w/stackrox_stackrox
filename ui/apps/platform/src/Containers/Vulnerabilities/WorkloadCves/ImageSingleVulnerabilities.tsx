@@ -2,15 +2,11 @@ import React, { ReactNode } from 'react';
 import {
     Bullseye,
     Divider,
-    EmptyState,
-    EmptyStateBody,
-    EmptyStateIcon,
-    EmptyStateVariant,
     Flex,
     Grid,
     GridItem,
-    Label,
     PageSection,
+    Pagination,
     pluralize,
     Spinner,
     Split,
@@ -22,57 +18,42 @@ import {
     Text,
     Title,
 } from '@patternfly/react-core';
-import { ExclamationCircleIcon, InfoCircleIcon } from '@patternfly/react-icons';
 
-import { VulnerabilitySeverity } from 'types/cve.proto';
-import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 import useURLStringUnion from 'hooks/useURLStringUnion';
 import useURLSearch from 'hooks/useURLSearch';
-import { getHasSearchApplied } from 'utils/searchUtils';
-import { cveStatusTabValues, FixableStatus } from './types';
+import useURLPagination from 'hooks/useURLPagination';
+import useURLSort from 'hooks/useURLSort';
+import { getHasSearchApplied, getRequestQueryStringForSearchFilter } from 'utils/searchUtils';
+import EmptyStateTemplate from 'Components/PatternFly/EmptyStateTemplate';
+import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
+import { ExclamationCircleIcon } from '@patternfly/react-icons';
 import WorkloadTableToolbar from './WorkloadTableToolbar';
 import BySeveritySummaryCard from './SummaryCards/BySeveritySummaryCard';
 import CvesByStatusSummaryCard from './SummaryCards/CvesByStatusSummaryCard';
 import SingleEntityVulnerabilitiesTable from './Tables/SingleEntityVulnerabilitiesTable';
-import useImageVulnerabilities, {
-    ImageVulnerabilitiesResponse,
-} from './hooks/useImageVulnerabilities';
+import useImageVulnerabilities from './hooks/useImageVulnerabilities';
+import { DynamicTableLabel } from './DynamicIcon';
+import { getHiddenSeverities, parseQuerySearchFilter } from './searchUtils';
+import { QuerySearchFilter, FixableStatus, cveStatusTabValues } from './types';
 
-function severityCountsFromImageVulnerabilities(
-    imageVulnerabilities: ImageVulnerabilitiesResponse['image']['imageVulnerabilities']
-): Record<VulnerabilitySeverity, number> {
-    const severityCounts = {
-        LOW_VULNERABILITY_SEVERITY: 0,
-        MODERATE_VULNERABILITY_SEVERITY: 0,
-        IMPORTANT_VULNERABILITY_SEVERITY: 0,
-        CRITICAL_VULNERABILITY_SEVERITY: 0,
-    };
+function getHiddenStatuses(querySearchFilter: QuerySearchFilter): Set<FixableStatus> {
+    const hiddenStatuses = new Set<FixableStatus>([]);
+    const fixableFilters = querySearchFilter?.Fixable ?? [];
 
-    imageVulnerabilities.forEach(({ severity }) => {
-        severityCounts[severity] += 1;
-    });
-
-    return severityCounts;
-}
-
-function statusCountsFromImageVulnerabilities(
-    imageVulnerabilities: ImageVulnerabilitiesResponse['image']['imageVulnerabilities']
-): Record<FixableStatus, number> {
-    const statusCounts = {
-        Fixable: 0,
-        'Not fixable': 0,
-    };
-
-    imageVulnerabilities.forEach(({ isFixable }) => {
-        if (isFixable) {
-            statusCounts.Fixable += 1;
-        } else {
-            statusCounts['Not fixable'] += 1;
+    if (fixableFilters.length > 0) {
+        if (!fixableFilters.includes('true')) {
+            hiddenStatuses.add('Fixable');
         }
-    });
 
-    return statusCounts;
+        if (!fixableFilters.includes('false')) {
+            hiddenStatuses.add('Not fixable');
+        }
+    }
+
+    return hiddenStatuses;
 }
+
+const defaultSortFields = ['CVE', 'Severity', 'Fixable'];
 
 export type ImageSingleVulnerabilitiesProps = {
     imageId: string;
@@ -80,39 +61,61 @@ export type ImageSingleVulnerabilitiesProps = {
 
 function ImageSingleVulnerabilities({ imageId }: ImageSingleVulnerabilitiesProps) {
     const { searchFilter } = useURLSearch();
-    // TODO Still need to properly integrate search filter with query
-    const { data, loading, error } = useImageVulnerabilities(imageId, {});
+    const querySearchFilter = parseQuerySearchFilter(searchFilter);
+    const { page, perPage, setPage, setPerPage } = useURLPagination(50);
+    const { sortOption, getSortParams } = useURLSort({
+        sortFields: defaultSortFields,
+        defaultSortOption: {
+            field: 'Severity',
+            direction: 'desc',
+        },
+        onSort: () => setPage(1),
+    });
+
+    const pagination = {
+        offset: (page - 1) * perPage,
+        limit: perPage,
+        sortOption,
+    };
+    const { data, previousData, loading, error } = useImageVulnerabilities(
+        imageId,
+        getRequestQueryStringForSearchFilter(querySearchFilter),
+        pagination
+    );
 
     const [activeTabKey, setActiveTabKey] = useURLStringUnion('cveStatus', cveStatusTabValues);
 
+    const isFiltered = getHasSearchApplied(querySearchFilter);
+
     let mainContent: ReactNode | null = null;
+
+    const vulnerabilityData = data ?? previousData;
 
     if (error) {
         mainContent = (
             <Bullseye>
-                <EmptyState variant={EmptyStateVariant.large}>
-                    <EmptyStateIcon
-                        className="pf-u-danger-color-100"
-                        icon={ExclamationCircleIcon}
-                    />
-                    <Title headingLevel="h2">{getAxiosErrorMessage(error)}</Title>
-                    <EmptyStateBody>Adjust your filters and try again</EmptyStateBody>
-                </EmptyState>
+                <EmptyStateTemplate
+                    headingLevel="h2"
+                    title={getAxiosErrorMessage(error)}
+                    icon={ExclamationCircleIcon}
+                    iconClassName="pf-u-danger-color-100"
+                >
+                    Adjust your filters and try again
+                </EmptyStateTemplate>
             </Bullseye>
         );
-    } else if (loading && !data) {
+    } else if (loading && !vulnerabilityData) {
         mainContent = (
             <Bullseye>
                 <Spinner isSVG />
             </Bullseye>
         );
-    } else if (data) {
-        const vulnerabilities = data.image.imageVulnerabilities;
-        const severityCounts = severityCountsFromImageVulnerabilities(vulnerabilities);
-        const cveStatusCounts = statusCountsFromImageVulnerabilities(vulnerabilities);
-        // TODO Integrate these with page search filters
-        const hiddenSeverities = new Set<VulnerabilitySeverity>([]);
-        const hiddenStatuses = new Set<FixableStatus>([]);
+    } else if (vulnerabilityData) {
+        const hiddenSeverities = getHiddenSeverities(querySearchFilter);
+        const hiddenStatuses = getHiddenStatuses(querySearchFilter);
+        const vulnCounter = vulnerabilityData.image.imageVulnerabilityCounter;
+        const totalVulnerabilityCount = vulnCounter.all.total;
+        const { critical, important, moderate, low } = vulnCounter;
 
         mainContent = (
             <>
@@ -121,13 +124,18 @@ function ImageSingleVulnerabilities({ imageId }: ImageSingleVulnerabilitiesProps
                         <GridItem sm={12} md={6} xl2={4}>
                             <BySeveritySummaryCard
                                 title="CVEs by severity"
-                                severityCounts={severityCounts}
+                                severityCounts={{
+                                    CRITICAL_VULNERABILITY_SEVERITY: critical.total,
+                                    IMPORTANT_VULNERABILITY_SEVERITY: important.total,
+                                    MODERATE_VULNERABILITY_SEVERITY: moderate.total,
+                                    LOW_VULNERABILITY_SEVERITY: low.total,
+                                }}
                                 hiddenSeverities={hiddenSeverities}
                             />
                         </GridItem>
                         <GridItem sm={12} md={6} xl2={4}>
                             <CvesByStatusSummaryCard
-                                cveStatusCounts={cveStatusCounts}
+                                cveStatusCounts={vulnerabilityData.image.imageVulnerabilityCounter}
                                 hiddenStatuses={hiddenStatuses}
                             />
                         </GridItem>
@@ -135,28 +143,35 @@ function ImageSingleVulnerabilities({ imageId }: ImageSingleVulnerabilitiesProps
                 </div>
                 <Divider />
                 <div className="pf-u-p-lg">
-                    <Split className="pf-u-pb-lg">
+                    <Split className="pf-u-pb-lg pf-u-align-items-baseline">
                         <SplitItem isFilled>
-                            <Flex alignContent={{ default: 'alignContentCenter' }}>
+                            <Flex alignItems={{ default: 'alignItemsCenter' }}>
                                 <Title headingLevel="h2">
-                                    {pluralize(
-                                        data.image.imageVulnerabilities.length,
-                                        'result',
-                                        'results'
-                                    )}{' '}
-                                    found
+                                    {pluralize(totalVulnerabilityCount, 'result', 'results')} found
                                 </Title>
-                                {getHasSearchApplied(searchFilter) && (
-                                    <Label isCompact color="blue" icon={<InfoCircleIcon />}>
-                                        Filtered view
-                                    </Label>
-                                )}
+                                {isFiltered && <DynamicTableLabel />}
                             </Flex>
                         </SplitItem>
-                        <SplitItem>TODO Pagination</SplitItem>
+                        <SplitItem>
+                            <Pagination
+                                isCompact
+                                itemCount={totalVulnerabilityCount}
+                                page={page}
+                                perPage={perPage}
+                                onSetPage={(_, newPage) => setPage(newPage)}
+                                onPerPageSelect={(_, newPerPage) => {
+                                    if (totalVulnerabilityCount < (page - 1) * newPerPage) {
+                                        setPage(1);
+                                    }
+                                    setPerPage(newPerPage);
+                                }}
+                            />
+                        </SplitItem>
                     </Split>
                     <SingleEntityVulnerabilitiesTable
-                        imageVulnerabilities={data.image.imageVulnerabilities}
+                        image={vulnerabilityData.image}
+                        getSortParams={getSortParams}
+                        isFiltered={isFiltered}
                     />
                 </div>
             </>

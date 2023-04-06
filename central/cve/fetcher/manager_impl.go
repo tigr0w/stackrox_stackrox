@@ -58,7 +58,7 @@ func (m *orchestratorIstioCVEManagerImpl) HandleClusterConnection() {
 }
 
 // GetAffectedClusters returns the affected clusters for a CVE
-func (m *orchestratorIstioCVEManagerImpl) GetAffectedClusters(ctx context.Context, cveID string, ct utils.CVEType, cveMatcher *cveMatcher.CVEMatcher) ([]*storage.Cluster, error) {
+func (m *orchestratorIstioCVEManagerImpl) GetAffectedClusters(ctx context.Context, cveID string, ct utils.CVEType, _ *cveMatcher.CVEMatcher) ([]*storage.Cluster, error) {
 	clusters, err := m.orchestratorCVEMgr.getAffectedClusters(ctx, cveID, ct)
 	if err != nil {
 		return nil, err

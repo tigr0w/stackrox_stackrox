@@ -54,7 +54,7 @@ deploy_stackrox_with_custom_sensor() {
 
     # generate init bundle
     password_file="$ROOT/deploy/$ORCHESTRATOR_FLAVOR/central-deploy/password"
-    if [ ! -f "$password_file" ]; then 
+    if [ ! -f "$password_file" ]; then
         die "password file $password_file not found after deploying central"
     fi
     kubectl -n stackrox exec deploy/central -- roxctl --insecure-skip-tls-verify \
@@ -91,14 +91,18 @@ export_test_environment() {
 
     ci_export ROX_BASELINE_GENERATION_DURATION "${ROX_BASELINE_GENERATION_DURATION:-1m}"
     ci_export ROX_NETWORK_BASELINE_OBSERVATION_PERIOD "${ROX_NETWORK_BASELINE_OBSERVATION_PERIOD:-2m}"
-    ci_export ROX_DECLARATIVE_CONFIGURATION "${ROX_DECLARATIVE_CONFIGURATION:-true}"
-    ci_export ROX_DECOMMISSIONED_CLUSTER_RETENTION "${ROX_DECOMMISSIONED_CLUSTER_RETENTION:-true}"
     ci_export ROX_NETWORK_GRAPH_PATTERNFLY "${ROX_NETWORK_GRAPH_PATTERNFLY:-true}"
     ci_export ROX_QUAY_ROBOT_ACCOUNTS "${ROX_QUAY_ROBOT_ACCOUNTS:-true}"
     ci_export ROX_SYSTEM_HEALTH_PF "${ROX_SYSTEM_HEALTH_PF:-true}"
     ci_export ROX_SYSLOG_EXTRA_FIELDS "${ROX_SYSLOG_EXTRA_FIELDS:-true}"
     ci_export ROX_VULN_MGMT_WORKLOAD_CVES "${ROX_VULN_MGMT_WORKLOAD_CVES:-true}"
-    ci_export ROX_PROCESSES_LISTENING_ON_PORT "${ROX_PROCESSES_LISTENING_ON_PORT:-true}"
+
+    if [[ -z "${BUILD_TAG:-}" ]]; then
+        ci_export ROX_PROCESSES_LISTENING_ON_PORT "${ROX_PROCESSES_LISTENING_ON_PORT:-true}"
+
+        # TODO(ROX-16008): Remove this once the declarative config feature flag is enabled by default.
+        ci_export ROX_DECLARATIVE_CONFIGURATION "${ROX_DECLARATIVE_CONFIGURATION:-true}"
+    fi
 }
 
 deploy_stackrox_operator() {
@@ -176,6 +180,8 @@ deploy_central_via_operator() {
     customize_envVars+=$'\n        value: "'"${ROX_POSTGRES_DATASTORE:-false}"'"'
     customize_envVars+=$'\n      - name: ROX_PROCESSES_LISTENING_ON_PORT'
     customize_envVars+=$'\n        value: "'"${ROX_PROCESSES_LISTENING_ON_PORT:-true}"'"'
+    customize_envVars+=$'\n      - name: ROX_DECLARATIVE_CONFIGURATION'
+    customize_envVars+=$'\n        value: "'"${ROX_DECLARATIVE_CONFIGURATION:-true}"'"'
 
     env - \
       centralAdminPasswordBase64="$centralAdminPasswordBase64" \
@@ -544,7 +550,7 @@ wait_for_api() {
     info "Waiting for Central to be ready"
 
     start_time="$(date '+%s')"
-    max_seconds=300
+    max_seconds=${MAX_WAIT_SECONDS:-300}
 
     while true; do
         central_json="$(kubectl -n stackrox get deploy/central -o json)"
@@ -590,7 +596,7 @@ wait_for_api() {
     NUM_SUCCESSES_IN_A_ROW=0
     SUCCESSES_NEEDED_IN_A_ROW=3
     # shellcheck disable=SC2034
-    for i in $(seq 1 40); do
+    for i in $(seq 1 60); do
         metadata="$(curl -sk --connect-timeout 5 --max-time 10 "${METADATA_URL}")"
         metadata_exitstatus="$?"
         status="$(echo "$metadata" | jq '.licenseStatus' -r)"

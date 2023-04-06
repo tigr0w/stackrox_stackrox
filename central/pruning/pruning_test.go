@@ -71,7 +71,6 @@ import (
 	"github.com/stackrox/rox/pkg/dackbox/utils/queue"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/expiringcache"
-	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/fixtures/fixtureconsts"
 	"github.com/stackrox/rox/pkg/images/defaults"
@@ -629,9 +628,8 @@ func (s *PruningTestSuite) TestImagePruning() {
 
 	scc := sac.TestScopeCheckerCoreFromAccessResourceMap(s.T(),
 		[]permissions.ResourceWithAccess{
+			resourceWithAccess(storage.Access_READ_ACCESS, resources.Administration),
 			resourceWithAccess(storage.Access_READ_ACCESS, resources.Alert),
-			// TODO: ROX-12750 Replace Config with Administration.
-			resourceWithAccess(storage.Access_READ_ACCESS, resources.Config),
 			resourceWithAccess(storage.Access_READ_ACCESS, resources.Deployment),
 			resourceWithAccess(storage.Access_READ_ACCESS, resources.Image),
 			resourceWithAccess(storage.Access_READ_ACCESS, resources.DeploymentExtension),
@@ -704,12 +702,6 @@ func (s *PruningTestSuite) TestImagePruning() {
 }
 
 func (s *PruningTestSuite) TestClusterPruning() {
-	s.T().Setenv(features.DecommissionedClusterRetention.EnvVar(), "true")
-	if !features.DecommissionedClusterRetention.Enabled() {
-		// if it's still not enabled, we're probably in release tests so skip
-		s.T().Skip("Skipping because ROX_DECOMMISSIONED_CLUSTER_RETENTION feature flag isn't set.")
-	}
-
 	s.T().Setenv(defaults.ImageFlavorEnvName, defaults.ImageFlavorNameRHACSRelease)
 
 	versionUtils.SetExampleVersion(s.T())
@@ -939,12 +931,6 @@ func (s *PruningTestSuite) TestClusterPruning() {
 }
 
 func (s *PruningTestSuite) TestClusterPruningCentralCheck() {
-	s.T().Setenv(features.DecommissionedClusterRetention.EnvVar(), "true")
-	if !features.DecommissionedClusterRetention.Enabled() {
-		// if it's still not enabled, we're probably in release tests so skip
-		s.T().Skip("Skipping because ROX_DECOMMISSIONED_CLUSTER_RETENTION feature flag isn't set.")
-	}
-
 	s.T().Setenv(defaults.ImageFlavorEnvName, defaults.ImageFlavorNameRHACSRelease)
 
 	versionUtils.SetExampleVersion(s.T())
@@ -1212,9 +1198,8 @@ func (s *PruningTestSuite) TestAlertPruning() {
 	}
 	scc := sac.TestScopeCheckerCoreFromAccessResourceMap(s.T(),
 		[]permissions.ResourceWithAccess{
+			resourceWithAccess(storage.Access_READ_ACCESS, resources.Administration),
 			resourceWithAccess(storage.Access_READ_ACCESS, resources.Alert),
-			// TODO: ROX-12750 Replace Config with Administration.
-			resourceWithAccess(storage.Access_READ_ACCESS, resources.Config),
 			resourceWithAccess(storage.Access_READ_ACCESS, resources.Deployment),
 			resourceWithAccess(storage.Access_READ_ACCESS, resources.Image),
 			resourceWithAccess(storage.Access_READ_WRITE_ACCESS, resources.Alert),

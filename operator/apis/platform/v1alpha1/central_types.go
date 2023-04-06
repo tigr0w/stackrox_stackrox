@@ -153,7 +153,7 @@ func (c *CentralComponentSpec) GetAdminPasswordGenerationDisabled() bool {
 	if c == nil {
 		return false
 	}
-	return pointer.BoolPtrDerefOr(c.AdminPasswordGenerationDisabled, false)
+	return pointer.BoolDeref(c.AdminPasswordGenerationDisabled, false)
 }
 
 // IsExternalDB returns true if central DB is not managed by the Operator
@@ -201,6 +201,10 @@ type CentralDBSpec struct {
 	// volume claim (recommended default), and a host path.
 	//+operator-sdk:csv:customresourcedefinitions:type=spec,order=3
 	Persistence *DBPersistence `json:"persistence,omitempty"`
+
+	// Config map containing postgresql.conf and pg_hba.conf that will be used if modifications need to be applied.
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Config map that will override postgresql.conf and pg_hba.conf"
+	ConfigOverride LocalConfigMapReference `json:"configOverride,omitempty"`
 
 	//+operator-sdk:csv:customresourcedefinitions:type=spec,order=99
 	DeploymentSpec `json:",inline"`
@@ -281,7 +285,7 @@ func (p *Persistence) GetHostPath() string {
 		return ""
 	}
 
-	return pointer.StringPtrDerefOr(p.HostPath.Path, "")
+	return pointer.StringDeref(p.HostPath.Path, "")
 }
 
 // HostPathSpec defines settings for host path config.
@@ -343,7 +347,7 @@ func (p *DBPersistence) GetHostPath() string {
 		return ""
 	}
 
-	return pointer.StringPtrDerefOr(p.HostPath.Path, "")
+	return pointer.StringDeref(p.HostPath.Path, "")
 }
 
 // DBPersistentVolumeClaim defines PVC-based persistence settings for Central DB.

@@ -23,6 +23,9 @@ class BaseTest:
                 if exitstatus != 0:
                     raise RuntimeError(f"Test failed: exit {exitstatus}")
             except subprocess.TimeoutExpired as err:
+                # Kill child processes as we cannot rely on bash scripts to handle signals and stop tests
+                subprocess.run(["/usr/bin/pkill", "-P", str(cmd.pid)], check=True, timeout=5)
+                # Then kill the test command
                 popen_graceful_kill(cmd)
                 raise err
 
@@ -51,7 +54,7 @@ class UpgradeTest(BaseTest):
 
 
 class PostgresUpgradeTest(BaseTest):
-    TEST_TIMEOUT = 60 * 60
+    TEST_TIMEOUT = 60 * 60 * 2
     TEST_OUTPUT_DIR = "/tmp/postgres-upgrade-test-logs"
     TEST_LEGACY_OUTPUT_DIR = "/tmp/legacy-postgres-upgrade-test-logs"
     TEST_SENSOR_OUTPUT_DIR = "/tmp/postgres-sensor-upgrade-test-logs"
