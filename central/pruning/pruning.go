@@ -276,6 +276,7 @@ func (g *garbageCollectorImpl) removeOrphanedK8SRoleBindings(searchQuery *v1.Que
 }
 
 func (g *garbageCollectorImpl) removeOrphanedResources() {
+	log.Info("SHREWS -- removeOrphanedResources")
 	clusters, err := g.clusters.GetClusters(pruningCtx)
 	if err != nil {
 		log.Errorf("Failed to fetch clusters: %v", err)
@@ -512,6 +513,7 @@ func isOrphanedDeployment(deployments set.FrozenStringSet, info *storage.Network
 }
 
 func (g *garbageCollectorImpl) removeOrphanedNetworkFlows(deployments, clusters set.FrozenStringSet) {
+	log.Info("SHREWS -- removeOrphanedNetworkFlows")
 	for _, c := range clusters.AsSlice() {
 		store, err := g.networkflows.GetFlowStore(pruningCtx, c)
 		if err != nil {
