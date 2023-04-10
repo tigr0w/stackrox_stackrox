@@ -569,6 +569,7 @@ func (s *flowStoreImpl) RemoveMatchingFlows(ctx context.Context, keyMatchFn func
 }
 
 func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, _ func(props *storage.NetworkFlowProperties) bool, _ func(flow *storage.NetworkFlow) bool) error {
+	log.Infof("SHREWS -- enter retryableRemoveMatchingFlows")
 	// These remove operations can overlap.  Using a lock to avoid deadlocks in the database.
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -612,6 +613,8 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, _ func
 		}
 		return err
 	}
+
+	log.Infof("SHREWS -- exit retryableRemoveMatchingFlows")
 
 	return tx.Commit(ctx)
 }
