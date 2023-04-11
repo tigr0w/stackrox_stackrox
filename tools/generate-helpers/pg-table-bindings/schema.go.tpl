@@ -13,6 +13,9 @@ import (
     v1 "github.com/stackrox/rox/generated/api/v1"
     "github.com/stackrox/rox/generated/storage"
     "github.com/stackrox/rox/pkg/postgres"
+    {{- if .RegisterSchema }}
+    schemaPkg "github.com/stackrox/rox/pkg/postgres/schema"
+    {{- end }}
     "github.com/stackrox/rox/pkg/postgres/walker"
     "github.com/stackrox/rox/pkg/search"
     "github.com/stackrox/rox/pkg/search/postgres/mapping"
@@ -38,7 +41,7 @@ var (
     // {{template "schemaVar" .Schema.Table}} is the go schema for table `{{.Schema.Table|lowerCase}}`.
     {{template "schemaVar" .Schema.Table}} = func() *walker.Schema {
         {{- if .RegisterSchema }}
-        schema := GetSchemaForTable("{{.Schema.Table}}")
+        schema := schemaPkg.GetSchemaForTable("{{.Schema.Table}}")
         if schema != nil {
             return schema
         }
@@ -70,7 +73,7 @@ var (
             {{- end }}
         {{- end }}
         {{- if .RegisterSchema }}
-        RegisterTable(schema, {{template "createTableStmtVar" .Schema }})
+        schemaPkg.RegisterTable(schema, {{template "createTableStmtVar" .Schema }})
             {{- if .SearchCategory }}
                 mapping.RegisterCategoryToTable(v1.{{.SearchCategory}}, schema)
             {{- end}}
