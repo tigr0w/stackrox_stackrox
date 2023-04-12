@@ -380,11 +380,25 @@ func (s *flowStoreImpl) retryableRemoveFlowsForDeployment(ctx context.Context, i
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	// To avoid a full scan with an OR delete source and destination flows separately
+	err := s.removeDeploymentFlows(ctx, deleteSrcDeploymentStmt, id)
+	if err != nil {
+		return err
+	}
+
+	return s.removeDeploymentFlows(ctx, deleteDstDeploymentStmt, id)
+}
+
+func (s *flowStoreImpl) removeDeploymentFlows(ctx context.Context, deleteStmt string, id string) error {
+	log.Infof("SHREWS -- enter removeDeploymentFlows")
 	conn, release, err := s.acquireConn(ctx, ops.RemoveFlowsByDeployment, "NetworkFlow")
 	if err != nil {
 		return err
 	}
 	defer release()
+
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -392,25 +406,15 @@ func (s *flowStoreImpl) retryableRemoveFlowsForDeployment(ctx context.Context, i
 	}
 
 	// To avoid a full scan with an OR delete source and destination flows separately
-	if _, err := tx.Exec(ctx, deleteSrcDeploymentStmt, s.clusterID, id); err != nil {
+	if _, err := tx.Exec(ctx, deleteStmt, s.clusterID, id); err != nil {
 		if err := tx.Rollback(ctx); err != nil {
 			return err
 		}
 		return err
 	}
 
-	if _, err := tx.Exec(ctx, deleteDstDeploymentStmt, s.clusterID, id); err != nil {
-		if err := tx.Rollback(ctx); err != nil {
-			return err
-		}
-		return err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-
-	return nil
+	log.Infof("SHREWS -- exit removeDeploymentFlows")
+	return tx.Commit(ctx)
 }
 
 // GetAllFlows returns the object, if it exists from the store, timestamp and error
@@ -576,45 +580,41 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, _ func
 
 	deleteTime := timestamp.Now().Add(30 * time.Minute * -1)
 
+	// To avoid a full scan with an OR delete source and destination flows separately
+	pruneStmt := fmt.Sprintf(pruneNetworkFlowsSrcStmt, s.partitionName)
+	err := s.pruneFlows(ctx, pruneStmt, deleteTime.GogoProtobuf())
+	if err != nil {
+		return err
+	}
+
+	pruneStmt = fmt.Sprintf(pruneNetworkFlowsDestStmt, s.partitionName)
+
+	log.Infof("SHREWS -- exit retryableRemoveMatchingFlows")
+
+	return s.pruneFlows(ctx, pruneStmt, deleteTime.GogoProtobuf())
+}
+
+func (s *flowStoreImpl) pruneFlows(ctx context.Context, deleteStmt string, orphanWindow *types.Timestamp) error {
 	conn, release, err := s.acquireConn(ctx, ops.Remove, "NetworkFlow")
 	if err != nil {
 		return err
 	}
 	defer release()
 
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
 	}
 
-	pruneStmt := fmt.Sprintf(pruneNetworkFlowsSrcStmt, s.partitionName)
-	// To avoid a full scan with an OR delete source and destination flows separately
-	if _, err := tx.Exec(ctx, pruneStmt, s.clusterID, pgutils.NilOrTime(deleteTime.GogoProtobuf())); err != nil {
+	if _, err := tx.Exec(ctx, deleteStmt, s.clusterID, pgutils.NilOrTime(orphanWindow)); err != nil {
 		if err := tx.Rollback(ctx); err != nil {
 			return err
 		}
 		return err
 	}
-	// Commit so that if the destination one fails, the source one should have less work to do on the retry.
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-
-	// Start a new transaction for the destination deletes
-	tx, err = conn.Begin(ctx)
-	if err != nil {
-		return err
-	}
-
-	pruneStmt = fmt.Sprintf(pruneNetworkFlowsDestStmt, s.partitionName)
-	if _, err := tx.Exec(ctx, pruneStmt, s.clusterID, pgutils.NilOrTime(deleteTime.GogoProtobuf())); err != nil {
-		if err := tx.Rollback(ctx); err != nil {
-			return err
-		}
-		return err
-	}
-
-	log.Infof("SHREWS -- exit retryableRemoveMatchingFlows")
 
 	return tx.Commit(ctx)
 }
@@ -635,6 +635,8 @@ func (s *flowStoreImpl) RemoveStaleFlows(ctx context.Context) error {
 
 	// This is purposefully not retried as this is an optimization and not a requirement
 	// It is also currently prone to statement timeouts
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	prune := fmt.Sprintf(pruneStaleNetworkFlowsStmt, s.partitionName, s.partitionName)
 	_, err = conn.Exec(ctx, prune)
 	return err
