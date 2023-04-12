@@ -181,7 +181,8 @@ function NetworkGraphPage() {
                         // transform policy data to DataModel
                         const { policyDataModel, policyNodeMap } = transformPolicyData(
                             policyNodes,
-                            deploymentsFromUrl
+                            deploymentsFromUrl,
+                            edgeState
                         );
                         // get active nodes from network flow graph API response
                         const { nodes: activeNodes } = values[0].response;
