@@ -16,6 +16,7 @@ import (
 	pkgPostgres "github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest/conn"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stretchr/testify/assert"
@@ -85,8 +86,8 @@ func (s *SchemaTestSuite) TestTableNameSanity() {
 		createStmts *pkgPostgres.CreateStmts
 	}
 	var testCases []testCaseStruct
-	for _, rt := range getAllRegisteredTablesInOrder() {
-		testCases = append(testCases, testCaseStruct{rt.Schema.Table, rt.CreateStmt})
+	for _, rt := range schema.GetAllRegisteredTablesInOrder() {
+		testCases = append(testCases, testCaseStruct{rt.GetSchema().Table, rt.GetCreateStatement()})
 	}
 
 	for _, testCase := range testCases {
@@ -108,8 +109,8 @@ func (s *SchemaTestSuite) TestTableNameSanity() {
 
 // TestReentry checks if we can apply the schema multiple times.
 func (s *SchemaTestSuite) TestReentry() {
-	ApplyAllSchemas(s.ctx, s.gormDB)
-	ApplyAllSchemas(s.ctx, s.gormDB)
+	schema.ApplyAllSchemas(s.ctx, s.gormDB)
+	schema.ApplyAllSchemas(s.ctx, s.gormDB)
 }
 
 func (s *SchemaTestSuite) getAllTestCases() []string {
