@@ -187,7 +187,7 @@ type TokenRefreshResponse struct {
 }
 
 func (r *registryImpl) tokenRefreshEndpoint(req *http.Request) (interface{}, error) {
-	refreshTokenCookie, err := req.Cookie(refreshTokenCookieName)
+	refreshTokenCookie, err := req.Cookie(RefreshTokenCookieName)
 	if err != nil {
 		return nil, httputil.Errorf(http.StatusBadRequest, "could not obtain refresh token cookie: %v", err)
 	}
@@ -354,11 +354,9 @@ func (r *registryImpl) providersHTTPHandler(w http.ResponseWriter, req *http.Req
 		qp := callbackURL.Query()
 		qp.Set(TokenQueryParameter, tokenInfo.Token)
 		qp.Set(ExpiresAtQueryParameter, tokenInfo.Expiry().Format(time.RFC3339))
-		cookieData := &refreshTokenCookieData{}
-		if err := cookieData.Decode(refreshCookie.Value); err != nil && cookieData.RefreshToken != "" {
-			qp.Set(RefreshTokenQueryParameter, cookieData.RefreshToken)
+		if refreshCookie != nil {
+			qp.Set(RefreshTokenQueryParameter, refreshCookie.Value)
 		}
-
 		callbackURL.RawQuery = qp.Encode()
 		w.Header().Set("Location", callbackURL.String())
 		w.WriteHeader(http.StatusSeeOther)
@@ -380,7 +378,7 @@ func (r *registryImpl) logoutEndpoint(req *http.Request) (interface{}, error) {
 
 	// Whatever happens, make sure the cookie gets cleared.
 	clearCookie := &http.Cookie{
-		Name:     refreshTokenCookieName,
+		Name:     RefreshTokenCookieName,
 		Path:     r.sessionURLPrefix(),
 		HttpOnly: true,
 		Secure:   true,
