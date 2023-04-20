@@ -86,11 +86,11 @@ const (
 	`
 
 	pruneNetworkFlowsSrcStmt = `DELETE FROM %s child WHERE NOT EXISTS
-		(SELECT 1 from deployments parent WHERE child.Props_SrcEntity_Id::uuid = parent.id AND parent.clusterid = $1) 
+		(SELECT 1 from deployments parent WHERE child.Props_SrcEntity_Id = parent.id::text AND parent.clusterid = $1) 
 		AND LastSeenTimestamp < $2`
 
 	pruneNetworkFlowsDestStmt = `DELETE FROM %s child WHERE NOT EXISTS
-		(SELECT 1 from deployments parent WHERE child.Props_DstEntity_Id::uuid = parent.id AND parent.clusterid = $1) 
+		(SELECT 1 from deployments parent WHERE child.Props_DstEntity_Id = parent.id::text AND parent.clusterid = $1) 
 		AND LastSeenTimestamp < $2`
 )
 
@@ -381,6 +381,7 @@ func (s *flowStoreImpl) retryableRemoveFlowsForDeployment(ctx context.Context, i
 	defer s.mutex.Unlock()
 
 	// To avoid a full scan with an OR delete source and destination flows separately
+	"DELETE FROM network_flows_v2 WHERE ClusterId = $1 AND Props_SrcEntity_Type = 1 AND Props_SrcEntity_Id = $2"
 	err := s.removeDeploymentFlows(ctx, deleteSrcDeploymentStmt, id)
 	if err != nil {
 		return err
@@ -474,7 +475,7 @@ func (s *flowStoreImpl) retryableGetMatchingFlows(ctx context.Context, pred func
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	
+
 	// handling case when since is nil.  Assumption is we want everything in that case vs when date is not null
 	if since == nil {
 		partitionWalkStmt := fmt.Sprintf(walkStmt, s.partitionName, s.partitionName)
