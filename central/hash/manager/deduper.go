@@ -203,9 +203,11 @@ func (d *deduperImpl) ShouldProcess(msg *central.MsgFromSensor) bool {
 		return true
 	case central.ResourceAction_SYNC_RESOURCE:
 		// check if element is in successfully processed and mark as processed for syncs so that these are not reconciled away
-		if val, ok := d.successfullyProcessed[key]; ok {
-			val.processed = true
-		}
+		concurrency.WithLock(&d.hashLock, func() {
+			if val, ok := d.successfullyProcessed[key]; ok {
+				val.processed = true
+			}
+		})
 	}
 	// Backwards compatibility with a previous Sensor
 	if event.GetSensorHashOneof() == nil {
