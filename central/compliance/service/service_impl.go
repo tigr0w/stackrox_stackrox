@@ -79,6 +79,9 @@ func (s *serviceImpl) GetStandards(context.Context, *v1.Empty) (*v1.GetComplianc
 	// Filter standards by active
 	filteredStandards := standards[:0]
 	for _, standard := range standards {
+		if standard.GetId() == "CIS_Docker_v1_2_0" {
+			standard.Hidden = true
+		}
 		if s.manager.IsStandardActive(standard.GetId()) {
 			filteredStandards = append(filteredStandards, standard)
 		}
@@ -97,6 +100,9 @@ func (s *serviceImpl) GetStandard(_ context.Context, req *v1.ResourceByID) (*v1.
 	}
 	if !exists {
 		return nil, errors.Wrap(errox.NotFound, req.GetId())
+	}
+	if standard.GetMetadata().GetId() == "CIS_Docker_v1_2_0" {
+		standard.Metadata.Hidden = true
 	}
 	return &v1.GetComplianceStandardResponse{
 		Standard: standard,
