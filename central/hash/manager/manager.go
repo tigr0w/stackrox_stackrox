@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stackrox/rox/central/hash/datastore"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
@@ -56,6 +57,9 @@ func (m *managerImpl) flushHashes(ctx context.Context) {
 	})
 	if err := m.datastore.UpsertHashes(ctx, hashesToFlush); err != nil {
 		log.Errorf("flushing hashes: %v", err)
+	}
+	for _, hash := range hashesToFlush {
+		dedupingHashSizeGauge.With(prometheus.Labels{"cluster": hash.GetClusterId()}).Set(float64(len(hash.GetHashes())))
 	}
 }
 

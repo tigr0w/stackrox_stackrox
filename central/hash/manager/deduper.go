@@ -3,7 +3,6 @@ package manager
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/pkg/alert"
@@ -33,8 +32,7 @@ func NewDeduper(existingHashes map[string]uint64) Deduper {
 	process := make(map[string]*entry)
 	for k, v := range existingHashes {
 		process[k] = &entry{
-			val:         v,
-			preexisting: true,
+			val: v,
 		}
 	}
 	return &deduperImpl{
@@ -45,10 +43,8 @@ func NewDeduper(existingHashes map[string]uint64) Deduper {
 }
 
 type entry struct {
-	val         uint64
-	create      time.Time
-	preexisting bool
-	processed   bool
+	val       uint64
+	processed bool
 }
 
 type deduperImpl struct {
