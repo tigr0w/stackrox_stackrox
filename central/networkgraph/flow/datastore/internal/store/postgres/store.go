@@ -381,7 +381,6 @@ func (s *flowStoreImpl) retryableRemoveFlowsForDeployment(ctx context.Context, i
 	defer s.mutex.Unlock()
 
 	// To avoid a full scan with an OR delete source and destination flows separately
-	"DELETE FROM network_flows_v2 WHERE ClusterId = $1 AND Props_SrcEntity_Type = 1 AND Props_SrcEntity_Id = $2"
 	err := s.removeDeploymentFlows(ctx, deleteSrcDeploymentStmt, id)
 	if err != nil {
 		return err
