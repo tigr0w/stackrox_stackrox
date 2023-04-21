@@ -169,15 +169,11 @@ func (d *deduperImpl) ProcessSync() {
 			if val, ok := d.received[k]; ok && val.processed {
 				continue
 			}
-			log.Infof("Reconciling key %v : %v", k, len(d.successfullyProcessed))
 			delete(d.successfullyProcessed, k)
-			log.Infof("Reconciled key %v : %v", k, len(d.successfullyProcessed))
 			// If a deployment is being removed due to reconciliation, then we will need to remove the alerts too
 			if strings.HasPrefix(k, deploymentResource) {
 				alertKey := buildKey(alertResource, getIDFromKey(k))
-				log.Infof("Reconciling key %v : %v", alertKey, len(d.successfullyProcessed))
-				delete(d.successfullyProcessed, k)
-				log.Infof("Reconciled key %v : %v", alertKey, len(d.successfullyProcessed))
+				delete(d.successfullyProcessed, alertKey)
 			}
 		}
 		// Mark it now as being not processed because reconciliation is completed
@@ -190,7 +186,6 @@ func (d *deduperImpl) ShouldProcess(msg *central.MsgFromSensor) bool {
 	if skipDedupe(msg) {
 		return true
 	}
-	log.Infof("ShouldProcess: %T %v %v", msg.GetEvent().GetResource(), msg.GetEvent().GetId(), msg.GetEvent().GetAction())
 	event := msg.GetEvent()
 	key := getKey(msg)
 	switch event.GetAction() {
@@ -232,12 +227,10 @@ func (d *deduperImpl) ShouldProcess(msg *central.MsgFromSensor) bool {
 	if ok && prevValue == event.GetSensorHash() {
 		return false
 	}
-	log.Infof("Setting %s for received: %d", key, len(d.received))
 	d.received[key] = &entry{
 		val:       event.GetSensorHash(),
 		processed: true,
 	}
-	log.Infof("After setting %s for received: %d", key, len(d.received))
 	return true
 }
 
