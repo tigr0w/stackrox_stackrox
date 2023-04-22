@@ -65,7 +65,8 @@ type manager struct {
 	autoTriggerUpgrades *concurrency.Flag
 }
 
-func newManager(mgr hashManager.Manager) *manager {
+// NewManager returns a new connection manager
+func NewManager(mgr hashManager.Manager) Manager {
 	return &manager{
 		connectionsByClusterID: make(map[string]connectionAndUpgradeController),
 		manager:                mgr,
