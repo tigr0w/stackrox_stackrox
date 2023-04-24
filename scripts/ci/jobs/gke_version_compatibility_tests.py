@@ -20,6 +20,9 @@ chart_versions=get_latest_release_versions(4)
 
 gkecluster=GKECluster("compat-test")
 
+if len(chart_versions) > 1:
+    os.environ["CENTRAL_CHART_VERSION"] = chart_versions[0]
+
 failing_sensor_versions = []
 for version in chart_versions:
     os.environ["SENSOR_CHART_VERSION"] = version
