@@ -248,7 +248,8 @@ deploy_central_from_helm_charts() {
 
     helm upgrade --install -n stackrox --create-namespace stackrox-central-services \
         stackrox/stackrox-central-services \
-        --set central.adminPassword.value="${STACKROX_ADMIN_PASSWORD}"
+        --set central.adminPassword.value="${STACKROX_ADMIN_PASSWORD}" \
+        --version "$chart_version"
 }
 
 deploy_sensor() {
