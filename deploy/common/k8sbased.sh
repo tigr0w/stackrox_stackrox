@@ -521,7 +521,7 @@ function launch_sensor {
         --set "collector.collectionMethod=$(echo "$COLLECTION_METHOD" | tr '[:lower:]' '[:upper:]')"
         --set "env.openshift=$([[ "$ORCH" == "openshift" ]] && echo "true" || echo "false")"
       )
-      if [[! -z "$CENTRAL_CHART_VERSION"]], then
+      if [[! -z "$CENTRAL_CHART_VERSION"]]; then
         helm_args+=(--version "$CENTRAL_CHART_VERSION")
       fi
       if [[ -f "$k8s_dir/sensor-deploy/chart/feature-flag-values.yaml" ]]; then
