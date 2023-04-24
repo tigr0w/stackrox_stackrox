@@ -43,14 +43,15 @@ deploy_stackrox() {
 }
 
 # shellcheck disable=SC2120
-deploy_stackrox_with_custom_sensor() {
-    if [[ "$#" -ne 1 ]]; then
-        die "expected sensor chart version as parameter in deploy_stackrox_with_custom_sensor"
+deploy_stackrox_with_custom_sensor_and_central_versions() {
+    if [[ "$#" -ne 2 ]]; then
+        die "expected sensor chart version and central chart version as parameters in deploy_stackrox_with_custom_sensor_and_central_versions: eploy_stackrox_with_custom_sensor_and_central_versions <sensor chart version> <central chart version>"
     fi
-    target_version="$1"
+    sensor_target_version="$1"
+    central_target_version="$2"
     setup_podsecuritypolicies_config
 
-    deploy_central
+    deploy_central_from_helm_charts "$central_target_version"
 
     export_central_basic_auth_creds
     wait_for_api
@@ -66,7 +67,7 @@ deploy_stackrox_with_custom_sensor() {
         --password "$(cat "$password_file")" \
       central init-bundles generate stackrox-init-bundle --output - 1> stackrox-init-bundle.yaml
 
-    deploy_sensor_from_helm_charts "$target_version" ./stackrox-init-bundle.yaml
+    deploy_sensor_from_helm_charts "$sensor_target_version" ./stackrox-init-bundle.yaml
 
     echo "Sensor deployed. Waiting for sensor to be up"
     sensor_wait
@@ -227,6 +228,27 @@ deploy_sensor_from_helm_charts() {
         -f "$init_bundle" \
         --set clusterName="remote" \
         --version "$chart_version"
+}
+
+deploy_central_from_helm_charts() {
+    if [[ "$#" -ne 1 ]]; then
+        die "deploy_central_from_helm_charts should receive a helm chart version: deploy_sensor_from_helm_charts <Chart version>"
+    fi
+
+    chart_version="$1"
+
+    info "Deploying central version (v$chart_version) from Helm Charts"
+
+    helm repo add stackrox-oss https://raw.githubusercontent.com/stackrox/helm-charts/main/opensource
+    helm repo update
+
+    helm search repo stackrox-oss -l
+
+    STACKROX_ADMIN_PASSWORD="$(openssl rand -base64 20 | tr -d '/=+')"
+
+    helm upgrade --install -n stackrox --create-namespace stackrox-central-services \
+        stackrox/stackrox-central-services \
+        --set central.adminPassword.value="${STACKROX_ADMIN_PASSWORD}"
 }
 
 deploy_sensor() {
