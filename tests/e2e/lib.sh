@@ -51,7 +51,10 @@ deploy_stackrox_with_custom_sensor_and_central_versions() {
     central_target_version="$2"
     setup_podsecuritypolicies_config
 
-    deploy_central_from_helm_charts "$central_target_version"
+    DEPLOY_STACKROX_VIA_OPERATOR="false"
+    ci_export CENTRAL_CHART_VERSION "$central_target_version"
+    ci_export OUTPUT_FORMAT helm
+    deploy_central
 
     export_central_basic_auth_creds
     wait_for_api
@@ -227,28 +230,6 @@ deploy_sensor_from_helm_charts() {
         stackrox-oss/stackrox-secured-cluster-services \
         -f "$init_bundle" \
         --set clusterName="remote" \
-        --version "$chart_version"
-}
-
-deploy_central_from_helm_charts() {
-    if [[ "$#" -ne 1 ]]; then
-        die "deploy_central_from_helm_charts should receive a helm chart version: deploy_sensor_from_helm_charts <Chart version>"
-    fi
-
-    chart_version="$1"
-
-    info "Deploying central version (v$chart_version) from Helm Charts"
-
-    helm repo add stackrox-oss https://raw.githubusercontent.com/stackrox/helm-charts/main/opensource
-    helm repo update
-
-    helm search repo stackrox-oss -l
-
-    STACKROX_ADMIN_PASSWORD="$(openssl rand -base64 20 | tr -d '/=+')"
-
-    helm upgrade --install -n stackrox --create-namespace stackrox-central-services \
-        stackrox/stackrox-central-services \
-        --set central.adminPassword.value="${STACKROX_ADMIN_PASSWORD}" \
         --version "$chart_version"
 }
 
