@@ -16,6 +16,11 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
 
 ### Technical Changes
 
+- The k8s-istio.zip file inside scanner-vuln-updates.zip (the file downloaded from https://install.stackrox.io/scanner/scanner-vuln-updates.zip for updating Scanner vulnerabilities in offline-mode)
+  is no longer needed. We will continue to populate it to support older versions of the product, but it will be ignored.
+- The time interval used to determine the frequency to scan orchestrator-level components (Kubernetes, OpenShift, Istio) is now configurable
+  via ROX_ORCHESTRATOR_VULN_SCAN_INTERVAL.
+
 ## [4.0.0]
 
 ### Added Features
@@ -68,10 +73,6 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
   support a higher number of clusters without modification.
 - ROX-14280: ACS operator default channel changes from `latest` to `stable`. Users of older versions must follow the upgrade procedure in order to preserve ACS data in case of issues with the upgrade.
 - ROX-14917: Helm charts versioning scheme changed. Previously the product version (Major).(Minor).(Patch) was rendered to the Helm chart version (Minor).(Patch).0, e.g. 3.74.2 -> 74.2.0. The new versioning scheme maps product version (Major).(Minor).(Patch) to the Helm chart version as (Major*100).(Minor).(Patch), e.g. 4.0.2 -> 400.0.2.
-- The k8s-istio.zip file inside scanner-vuln-updates.zip (the file downloaded from https://install.stackrox.io/scanner/scanner-vuln-updates.zip for updating Scanner vulnerabilities in offline-mode)
-  is no longer needed. We will continue to populate it to support older versions of the product, but it will be ignored.
-- The time interval used to determine the frequency to scan orchestrator-level components (Kubernetes, OpenShift, Istio) is now configurable
-  via ROX_ORCHESTRATOR_VULN_SCAN_INTERVAL.
 
 ## [3.74.0]
 
