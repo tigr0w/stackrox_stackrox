@@ -3,6 +3,8 @@ package tlsconfig
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,34 +26,100 @@ const (
 	DefaultCertPath = "/run/secrets/stackrox.io/default-tls-cert"
 )
 
-// GetAdditionalCAs reads all additional CAs in DER format.
-func GetAdditionalCAs() ([][]byte, error) {
+// GetAdditionalCAFilePaths returns the list of file paths containing additional CAs.
+func GetAdditionalCAFilePaths() ([]string, error) {
 	additionalCADir := AdditionalCACertsDirPath()
-	certFileInfos, err := os.ReadDir(additionalCADir)
+	directoryEntries, err := os.ReadDir(additionalCADir)
 	if err != nil {
 		// Ignore error if additional CAs do not exist on filesystem
 		if os.IsNotExist(err) {
+			log.Infof("Additional CA directory %q does not exist: skipping", additionalCADir)
 			return nil, nil
 		}
-		return nil, errors.Wrap(err, "reading additional CAs directory")
+		return nil, errors.Wrap(err, fmt.Sprintf("Failed to read additional CAs directory %q", additionalCADir))
+	}
+
+	var files []string
+
+	for _, directoryEntry := range directoryEntries {
+
+		entryName := directoryEntry.Name()
+		filePath := path.Join(additionalCADir, entryName)
+
+		if directoryEntry.IsDir() {
+			log.Infof("Skipping additional CA directory entry %q because it is a directory", entryName)
+			continue
+		}
+
+		fileInfo, err := directoryEntry.Info()
+		if err != nil {
+			log.Warnf("Failed to read additional CA file info for %q: %s", entryName, err)
+			continue
+		}
+
+		if isSymlink(fileInfo) {
+			resolvedPathForSymlink, err := filepath.EvalSymlinks(filePath)
+			if err != nil {
+				log.Warnf("Failed to evaluate additional CA file symlinks for file %q: %s", filePath, err)
+				continue
+			}
+			fileInfo, err = os.Stat(resolvedPathForSymlink)
+			if err != nil {
+				log.Warnf("Error reading additional CA file info for symlink %q that resolved to %q: %s", filePath, resolvedPathForSymlink, err)
+				continue
+			}
+			if fileInfo.IsDir() {
+				log.Infof("Skipping additional CA file %q because it is a symlink that resolved to a directory", filePath)
+				continue
+			}
+		}
+
+		if !isValidAdditionalCAFileName(entryName) {
+			log.Infof(skipAdditionalCAFileMsg, entryName)
+			continue
+		}
+
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("Failed to read additional CAs cert file %q", filePath))
+		}
+
+		_, err = x509utils.ConvertPEMToDERs(content)
+		if err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("Failed to convert additional CA cert file %q from PEM to DER format", filePath))
+		}
+
+		files = append(files, filePath)
+	}
+
+	return files, nil
+
+}
+
+func isSymlink(fileInfo fs.FileInfo) bool {
+	return fileInfo.Mode()&os.ModeSymlink != 0
+}
+
+// GetAdditionalCAs reads all additional CAs in DER format.
+func GetAdditionalCAs() ([][]byte, error) {
+	additionalCAFilePaths, err := GetAdditionalCAFilePaths()
+	if err != nil {
+		return nil, err
 	}
 
 	var certDERs [][]byte
-	for _, certFile := range certFileInfos {
-		if filepath.Ext(certFile.Name()) != ".crt" {
-			log.Infof("Skipping additional-ca file %q, must end with '*.crt'.", certFile.Name())
-			continue
-		}
-		content, err := os.ReadFile(path.Join(additionalCADir, certFile.Name()))
+	for _, certFilePath := range additionalCAFilePaths {
+		pemBytes, err := os.ReadFile(certFilePath)
 		if err != nil {
-			return nil, errors.Wrap(err, "reading additional CAs cert")
+			return nil, errors.Wrap(err, fmt.Sprintf("Failed to read additional CAs cert file %q", certFilePath))
 		}
 
-		certDER, err := x509utils.ConvertPEMToDERs(content)
+		ders, err := x509utils.ConvertPEMToDERs(pemBytes)
 		if err != nil {
-			return nil, errors.Wrap(err, "converting additional CA cert to DER")
+			return nil, errors.Wrap(err, fmt.Sprintf("Failed to convert additional CA cert file %q from PEM to DER format", certFilePath))
 		}
-		certDERs = append(certDERs, certDER...)
+
+		certDERs = append(certDERs, ders...)
 	}
 
 	return certDERs, nil
@@ -182,4 +250,22 @@ func validForAllDNSNames(cert *x509.Certificate, dnsNames ...string) bool {
 		}
 	}
 	return true
+}
+
+var (
+	allowedAdditionalCAExtensionList = []string{".crt", ".pem"}
+	allowedAdditionalCAExtensionMap  = map[string]struct{}{}
+)
+
+func init() {
+	for _, ext := range allowedAdditionalCAExtensionList {
+		allowedAdditionalCAExtensionMap[ext] = struct{}{}
+	}
+}
+
+var skipAdditionalCAFileMsg = fmt.Sprintf("skipping additional-ca file %%q because it has an invalid extension; allowed file extensions for additional ca certificates are %v", allowedAdditionalCAExtensionList)
+
+func isValidAdditionalCAFileName(fileName string) bool {
+	_, ok := allowedAdditionalCAExtensionMap[path.Ext(fileName)]
+	return ok
 }

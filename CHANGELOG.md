@@ -8,6 +8,17 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
 ## [NEXT RELEASE]
 
 ### Added Features
+- A default role `Vulnerability Manager` has been added that provides sufficient privileges to analyze and manage system vulnerabilities.
+
+### Removed Features
+
+### Deprecated Fatures
+
+### Technical Changes
+
+## [4.0.0]
+
+### Added Features
 
 - ROX-15102: new `public_config.telemetry` boolean property of the `/v1/config`
   endpoint request that allows for querying the state, enabling or disabling the
@@ -15,6 +26,7 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
 - ROX-10818: vulnerability scanning of node components installed through RPM on
   OpenShift cluster nodes running Core OS (RHCOS).
 - ROX-15434: new `ROX_FORCE_LOCAL_IMAGE_SCANNING` env var added to sensor which forces all images observed by sensor to be analyzed by the local scanner (OCP only)
+- ROX-11268: new ListeningEndpointsService at `/v1/listening_endpoints/deployment` reports which processes are listening on which ports.
 
 ### Removed Features
 
@@ -34,6 +46,8 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
 - Deprecated v1.0 of Network Graph. Please switch to the new 2.0 version for improved functionality and a better user experience.
 - ROX-15337: RHACS Operator is not published to Red Hat Operator Catalogs for OpenShift versions 4.9 and earlier.
 - The API endpoint `/v1/serviceaccounts` is deprecated and will be changed as part of the 4.2.0 release.
+- PDF export in current version of the Vulnerability Management UI is deprecated and will be removed in the 4.2.0 release. Use the vuln reporting feature instead, for more comprehensive CSV data.
+- All `/v1/report` APIs for creating and managing vulnerability reports are deprecated and replaced will be replaced with new `/v2/report` APIs in 4.2.0 release.
 
 ### Required Actions
 - The `Analyst` permission set will change behaviour: instead of allowing read to all resources except `DebugLogs`, it will
@@ -53,6 +67,7 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
 - The default resources for Sensor have moved to a request of 2 cores, 4GB of RAM and a limit of 4 cores, 8GB of RAM in order to
   support a higher number of clusters without modification.
 - ROX-14280: ACS operator default channel changes from `latest` to `stable`. Users of older versions must follow the upgrade procedure in order to preserve ACS data in case of issues with the upgrade.
+- ROX-14917: Helm charts versioning scheme changed. Previously the product version (Major).(Minor).(Patch) was rendered to the Helm chart version (Minor).(Patch).0, e.g. 3.74.2 -> 74.2.0. The new versioning scheme maps product version (Major).(Minor).(Patch) to the Helm chart version as (Major*100).(Minor).(Patch), e.g. 4.0.2 -> 400.0.2.
 - The k8s-istio.zip file inside scanner-vuln-updates.zip (the file downloaded from https://install.stackrox.io/scanner/scanner-vuln-updates.zip for updating Scanner vulnerabilities in offline-mode)
   is no longer needed. We will continue to populate it to support older versions of the product, but it will be ignored.
 - The time interval used to determine the frequency to scan orchestrator-level components (Kubernetes, OpenShift, Istio) is now configurable

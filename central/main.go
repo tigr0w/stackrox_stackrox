@@ -19,6 +19,7 @@ import (
 	"github.com/stackrox/rox/central/auth/userpass"
 	authProviderDS "github.com/stackrox/rox/central/authprovider/datastore"
 	authProviderSvc "github.com/stackrox/rox/central/authprovider/service"
+	authProviderTelemetry "github.com/stackrox/rox/central/authprovider/telemetry"
 	centralHealthService "github.com/stackrox/rox/central/centralhealth/service"
 	"github.com/stackrox/rox/central/certgen"
 	"github.com/stackrox/rox/central/cli"
@@ -187,7 +188,7 @@ import (
 )
 
 var (
-	log = logging.CreatePersistentLogger(logging.CurrentModule(), 0)
+	log = logging.CreateLogger(logging.CurrentModule(), 0)
 
 	authProviderBackendFactories = map[string]authproviders.BackendFactoryCreator{
 		oidc.TypeName:                oidc.NewFactory,
@@ -548,7 +549,7 @@ func startGRPCServer() {
 			if cfg := centralclient.Enable(); cfg.Enabled() {
 				centralclient.RegisterCentralClient(&config, basicAuthProvider.ID())
 				gs := cfg.Gatherer()
-				gs.AddGatherer(authProviderDS.Gather)
+				gs.AddGatherer(authProviderTelemetry.Gather)
 				gs.AddGatherer(signatureIntegrationDS.Gather)
 				gs.AddGatherer(roleDataStore.Gather)
 				gs.AddGatherer(clusterDataStore.Gather)

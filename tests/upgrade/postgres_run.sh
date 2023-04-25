@@ -13,12 +13,19 @@ INITIAL_POSTGRES_TAG="3.74.0-1-gfe924fce30"
 INITIAL_POSTGRES_SHA="fe924fce30bbec4dbd37d731ccd505837a2c2575"
 CURRENT_TAG="$(make --quiet tag)"
 
+# shellcheck source=../../scripts/lib.sh
 source "$TEST_ROOT/scripts/lib.sh"
+# shellcheck source=../../scripts/ci/lib.sh
 source "$TEST_ROOT/scripts/ci/lib.sh"
+# shellcheck source=../../scripts/ci/sensor-wait.sh
 source "$TEST_ROOT/scripts/ci/sensor-wait.sh"
+# shellcheck source=../../scripts/setup-certs.sh
 source "$TEST_ROOT/tests/scripts/setup-certs.sh"
+# shellcheck source=../../tests/e2e/lib.sh
 source "$TEST_ROOT/tests/e2e/lib.sh"
+# shellcheck source=../../tests/upgrade/lib.sh
 source "$TEST_ROOT/tests/upgrade/lib.sh"
+# shellcheck source=../../tests/upgrade/validation.sh
 source "$TEST_ROOT/tests/upgrade/validation.sh"
 
 test_upgrade() {
@@ -132,6 +139,9 @@ test_upgrade_paths() {
     echo "Unable to connect to Sensor at" >> /tmp/allowlist-patterns
     echo "No suitable kernel object downloaded for kernel" >> /tmp/allowlist-patterns
     echo "Unexpected HTTP request failure" >> /tmp/allowlist-patterns
+    echo "UNEXPECTED:  Unknown message type" >> /tmp/allowlist-patterns
+    # bouncing the database can result in this error
+    echo "FATAL: the database system is shutting down" >> /tmp/allowlist-patterns
     # Using ci_export so the post tests have this as well
     ci_export ALLOWLIST_FILE "/tmp/allowlist-patterns"
 
@@ -317,6 +327,15 @@ force_rollback_to_previous_postgres() {
     local config_patch
     config_patch=$(yq e ".data[\"central-config.yaml\"] |= \"$central_config\"" /tmp/force_rollback_patch)
     echo "config patch: $config_patch"
+
+    # downgrading to a version that does not understand process listening on ports
+    # so turning that off in sensor and collector to prevent central crashes.
+    # Sensor and Collector will be deleted a few steps after this so no need
+    # to turn these back on.  Going forward unexpected messages will result in
+    # an `UNEXPECTED` log instead of crashing central.  However that change is
+    # not present in the initial 3.74 version.
+    kubectl -n stackrox set env deploy/sensor ROX_PROCESSES_LISTENING_ON_PORT=false
+    kubectl -n stackrox set env ds/collector ROX_PROCESSES_LISTENING_ON_PORT=false
 
     kubectl -n stackrox patch configmap/central-config -p "$config_patch"
     kubectl -n stackrox set image deploy/central "central=$REGISTRY/main:$FORCE_ROLLBACK_VERSION"

@@ -6655,12 +6655,7 @@ commander@2, commander@^2.20.0:
   resolved "https://registry.yarnpkg.com/commander/-/commander-2.20.3.tgz#fd485e84c03eb4881c20722ba48035e8531aeb33"
   integrity sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==
 
-commander@^5.1.0:
-  version "5.1.0"
-  resolved "https://registry.yarnpkg.com/commander/-/commander-5.1.0.tgz#46abbd1652f8e059bddaef99bbdcb2ad9cf179ae"
-  integrity sha512-P0CysNDQ7rtVw4QIQtm+MRxV66vKFSvlsQvGYXZWR3qFU0jlMKHZZZgw8e+8DSah4UDKMqnknRDQz+xuQXQ/Zg==
-
-commander@^6.0.0:
+commander@^6.0.0, commander@^6.2.1:
   version "6.2.1"
   resolved "https://registry.yarnpkg.com/commander/-/commander-6.2.1.tgz#0792eb682dfbc325999bb2b84fddddba110ac73c"
   integrity sha512-U7VdrJFnJgo4xjrHpTzu0yrHPGImdsmD95ZlgYSEajAn2JKzDhDTPG9kBTefmObL2w/ngeZnilk+OV9CG3d7UA==
@@ -7332,10 +7327,10 @@ cyclist@^1.0.1:
   resolved "https://registry.yarnpkg.com/cyclist/-/cyclist-1.0.1.tgz#596e9698fd0c80e12038c2b82d6eb1b35b6224d9"
   integrity sha1-WW6WmP0MgOEgOMK4LW6xs1tiJNk=
 
-cypress@^12.9.0:
-  version "12.9.0"
-  resolved "https://registry.yarnpkg.com/cypress/-/cypress-12.9.0.tgz#e6ab43cf329fd7c821ef7645517649d72ccf0a12"
-  integrity sha512-Ofe09LbHKgSqX89Iy1xen2WvpgbvNxDzsWx3mgU1mfILouELeXYGwIib3ItCwoRrRifoQwcBFmY54Vs0zw7QCg==
+cypress@^12.10.0:
+  version "12.10.0"
+  resolved "https://registry.yarnpkg.com/cypress/-/cypress-12.10.0.tgz#b6264f77c214d63530ebac2b33c4d099bd40b715"
+  integrity sha512-Y0wPc221xKKW1/4iAFCphkrG2jNR4MjOne3iGn4mcuCaE7Y5EtXL83N8BzRsAht7GYfWVjJ/UeTqEdDKHz39HQ==
   dependencies:
     "@cypress/request" "^2.88.10"
     "@cypress/xvfb" "^1.2.4"
@@ -7351,7 +7346,7 @@ cypress@^12.9.0:
     check-more-types "^2.24.0"
     cli-cursor "^3.1.0"
     cli-table3 "~0.6.1"
-    commander "^5.1.0"
+    commander "^6.2.1"
     common-tags "^1.8.0"
     dayjs "^1.10.4"
     debug "^4.3.4"
@@ -7369,7 +7364,7 @@ cypress@^12.9.0:
     listr2 "^3.8.3"
     lodash "^4.17.21"
     log-symbols "^4.0.0"
-    minimist "^1.2.6"
+    minimist "^1.2.8"
     ospath "^1.2.2"
     pretty-bytes "^5.6.0"
     proxy-from-env "1.0.0"
@@ -13507,10 +13502,10 @@ minimist-options@^3.0.1:
     arrify "^1.0.1"
     is-plain-obj "^1.1.0"
 
-minimist@^1.1.1, minimist@^1.1.3, minimist@^1.2.0, minimist@^1.2.5, minimist@^1.2.6:
-  version "1.2.6"
-  resolved "https://registry.yarnpkg.com/minimist/-/minimist-1.2.6.tgz#8637a5b759ea0d6e98702cfb3a9283323c93af44"
-  integrity sha512-Jsjnk4bw3YJqYzbdyBiNsPWHPfO++UGG749Cxs6peCu5Xg4nrena6OVxOYxrQTqww0Jmwt+Ref8rggumkTLz9Q==
+minimist@^1.1.1, minimist@^1.1.3, minimist@^1.2.0, minimist@^1.2.5, minimist@^1.2.6, minimist@^1.2.8:
+  version "1.2.8"
+  resolved "https://registry.yarnpkg.com/minimist/-/minimist-1.2.8.tgz#c1a464e7693302e082a075cee0c057741ac4772c"
+  integrity sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==
 
 minipass@^2.3.5, minipass@^2.6.0, minipass@^2.9.0:
   version "2.9.0"
@@ -15537,10 +15532,10 @@ prettier@^2.0.0:
   resolved "https://registry.yarnpkg.com/prettier/-/prettier-2.8.4.tgz#34dd2595629bfbb79d344ac4a91ff948694463c3"
   integrity sha512-vIS4Rlc2FNh0BySk3Wkd6xmwxB0FpOndW5fisM5H8hsZSxU2VWVB5CWIkIjWvrHjIhxk2g3bfMKM87zNTrZddw==
 
-prettier@^2.8.0:
-  version "2.8.0"
-  resolved "https://registry.yarnpkg.com/prettier/-/prettier-2.8.0.tgz#c7df58393c9ba77d6fba3921ae01faf994fb9dc9"
-  integrity sha512-9Lmg8hTFZKG0Asr/kW9Bp8tJjRVluO8EJQVfY2T7FMw9T5jy4I/Uvx0Rca/XWf50QQ1/SS48+6IJWnrb+2yemA==
+prettier@^2.8.7:
+  version "2.8.7"
+  resolved "https://registry.yarnpkg.com/prettier/-/prettier-2.8.7.tgz#bb79fc8729308549d28fe3a98fce73d2c0656450"
+  integrity sha512-yPngTo3aXUUmyuTjeTUT75txrf+aMh9FiD7q9ZE/i6r0bPb22g4FsE6Y338PQX1bmfy08i9QQCB7/rcUAVntfw==
 
 pretty-bytes@^5.3.0:
   version "5.5.0"
@@ -17530,11 +17525,6 @@ slice-ansi@^4.0.0:
     astral-regex "^2.0.0"
     is-fullwidth-code-point "^3.0.0"
 
-slick-carousel@^1.8.1:
-  version "1.8.1"
-  resolved "https://registry.yarnpkg.com/slick-carousel/-/slick-carousel-1.8.1.tgz#a4bfb29014887bb66ce528b90bd0cda262cc8f8d"
-  integrity sha512-XB9Ftrf2EEKfzoQXt3Nitrt/IPbT+f1fgqBdoxO3W/+JYvtEOW6EgxnWfr9GH6nmULv7Y2tPmEX3koxThVmebA==
-
 slide@^1.1.6:
   version "1.1.6"
   resolved "https://registry.yarnpkg.com/slide/-/slide-1.1.6.tgz#56eb027d65b4d2dce6cb2e2d32c4d4afc9e1d707"
@@ -18899,10 +18889,10 @@ typeface-open-sans@^1.1.13:
   resolved "https://registry.yarnpkg.com/typeface-open-sans/-/typeface-open-sans-1.1.13.tgz#32a09ebd7df59601e01ad81216f98ce641eeafd1"
   integrity sha512-lVGVHvYl7UJDFB9vN8r7NHw3sVm7Rjeow6b9AeABc/J+2mDaCkmcdVtw3QZnsJW39P+xm5zeggIj9gLHYGn9Iw==
 
-typescript@^5.0.2:
-  version "5.0.2"
-  resolved "https://registry.yarnpkg.com/typescript/-/typescript-5.0.2.tgz#891e1a90c5189d8506af64b9ef929fca99ba1ee5"
-  integrity sha512-wVORMBGO/FAs/++blGNeAVdbNKtIh1rbBL2EyQ1+J9lClJ93KiiKe8PmFIVdXhHcyv44SL9oglmfeSsndo0jRw==
+typescript@^5.0.4:
+  version "5.0.4"
+  resolved "https://registry.yarnpkg.com/typescript/-/typescript-5.0.4.tgz#b217fd20119bd61a94d4011274e0ab369058da3b"
+  integrity sha512-cW9T5W9xY37cc+jfEnaUvX91foxtHkza3Nw3wkoF4sSlKn0MONdkdEndig/qPBWXNkmplh3NzayQzCiHM4/hqw==
 
 uglify-js@^3.1.4:
   version "3.13.7"

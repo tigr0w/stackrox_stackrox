@@ -3,7 +3,9 @@
 # A collection of GKE related reusable bash functions for CI
 
 SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+# shellcheck source=../../scripts/ci/lib.sh
 source "$SCRIPTS_ROOT/scripts/ci/lib.sh"
+# shellcheck source=../../scripts/ci/gcp.sh
 source "$SCRIPTS_ROOT/scripts/ci/gcp.sh"
 
 set -euo pipefail
@@ -299,13 +301,17 @@ refresh_gke_token() {
 }
 
 teardown_gke_cluster() {
-    info "Tearing down the GKE cluster: ${CLUSTER_NAME:-}"
+    local canceled="${1:-false}"
+
+    info "Tearing down the GKE cluster: ${CLUSTER_NAME:-}, canceled: ${canceled}"
 
     require_environment "CLUSTER_NAME"
     require_executable "gcloud"
 
-    # (prefix output to avoid triggering prow log focus)
-    "$SCRIPTS_ROOT/scripts/ci/cleanup-deployment.sh" 2>&1 | sed -e 's/^/out: /' || true
+    if [[ "${canceled}" == "false" ]]; then
+        # (prefix output to avoid triggering prow log focus)
+        "$SCRIPTS_ROOT/scripts/ci/cleanup-deployment.sh" 2>&1 | sed -e 's/^/out: /' || true
+    fi
 
     gcloud container clusters delete "$CLUSTER_NAME" --async
 
@@ -323,9 +329,14 @@ create_log_explorer_links() {
     artifact_file="$ARTIFACT_DIR/gke-logs-summary.html"
 
     cat > "$artifact_file" <<- HEAD
-<html style="background: #fff">
+<html>
     <head>
         <title><h4>GKE Logs Explorer</h4></title>
+        <style>
+          body { color: #e8e8e8; background-color: #424242; font-family: "Roboto", "Helvetica", "Arial", sans-serif }
+          a { color: #ff8caa }
+          a:visited { color: #ff8caa }
+        </style>
     </head>
     <body>
     <p>(These links require a 'right-click -> open in new tab'. The authUser is the number for your @stackrox.com account.)</p>

@@ -17,8 +17,7 @@ import {
 import { useParams } from 'react-router-dom';
 
 import BreadcrumbItemLink from 'Components/BreadcrumbItemLink';
-import EmptyStateTemplate from 'Components/PatternFly/EmptyStateTemplate';
-import { ExclamationCircleIcon } from '@patternfly/react-icons';
+import PageTitle from 'Components/PageTitle';
 import useURLSearch from 'hooks/useURLSearch';
 import useURLStringUnion from 'hooks/useURLStringUnion';
 import useURLPagination from 'hooks/useURLPagination';
@@ -43,9 +42,13 @@ import AffectedImagesTable, {
     ImageForCve,
     imagesForCveFragment,
 } from './Tables/AffectedImagesTable';
-import EntityTypeToggleGroup from './EntityTypeToggleGroup';
-import AffectedDeploymentsTable from './Tables/AffectedDeploymentsTable';
-import { DynamicTableLabel } from './DynamicIcon';
+import EntityTypeToggleGroup from './components/EntityTypeToggleGroup';
+import { DynamicTableLabel } from './components/DynamicIcon';
+import TableErrorComponent from './components/TableErrorComponent';
+import AffectedDeploymentsTable, {
+    DeploymentForCve,
+    deploymentsForCveFragment,
+} from './Tables/AffectedDeploymentsTable';
 
 const workloadCveOverviewImagePath = getOverviewCvesPath({
     cveStatusTab: 'Observed',
@@ -66,6 +69,8 @@ export const imageCveSummaryQuery = gql`
     ${imageCveSeveritySummaryFragment}
     query getImageCveSummaryData($cve: String!, $query: String!) {
         ...ImageCVESummaryCounts
+        imageCount(query: $query)
+        deploymentCount(query: $query)
         imageCVE(cve: $cve) {
             cve
             ...ImageCVESeveritySummary
@@ -76,36 +81,56 @@ export const imageCveSummaryQuery = gql`
 export const imageCveAffectedImagesQuery = gql`
     ${imagesForCveFragment}
     # by default, query must include the CVE id
-    query getImagesForCVE(
-        $query: String
-        $imageListPagination: Pagination
-        $imageComponentPagination: Pagination
-    ) {
-        imageCount(query: $query)
-        images(query: $query, pagination: $imageListPagination) {
+    query getImagesForCVE($query: String, $pagination: Pagination) {
+        images(query: $query, pagination: $pagination) {
             ...ImagesForCVE
         }
     }
 `;
 
-const defaultSortFields = ['Image', 'Severity', 'Fixable', 'Operating System'];
+export const imageCveAffectedDeploymentsQuery = gql`
+    ${deploymentsForCveFragment}
+    # by default, query must include the CVE id
+    query getDeploymentsForCVE($query: String, $pagination: Pagination) {
+        deployments(query: $query, pagination: $pagination) {
+            ...DeploymentsForCVE
+        }
+    }
+`;
+
+const imageSortFields = ['Image', 'Operating System'];
+const imageDefaultSort = { field: 'Image', direction: 'desc' } as const;
+
+const deploymentSortFields = ['Deployment', 'Cluster', 'Namespace'];
+const deploymentDefaultSort = { field: 'Deployment', direction: 'desc' } as const;
+
 const imageCveEntities = ['Image', 'Deployment'] as const;
+
+function getSortFields(entityTab: (typeof imageCveEntities)[number]) {
+    return entityTab === 'Image' ? imageSortFields : deploymentSortFields;
+}
+
+function getDefaultSortOption(entityTab: (typeof imageCveEntities)[number]) {
+    return entityTab === 'Image' ? imageDefaultSort : deploymentDefaultSort;
+}
 
 function ImageCvePage() {
     const { cveId } = useParams();
     const { searchFilter } = useURLSearch();
     const querySearchFilter = parseQuerySearchFilter(searchFilter);
-    const { page, perPage, setPage, setPerPage } = useURLPagination(25);
-    const { sortOption, getSortParams } = useURLSort({
-        sortFields: defaultSortFields,
-        defaultSortOption: {
-            field: 'Severity',
-            direction: 'desc',
-        },
-        onSort: () => setPage(1),
+    const query = getRequestQueryStringForSearchFilter({
+        ...querySearchFilter,
+        CVE: cveId,
     });
+    const { page, perPage, setPage, setPerPage } = useURLPagination(25);
 
     const [entityTab] = useURLStringUnion('entityTab', imageCveEntities);
+
+    const { sortOption, setSortOption, getSortParams } = useURLSort({
+        sortFields: getSortFields(entityTab),
+        defaultSortOption: getDefaultSortOption(entityTab),
+        onSort: () => setPage(1),
+    });
 
     const metadataRequest = useQuery<{ imageCVE: ImageCveMetadata }, { cve: string }>(
         imageCveMetadataQuery,
@@ -113,41 +138,65 @@ function ImageCvePage() {
     );
 
     const summaryRequest = useQuery<
-        ImageCveSummaryCount & { imageCVE: ImageCveSeveritySummary },
+        ImageCveSummaryCount & {
+            imageCount: number;
+            deploymentCount: number;
+            imageCVE: ImageCveSeveritySummary;
+        },
         { cve: string; query: string }
     >(imageCveSummaryQuery, {
-        variables: { cve: cveId, query: getRequestQueryStringForSearchFilter(querySearchFilter) },
+        variables: {
+            cve: cveId,
+            query,
+        },
     });
 
     const imageDataRequest = useQuery<
-        { imageCount: number; images: ImageForCve[] },
+        { images: ImageForCve[] },
         {
             query: string;
-            imageListPagination: PaginationParam;
-            // TODO If required, fix this
-            imageComponentPagination?: PaginationParam;
+            pagination: PaginationParam;
         }
     >(imageCveAffectedImagesQuery, {
+        variables: {
+            query,
+            pagination: {
+                offset: (page - 1) * perPage,
+                limit: perPage,
+                sortOption,
+            },
+        },
+        skip: entityTab !== 'Image',
+    });
+
+    const deploymentDataRequest = useQuery<
+        { deploymentCount: number; deployments: DeploymentForCve[] },
+        {
+            query: string;
+            pagination: PaginationParam;
+        }
+    >(imageCveAffectedDeploymentsQuery, {
         variables: {
             query: getRequestQueryStringForSearchFilter({
                 ...querySearchFilter,
                 CVE: cveId,
             }),
-            imageListPagination: {
+            pagination: {
                 offset: (page - 1) * perPage,
                 limit: perPage,
                 sortOption,
             },
-            // TODO Benchmark whether or not server side pagination is really needed at this
-            // level, and if so, fix the implementation here
-            imageComponentPagination: undefined,
         },
-        skip: entityTab !== 'Image',
+        skip: entityTab !== 'Deployment',
     });
 
     // We generalize the imageData and deploymentData requests here so that we can use most of
     // the same logic for both tables and components in the return value below
     const imageData = imageDataRequest.data ?? imageDataRequest.previousData;
+    const deploymentData = deploymentDataRequest.data ?? deploymentDataRequest.previousData;
+    const imageCount = summaryRequest.data?.imageCount ?? 0;
+    const deploymentCount = summaryRequest.data?.deploymentCount ?? 0;
+
     let tableDataAvailable = false;
     let tableRowCount = 0;
     let tableError: Error | undefined;
@@ -155,14 +204,14 @@ function ImageCvePage() {
 
     if (entityTab === 'Image') {
         tableDataAvailable = !!imageData;
-        tableRowCount = imageDataRequest.data?.imageCount ?? 0;
+        tableRowCount = imageCount;
         tableError = imageDataRequest.error;
         tableLoading = imageDataRequest.loading;
     } else if (entityTab === 'Deployment') {
-        tableDataAvailable = false;
-        tableRowCount = 0;
-        tableError = undefined;
-        tableLoading = false;
+        tableDataAvailable = !!deploymentData;
+        tableRowCount = deploymentCount;
+        tableError = deploymentDataRequest.error;
+        tableLoading = deploymentDataRequest.loading;
     }
 
     const cveName = metadataRequest.data?.imageCVE?.cve;
@@ -172,6 +221,9 @@ function ImageCvePage() {
 
     return (
         <>
+            <PageTitle
+                title={`Workload CVEs - ImageCVE ${metadataRequest.data?.imageCVE.cve ?? ''}`}
+            />
             <PageSection variant="light" className="pf-u-py-md">
                 <Breadcrumb>
                     <BreadcrumbItemLink to={workloadCveOverviewImagePath}>CVEs</BreadcrumbItemLink>
@@ -187,16 +239,10 @@ function ImageCvePage() {
             <Divider component="div" />
             <PageSection variant="light">
                 {metadataRequest.error ? (
-                    <Bullseye>
-                        <EmptyStateTemplate
-                            headingLevel="h2"
-                            icon={ExclamationCircleIcon}
-                            iconClassName="pf-u-danger-color-100"
-                            title={getAxiosErrorMessage(metadataRequest.error)}
-                        >
-                            The system was unable to load metadata for this CVE
-                        </EmptyStateTemplate>
-                    </Bullseye>
+                    <TableErrorComponent
+                        error={metadataRequest.error}
+                        message="The system was unable to load metadata for this CVE"
+                    />
                 ) : (
                     // Don't check the loading state here, since if the passed `data` is `undefined` we
                     // will implicitly handle the loading state in the component
@@ -240,8 +286,17 @@ function ImageCvePage() {
                         <SplitItem isFilled>
                             <Flex alignItems={{ default: 'alignItemsCenter' }}>
                                 <EntityTypeToggleGroup
-                                    imageCount={imageData?.imageCount ?? 0}
+                                    imageCount={imageCount}
+                                    deploymentCount={deploymentCount}
                                     entityTabs={imageCveEntities}
+                                    onChange={(entity) => {
+                                        // Ugly type workaround
+                                        if (entity !== 'CVE') {
+                                            // Set the sort and pagination back to the default when changing between entity tabs
+                                            setSortOption(getDefaultSortOption(entity));
+                                            setPage(1);
+                                        }
+                                    }}
                                 />
                                 {isFiltered && <DynamicTableLabel />}
                             </Flex>
@@ -263,16 +318,10 @@ function ImageCvePage() {
                         </SplitItem>
                     </Split>
                     {tableError ? (
-                        <Bullseye>
-                            <EmptyStateTemplate
-                                headingLevel="h2"
-                                title={getAxiosErrorMessage(tableError)}
-                                icon={ExclamationCircleIcon}
-                                iconClassName="pf-u-danger-color-100"
-                            >
-                                Adjust your filters and try again
-                            </EmptyStateTemplate>
-                        </Bullseye>
+                        <TableErrorComponent
+                            error={tableError}
+                            message="Adjust your filters and try again"
+                        />
                     ) : (
                         <>
                             {tableLoading && !tableDataAvailable && (
@@ -291,7 +340,13 @@ function ImageCvePage() {
                                                 isFiltered={isFiltered}
                                             />
                                         )}
-                                        {entityTab === 'Deployment' && <AffectedDeploymentsTable />}
+                                        {entityTab === 'Deployment' && (
+                                            <AffectedDeploymentsTable
+                                                deployments={deploymentData?.deployments ?? []}
+                                                getSortParams={getSortParams}
+                                                isFiltered={isFiltered}
+                                            />
+                                        )}
                                     </div>
                                 </>
                             )}

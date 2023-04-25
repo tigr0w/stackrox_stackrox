@@ -12,10 +12,11 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/features"
+	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/net"
 	"github.com/stackrox/rox/pkg/netutil"
 	"github.com/stackrox/rox/pkg/networkgraph"
+	"github.com/stackrox/rox/pkg/process/normalize"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/timestamp"
 	"github.com/stackrox/rox/sensor/common"
@@ -261,7 +262,7 @@ func (m *networkFlowManager) enrichConnections() {
 		case <-ticker.C:
 			m.enrichAndSend()
 
-			if features.ProcessesListeningOnPort.Enabled() {
+			if env.ProcessesListeningOnPort.BooleanSetting() {
 				m.enrichAndSendProcesses()
 			}
 		}
@@ -529,8 +530,8 @@ func (m *networkFlowManager) enrichHostContainerEndpoints(hostConns *hostConnect
 	for ep, status := range hostConns.endpoints {
 		m.enrichContainerEndpoint(&ep, status, enrichedEndpoints)
 		// If processes listening on ports is enabled, it has to be used there as well before being deleted.
-		used := status.used && (status.usedProcess || !features.ProcessesListeningOnPort.Enabled())
-		if used && status.lastSeen != timestamp.InfiniteFuture {
+		used := status.used && (status.usedProcess || !env.ProcessesListeningOnPort.BooleanSetting())
+		if status.rotten || (used && status.lastSeen != timestamp.InfiniteFuture) {
 			// endpoints that are no longer active and have already been used can be deleted.
 			delete(hostConns.endpoints, ep)
 		}
@@ -550,7 +551,7 @@ func (m *networkFlowManager) enrichProcessesListening(hostConns *hostConnections
 		}
 
 		m.enrichProcessListening(&ep, status, processesListening)
-		if status.used && status.usedProcess && status.lastSeen != timestamp.InfiniteFuture {
+		if status.rotten || (status.used && status.usedProcess && status.lastSeen != timestamp.InfiniteFuture) {
 			// endpoints that are no longer active and have already been used can be deleted.
 			// Before deleting it must be used here and in enrichContainerEndpoints.
 			delete(hostConns.endpoints, ep)
@@ -889,6 +890,8 @@ func getUpdatedContainerEndpoints(hostname string, networkInfo *sensor.NetworkCo
 	flowMetrics.NetworkFlowMessagesPerNode.With(prometheus.Labels{"Hostname": hostname}).Inc()
 
 	for _, endpoint := range networkInfo.GetUpdatedEndpoints() {
+		normalize.NetworkEndpoint(endpoint)
+
 		flowMetrics.ContainerEndpointsPerNode.With(prometheus.Labels{"Hostname": hostname, "Protocol": endpoint.Protocol.String()}).Inc()
 
 		ep := containerEndpoint{
