@@ -12,7 +12,7 @@ export type Scalars = {
     Boolean: boolean;
     Int: number;
     Float: number;
-    Time: any;
+    Time: string;
 };
 
 export type AwsProviderMetadata = {
@@ -5114,7 +5114,7 @@ export type GetImageVulnerabilitiesQuery = {
             severity: string;
             scoreVersion: string;
             cvss: number;
-            discoveredAtImage?: any | null;
+            discoveredAtImage?: string | null;
             components: Array<{
                 __typename?: 'ImageComponent';
                 id: string;
@@ -5132,19 +5132,19 @@ export type GetImageVulnerabilitiesQuery = {
                 approvers: Array<{ __typename?: 'SlimUser'; id: string; name: string }>;
                 comments: Array<{
                     __typename?: 'RequestComment';
-                    createdAt?: any | null;
+                    createdAt?: string | null;
                     id: string;
                     message: string;
                     user?: { __typename?: 'SlimUser'; id: string; name: string } | null;
                 }>;
                 deferralReq?: {
                     __typename?: 'DeferralRequest';
-                    expiresOn?: any | null;
+                    expiresOn?: string | null;
                     expiresWhenFixed: boolean;
                 } | null;
                 updatedDeferralReq?: {
                     __typename?: 'DeferralRequest';
-                    expiresOn?: any | null;
+                    expiresOn?: string | null;
                     expiresWhenFixed: boolean;
                 } | null;
                 scope?: {
@@ -5182,7 +5182,7 @@ export type GetImageVulnerabilitiesLegacyQuery = {
             severity: string;
             scoreVersion: string;
             cvss: number;
-            discoveredAtImage?: any | null;
+            discoveredAtImage?: string | null;
             components: Array<{
                 __typename?: 'EmbeddedImageScanComponent';
                 id: string;
@@ -5200,19 +5200,19 @@ export type GetImageVulnerabilitiesLegacyQuery = {
                 approvers: Array<{ __typename?: 'SlimUser'; id: string; name: string }>;
                 comments: Array<{
                     __typename?: 'RequestComment';
-                    createdAt?: any | null;
+                    createdAt?: string | null;
                     id: string;
                     message: string;
                     user?: { __typename?: 'SlimUser'; id: string; name: string } | null;
                 }>;
                 deferralReq?: {
                     __typename?: 'DeferralRequest';
-                    expiresOn?: any | null;
+                    expiresOn?: string | null;
                     expiresWhenFixed: boolean;
                 } | null;
                 updatedDeferralReq?: {
                     __typename?: 'DeferralRequest';
-                    expiresOn?: any | null;
+                    expiresOn?: string | null;
                     expiresWhenFixed: boolean;
                 } | null;
                 scope?: {
@@ -5267,7 +5267,7 @@ export type GetVulnerabilityRequestsQuery = {
         requestor?: { __typename?: 'SlimUser'; id: string; name: string } | null;
         comments: Array<{
             __typename?: 'RequestComment';
-            createdAt?: any | null;
+            createdAt?: string | null;
             id: string;
             message: string;
             user?: { __typename?: 'SlimUser'; id: string; name: string } | null;
@@ -5283,12 +5283,12 @@ export type GetVulnerabilityRequestsQuery = {
         } | null;
         deferralReq?: {
             __typename?: 'DeferralRequest';
-            expiresOn?: any | null;
+            expiresOn?: string | null;
             expiresWhenFixed: boolean;
         } | null;
         updatedDeferralReq?: {
             __typename?: 'DeferralRequest';
-            expiresOn?: any | null;
+            expiresOn?: string | null;
             expiresWhenFixed: boolean;
         } | null;
         cves?: { __typename?: 'VulnerabilityRequest_CVEs'; cves: Array<string> } | null;
@@ -5466,7 +5466,7 @@ export type GetDeploymentsForCveQuery = {
 export type ImageCveMetadataFragment = {
     __typename?: 'ImageCVECore';
     cve: string;
-    firstDiscoveredInSystem?: any | null;
+    firstDiscoveredInSystem?: string | null;
 } & { ' $fragmentName'?: 'ImageCveMetadataFragment' };
 
 export type ImageCveSeveritySummaryFragment = {
@@ -5511,7 +5511,7 @@ export type DeploymentsForCveFragment = {
     name: string;
     namespace: string;
     clusterName: string;
-    created?: any | null;
+    created?: string | null;
     imageCount: number;
     images: Array<
         {
@@ -5531,7 +5531,7 @@ export type ImagesForCveFragment = ({
     __typename?: 'Image';
     operatingSystem: string;
     watchStatus: ImageWatchStatus;
-    scanTime?: any | null;
+    scanTime?: string | null;
     imageComponents: Array<
         { __typename?: 'ImageComponent' } & {
             ' $fragmentRefs'?: {
@@ -5555,7 +5555,7 @@ export type GetImageCveListQuery = {
         cve: string;
         topCVSS: number;
         affectedImageCount: number;
-        firstDiscoveredInSystem?: any | null;
+        firstDiscoveredInSystem?: string | null;
         affectedImageCountBySeverity: {
             __typename?: 'ResourceCountByCVESeverity';
             critical: { __typename?: 'ResourceCountByFixability'; total: number };
@@ -5611,7 +5611,7 @@ export type GetDeploymentListQuery = {
         clusterName: string;
         namespace: string;
         imageCount: number;
-        created?: any | null;
+        created?: string | null;
         imageCVECountBySeverity: {
             __typename?: 'ResourceCountByCVESeverity';
             critical: { __typename?: 'ResourceCountByFixability'; total: number };
@@ -5635,7 +5635,7 @@ export type GetImageListQuery = {
         operatingSystem: string;
         deploymentCount: number;
         watchStatus: ImageWatchStatus;
-        scanTime?: any | null;
+        scanTime?: string | null;
         name?: { __typename?: 'ImageName'; registry: string; remote: string; tag: string } | null;
         imageCVECountBySeverity: {
             __typename?: 'ResourceCountByCVESeverity';
@@ -5646,7 +5646,7 @@ export type GetImageListQuery = {
         };
         metadata?: {
             __typename?: 'ImageMetadata';
-            v1?: { __typename?: 'V1Metadata'; created?: any | null } | null;
+            v1?: { __typename?: 'V1Metadata'; created?: string | null } | null;
         } | null;
     }>;
 };
@@ -5660,7 +5660,7 @@ export type ImageVulnerabilityFieldsFragment = {
     summary: string;
     cvss: number;
     scoreVersion: string;
-    discoveredAtImage?: any | null;
+    discoveredAtImage?: string | null;
     imageComponents: Array<
         { __typename?: 'ImageComponent' } & {
             ' $fragmentRefs'?: {
@@ -5675,10 +5675,10 @@ export type ImageDetailsFragment = {
     id: string;
     deploymentCount: number;
     operatingSystem: string;
-    scanTime?: any | null;
+    scanTime?: string | null;
     metadata?: {
         __typename?: 'ImageMetadata';
-        v1?: { __typename?: 'V1Metadata'; created?: any | null; digest: string } | null;
+        v1?: { __typename?: 'V1Metadata'; created?: string | null; digest: string } | null;
     } | null;
     dataSource?: { __typename?: 'DataSource'; id: string; name: string } | null;
 } & { ' $fragmentName'?: 'ImageDetailsFragment' };

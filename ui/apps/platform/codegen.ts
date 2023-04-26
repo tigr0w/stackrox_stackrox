@@ -27,6 +27,12 @@ const config = {
     generates: {
         './src/gql/': {
             preset: 'client',
+            config: {
+                scalars: {
+                    // Our backend sends a `Time` type that is a string in RFC 3339 format
+                    Time: 'string',
+                },
+            },
         },
     },
     hooks: { afterAllFileWrite: ['prettier --write'] },

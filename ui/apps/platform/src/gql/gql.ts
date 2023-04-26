@@ -49,7 +49,7 @@ const documents = {
         types.UndoVulnerabilityRequestDocument,
     '\n    mutation updateVulnerabilityRequest(\n        $requestID: ID!\n        $comment: String!\n        $expiry: VulnReqExpiry!\n    ) {\n        updateVulnerabilityRequest(requestID: $requestID, comment: $comment, expiry: $expiry) {\n            id\n        }\n    }\n':
         types.UpdateVulnerabilityRequestDocument,
-    '\n    \n    query getImageDetails($id: ID!) {\n        image(id: $id) {\n            id\n            name {\n                registry\n                remote\n                tag\n            }\n            ...ImageDetails\n        }\n    }\n':
+    '\n    query getImageDetails($id: ID!) {\n        image(id: $id) {\n            id\n            name {\n                registry\n                remote\n                tag\n            }\n            ...ImageDetails\n        }\n    }\n':
         types.GetImageDetailsDocument,
     '\n    \n    \n    \n    query getImageCoreVulnerabilities($id: ID!, $query: String!, $pagination: Pagination!) {\n        image(id: $id) {\n            ...ImageMetadataContext\n            imageCVECountBySeverity(query: $query) {\n                ...AllResourceCountsByCVESeverity\n            }\n            imageVulnerabilities(query: $query, pagination: $pagination) {\n                ...ImageVulnerabilityFields\n            }\n        }\n    }\n':
         types.GetImageCoreVulnerabilitiesDocument,
@@ -223,8 +223,8 @@ export function graphql(
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(
-    source: '\n    \n    query getImageDetails($id: ID!) {\n        image(id: $id) {\n            id\n            name {\n                registry\n                remote\n                tag\n            }\n            ...ImageDetails\n        }\n    }\n'
-): (typeof documents)['\n    \n    query getImageDetails($id: ID!) {\n        image(id: $id) {\n            id\n            name {\n                registry\n                remote\n                tag\n            }\n            ...ImageDetails\n        }\n    }\n'];
+    source: '\n    query getImageDetails($id: ID!) {\n        image(id: $id) {\n            id\n            name {\n                registry\n                remote\n                tag\n            }\n            ...ImageDetails\n        }\n    }\n'
+): (typeof documents)['\n    query getImageDetails($id: ID!) {\n        image(id: $id) {\n            id\n            name {\n                registry\n                remote\n                tag\n            }\n            ...ImageDetails\n        }\n    }\n'];
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
