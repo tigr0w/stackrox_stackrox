@@ -396,7 +396,7 @@ func (s *flowStoreImpl) removeDeploymentFlows(ctx context.Context, deleteStmt st
 	}
 	defer release()
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	tx, err := conn.Begin(ctx)
@@ -430,7 +430,7 @@ func (s *flowStoreImpl) retryableGetAllFlows(ctx context.Context, since *types.T
 	// Default to Now as that is when we are reading them
 	lastUpdateTS := types.TimestampNow()
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	// handling case when since is nil.  Assumption is we want everything in that case vs when date is not null
@@ -470,7 +470,7 @@ func (s *flowStoreImpl) retryableGetMatchingFlows(ctx context.Context, pred func
 	// Default to Now as that is when we are reading them
 	lastUpdateTS := types.TimestampNow()
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	// handling case when since is nil.  Assumption is we want everything in that case vs when date is not null
@@ -605,7 +605,7 @@ func (s *flowStoreImpl) pruneFlows(ctx context.Context, deleteStmt string, orpha
 	}
 	defer release()
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	tx, err := conn.Begin(ctx)
