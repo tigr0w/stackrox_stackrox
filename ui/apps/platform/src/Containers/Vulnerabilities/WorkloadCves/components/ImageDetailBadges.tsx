@@ -1,24 +1,11 @@
 import React, { useState } from 'react';
 import { LabelGroup, Label, Tooltip } from '@patternfly/react-core';
 import { CopyIcon } from '@patternfly/react-icons';
-import { gql } from '@apollo/client';
 
 import { getDistanceStrictAsPhrase, getDateTime } from 'utils/dateUtils';
+import { FragmentType, graphql, useFragment } from 'gql';
 
-export type ImageDetails = {
-    deploymentCount: number;
-    operatingSystem: string;
-    metadata: {
-        v1: {
-            created: Date | null;
-            digest: string;
-        } | null;
-    } | null;
-    dataSource: { id: string; name: string } | null;
-    scanTime: Date | null;
-};
-
-export const imageDetailsFragment = gql`
+export const imageDetailsFragment = graphql(/* GraphQL */ `
     fragment ImageDetails on Image {
         id
         deploymentCount
@@ -35,16 +22,19 @@ export const imageDetailsFragment = gql`
         }
         scanTime
     }
-`;
+`);
 
 export type ImageDetailBadgesProps = {
-    imageData: ImageDetails;
+    imageData: FragmentType<typeof imageDetailsFragment>;
 };
 
 function ImageDetailBadges({ imageData }: ImageDetailBadgesProps) {
     const [hasSuccessfulCopy, setHasSuccessfulCopy] = useState(false);
 
-    const { deploymentCount, operatingSystem, metadata, dataSource, scanTime } = imageData;
+    const { deploymentCount, operatingSystem, metadata, dataSource, scanTime } = useFragment(
+        imageDetailsFragment,
+        imageData
+    );
     const created = metadata?.v1?.created;
     const sha = metadata?.v1?.digest;
     const isActive = deploymentCount > 0;
@@ -67,7 +57,7 @@ function ImageDetailBadges({ imageData }: ImageDetailBadgesProps) {
             <Label isCompact color={isActive ? 'green' : 'gold'}>
                 {isActive ? 'Active' : 'Inactive'}
             </Label>
-            {operatingSystem && <Label isCompact>OS: {operatingSystem}</Label>}
+            <Label isCompact>OS: {operatingSystem}</Label>
             {created && (
                 <Label isCompact>Age: {getDistanceStrictAsPhrase(created, new Date())}</Label>
             )}

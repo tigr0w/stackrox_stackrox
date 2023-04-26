@@ -15,17 +15,15 @@ import {
 } from '@patternfly/react-core';
 import { ExclamationCircleIcon } from '@patternfly/react-icons';
 import { useParams } from 'react-router-dom';
-import { gql, useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client';
 
+import { graphql } from 'gql';
 import BreadcrumbItemLink from 'Components/BreadcrumbItemLink';
 import PageTitle from 'Components/PageTitle';
 import useURLStringUnion from 'hooks/useURLStringUnion';
 import EmptyStateTemplate from 'Components/PatternFly/EmptyStateTemplate';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
-import ImageDetailBadges, {
-    ImageDetails,
-    imageDetailsFragment,
-} from '../components/ImageDetailBadges';
+import ImageDetailBadges from '../components/ImageDetailBadges';
 import { getOverviewCvesPath } from '../searchUtils';
 import { detailsTabValues } from '../types';
 import ImagePageResources from './ImagePageResources';
@@ -36,8 +34,7 @@ const workloadCveOverviewImagePath = getOverviewCvesPath({
     entityTab: 'Image',
 });
 
-export const imageDetailsQuery = gql`
-    ${imageDetailsFragment}
+export const imageDetailsQuery = graphql(/* GraphQL */ `
     query getImageDetails($id: ID!) {
         image(id: $id) {
             id
@@ -49,25 +46,11 @@ export const imageDetailsQuery = gql`
             ...ImageDetails
         }
     }
-`;
+`);
 
 function ImagePage() {
     const { imageId } = useParams();
-    const { data, error } = useQuery<
-        {
-            image: {
-                id: string;
-                name: {
-                    registry: string;
-                    remote: string;
-                    tag: string;
-                } | null;
-            } & ImageDetails;
-        },
-        {
-            id: string;
-        }
-    >(imageDetailsQuery, {
+    const { data, error } = useQuery(imageDetailsQuery, {
         variables: { id: imageId },
     });
     const [activeTabKey, setActiveTabKey] = useURLStringUnion('detailsTab', detailsTabValues);
