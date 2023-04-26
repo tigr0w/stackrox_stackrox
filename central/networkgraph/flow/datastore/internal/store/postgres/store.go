@@ -390,13 +390,14 @@ func (s *flowStoreImpl) retryableRemoveFlowsForDeployment(ctx context.Context, i
 }
 
 func (s *flowStoreImpl) removeDeploymentFlows(ctx context.Context, deleteStmt string, id string) error {
+	startTime := time.Now()
 	conn, release, err := s.acquireConn(ctx, ops.RemoveFlowsByDeployment, "NetworkFlow")
 	if err != nil {
 		return err
 	}
 	defer release()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	tx, err := conn.Begin(ctx)
@@ -412,6 +413,8 @@ func (s *flowStoreImpl) removeDeploymentFlows(ctx context.Context, deleteStmt st
 		return err
 	}
 
+	diff := time.Since(startTime)
+	log.Infof("SHREWS -- removeDeploymentFlows cluster %s and deployment %s took %s", s.clusterID, id, diff)
 	return tx.Commit(ctx)
 }
 
@@ -430,7 +433,7 @@ func (s *flowStoreImpl) retryableGetAllFlows(ctx context.Context, since *types.T
 	// Default to Now as that is when we are reading them
 	lastUpdateTS := types.TimestampNow()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	// handling case when since is nil.  Assumption is we want everything in that case vs when date is not null
@@ -470,7 +473,7 @@ func (s *flowStoreImpl) retryableGetMatchingFlows(ctx context.Context, pred func
 	// Default to Now as that is when we are reading them
 	lastUpdateTS := types.TimestampNow()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	// handling case when since is nil.  Assumption is we want everything in that case vs when date is not null
@@ -577,7 +580,6 @@ func (s *flowStoreImpl) RemoveMatchingFlows(ctx context.Context, keyMatchFn func
 }
 
 func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, _ func(props *storage.NetworkFlowProperties) bool, _ func(flow *storage.NetworkFlow) bool) error {
-	log.Infof("SHREWS -- enter retryableRemoveMatchingFlows")
 	// These remove operations can overlap.  Using a lock to avoid deadlocks in the database.
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -593,19 +595,19 @@ func (s *flowStoreImpl) retryableRemoveMatchingFlows(ctx context.Context, _ func
 
 	pruneStmt = fmt.Sprintf(pruneNetworkFlowsDestStmt, s.partitionName)
 
-	log.Infof("SHREWS -- exit retryableRemoveMatchingFlows")
-
 	return s.pruneFlows(ctx, pruneStmt, deleteTime.GogoProtobuf())
 }
 
 func (s *flowStoreImpl) pruneFlows(ctx context.Context, deleteStmt string, orphanWindow *types.Timestamp) error {
+	startTime := time.Now()
+
 	conn, release, err := s.acquireConn(ctx, ops.Remove, "NetworkFlow")
 	if err != nil {
 		return err
 	}
 	defer release()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	tx, err := conn.Begin(ctx)
@@ -620,17 +622,21 @@ func (s *flowStoreImpl) pruneFlows(ctx context.Context, deleteStmt string, orpha
 		return err
 	}
 
+	diff := time.Since(startTime)
+
+	log.Infof("SHREWS -- pruneFlows cluster %s took %s", s.clusterID, diff)
+
 	return tx.Commit(ctx)
 }
 
 // RemoveStaleFlows - remove stale duplicate network flows
 func (s *flowStoreImpl) RemoveStaleFlows(ctx context.Context) error {
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "NetworkFlow")
-	log.Info("SHREWS --  enter RemoveStaleFlows")
 
 	// These remove operations can overlap.  Using a lock to avoid deadlocks in the database.
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	startTime := time.Now()
 
 	conn, release, err := s.acquireConn(ctx, ops.Remove, "NetworkFlow")
 	if err != nil {
@@ -640,12 +646,14 @@ func (s *flowStoreImpl) RemoveStaleFlows(ctx context.Context) error {
 
 	// This is purposefully not retried as this is an optimization and not a requirement
 	// It is also currently prone to statement timeouts
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	prune := fmt.Sprintf(pruneStaleNetworkFlowsStmt, s.partitionName, s.partitionName)
 	_, err = conn.Exec(ctx, prune)
 
-	log.Info("SHREWS --  exit RemoveStaleFlows")
+	diff := time.Since(startTime)
+
+	log.Infof("SHREWS -- RemoveStaleFlows cluster %s took %s", s.clusterID, diff)
 	return err
 }
 
