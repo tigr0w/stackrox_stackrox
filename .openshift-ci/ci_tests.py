@@ -90,6 +90,7 @@ class OperatorE2eTest(BaseTest):
     OPERATOR_CLUSTER_TYPE_OPENSHIFT4 = "openshift4"
 
     def __init__(self, *args, **kwargs):
+        super(OperatorE2eTest, self).__init__(*args, **kwargs)
         self._operator_cluster_type = kwargs.get(
             "operator_cluster_type", OperatorE2eTest.OPERATOR_CLUSTER_TYPE_OPENSHIFT4)
 
