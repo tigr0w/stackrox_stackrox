@@ -224,6 +224,16 @@ func New(db postgres.DB, clusterID string) FlowStore {
 
 	err = pgutils.Retry(func() error {
 		_, err := db.Exec(context.Background(), fmt.Sprintf(partitionCreate, partitionName, clusterID))
+		if err != nil {
+			return err
+		}
+
+		_, err = db.Exec(context.Background(), fmt.Sprintf("alter table %s SET (autovacuum_vacuum_scale_factor = 0.0)", partitionName))
+		if err != nil {
+			return err
+		}
+
+		_, err = db.Exec(context.Background(), fmt.Sprintf("alter table %s SET (autovacuum_vacuum_threshold = 10000)", partitionName))
 		return err
 	})
 	if err != nil {
