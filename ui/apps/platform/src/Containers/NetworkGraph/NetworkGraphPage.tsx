@@ -68,6 +68,8 @@ function NetworkGraphPage() {
         'policyStatusBadge',
         'externalBadge',
         'edgeLabel',
+        'namespaceTypeLabel',
+        'objectTypeLabel',
     ]);
     const [models, setModels] = useState<Models>({
         activeModel: emptyModel,

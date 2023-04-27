@@ -122,7 +122,9 @@ function getExtraneousEdges(selectedNodeData: DeploymentData): CustomEdgeModel[]
 function getDisplayNodes(
     nodes: CustomNodeModel[],
     showPolicyState: boolean,
-    showExternalState: boolean
+    showExternalState: boolean,
+    showNamespaceTypeLabels: boolean,
+    showObjectTypeLabels: boolean
 ): CustomNodeModel[] {
     return nodes.map((node) => {
         const { data } = node;
@@ -133,6 +135,8 @@ function getDisplayNodes(
                     ...data,
                     showPolicyState,
                     showExternalState,
+                    showNamespaceTypeLabels,
+                    showObjectTypeLabels,
                 } as DeploymentData,
             };
         }
@@ -259,11 +263,19 @@ function NetworkGraphContainer({
     const showPolicyState = !!displayOptions.includes('policyStatusBadge');
     const showExternalState = !!displayOptions.includes('externalBadge');
     const showEdgeLabels = !!displayOptions.includes('edgeLabel');
+    const showNamespaceTypeLabels = !!displayOptions.includes('namespaceTypeLabel');
+    const showObjectTypeLabels = !!displayOptions.includes('objectTypeLabel');
     // modified filtered nodes/edges based on selected displayOptions
     let modifiedNodes = filteredNodes;
     let modifiedEdges = filteredEdges;
     // update the display options visually for deployment nodes on the graph
-    modifiedNodes = getDisplayNodes(filteredNodes, showPolicyState, showExternalState);
+    modifiedNodes = getDisplayNodes(
+        filteredNodes,
+        showPolicyState,
+        showExternalState,
+        showNamespaceTypeLabels,
+        showObjectTypeLabels
+    );
     // update the display options visually for edges on the graph
     modifiedEdges = getDisplayEdges(filteredEdges, showEdgeLabels);
 
