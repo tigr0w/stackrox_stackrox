@@ -65,7 +65,7 @@ require (
 	github.com/mailru/easyjson v0.7.7
 	github.com/mitchellh/go-wordwrap v1.0.1
 	github.com/mitchellh/hashstructure/v2 v2.0.2
-	github.com/np-guard/cluster-topology-analyzer v1.6.0
+	github.com/np-guard/cluster-topology-analyzer v1.7.0
 	github.com/nxadm/tail v1.4.8
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opencontainers/go-digest v1.0.0
@@ -126,7 +126,7 @@ require (
 	k8s.io/client-go v0.26.4
 	k8s.io/kubectl v0.26.4
 	k8s.io/kubelet v0.26.4
-	k8s.io/utils v0.0.0-20230209194617-a36077c30491
+	k8s.io/utils v0.0.0-20230220204549-a5ecb0141aa5
 	sigs.k8s.io/controller-runtime v0.14.5
 	sigs.k8s.io/controller-tools v0.9.2
 	sigs.k8s.io/e2e-framework v0.2.0
