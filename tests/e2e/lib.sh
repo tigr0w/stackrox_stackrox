@@ -45,7 +45,7 @@ deploy_stackrox() {
 # shellcheck disable=SC2120
 deploy_stackrox_with_custom_sensor_and_central_versions() {
     if [[ "$#" -ne 2 ]]; then
-        die "expected sensor chart version and central chart version as parameters in deploy_stackrox_with_custom_sensor_and_central_versions: eploy_stackrox_with_custom_sensor_and_central_versions <sensor chart version> <central chart version>"
+        die "expected sensor chart version and central chart version as parameters in deploy_stackrox_with_custom_sensor_and_central_versions: deploy_stackrox_with_custom_sensor_and_central_versions <sensor chart version> <central chart version>"
     fi
     sensor_target_version="$1"
     central_target_version="$2"

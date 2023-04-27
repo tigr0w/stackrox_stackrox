@@ -64,15 +64,15 @@ compatibility_test() {
 
     update_junit_prefix_with_sensor_version
 
-    store_qa_test_results "compatibility-test-sensor-${SENSOR_CHART_VERSION}-central-${CENTRAL_CHART_VERSION}"
-    [[ ! -f FAIL ]] || die "compatibility-test-sensor-${SENSOR_CHART_VERSION}-central-${CENTRAL_CHART_VERSION}"
+    store_qa_test_results "compatibility-test-sensor-v${SENSOR_CHART_VERSION}-central-v${CENTRAL_CHART_VERSION}"
+    [[ ! -f FAIL ]] || die "compatibility-test-sensor-v${SENSOR_CHART_VERSION}-central-v${CENTRAL_CHART_VERSION}"
 }
 
 update_junit_prefix_with_sensor_version() {
     result_folder="${ROOT}/qa-tests-backend/build/test-results/testCOMPATIBILITY"
-    info "Updating all test in $result_folder to have \"S-${SENSOR_CHART_VERSION}_C-${CENTRAL_CHART_VERSION}\" prefix"
+    info "Updating all test in $result_folder to have \"Sensor-v${SENSOR_CHART_VERSION}_Central-v${CENTRAL_CHART_VERSION}\" prefix"
     for f in "$result_folder"/*.xml; do
-        sed -i "s/testcase name=\"/testcase name=\"[S-${SENSOR_CHART_VERSION}_C-${CENTRAL_CHART_VERSION}] /g" "$f"
+        sed -i "s/testcase name=\"/testcase name=\"[Sensor-v${SENSOR_CHART_VERSION}_Central-v${CENTRAL_CHART_VERSION}] /g" "$f"
     done
 }
 
