@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/types"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx"
 	"github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/logging"
@@ -424,7 +424,10 @@ func (s *flowStoreImpl) removeDeploymentFlows(ctx context.Context, deleteStmt st
 	}
 
 	diff := time.Since(startTime)
-	log.Infof("SHREWS -- removeDeploymentFlows cluster %s and deployment %s took %s", s.clusterID, id, diff)
+	logDuration := time.Duration(30) * time.Second
+	if diff > logDuration {
+		log.Infof("SHREWS -- removeDeploymentFlows cluster %s and deployment %s took %s", s.clusterID, id, diff)
+	}
 	return tx.Commit(ctx)
 }
 
@@ -634,7 +637,10 @@ func (s *flowStoreImpl) pruneFlows(ctx context.Context, deleteStmt string, orpha
 
 	diff := time.Since(startTime)
 
-	log.Infof("SHREWS -- pruneFlows cluster %s took %s", s.clusterID, diff)
+	logDuration := time.Duration(30) * time.Second
+	if diff > logDuration {
+		log.Infof("SHREWS -- pruneFlows cluster %s took %s", s.clusterID, diff)
+	}
 
 	return tx.Commit(ctx)
 }
@@ -662,8 +668,10 @@ func (s *flowStoreImpl) RemoveStaleFlows(ctx context.Context) error {
 	_, err = conn.Exec(ctx, prune)
 
 	diff := time.Since(startTime)
-
-	log.Infof("SHREWS -- RemoveStaleFlows cluster %s took %s", s.clusterID, diff)
+	logDuration := time.Duration(30) * time.Second
+	if diff > logDuration {
+		log.Infof("SHREWS -- RemoveStaleFlows cluster %s took %s", s.clusterID, diff)
+	}
 	return err
 }
 
