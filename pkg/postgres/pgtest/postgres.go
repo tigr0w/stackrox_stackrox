@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	pkgEnv "github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest/conn"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
@@ -14,9 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"k8s.io/utils/env"
+)
 
-	// Ignore blank import warning as this is for test only
-	_ "github.com/lib/pq"
+const (
+	driverName = "pgx"
+
+	// defaultDatabaseName is needed to create and drop databases. Without it we can't create or drop databases, it is a catch-22
+	// because a database is needed for the connection.
+	defaultDatabaseName = "postgres"
 )
 
 // TestPostgres is a Postgres instance used in tests
@@ -41,9 +45,9 @@ func CreateADatabaseForT(t testing.TB) string {
 // CreateDatabase - creates a database for testing
 func CreateDatabase(t testing.TB, database string) {
 	// Bootstrap the test database by connecting to the default postgres database and running create
-	sourceWithPostgresDatabase := conn.GetConnectionStringWithDatabaseName(t, "postgres")
+	sourceWithPostgresDatabase := conn.GetConnectionStringWithDatabaseName(t, defaultDatabaseName)
 
-	db, err := sql.Open("postgres", sourceWithPostgresDatabase)
+	db, err := sql.Open(driverName, sourceWithPostgresDatabase)
 	require.NoError(t, err)
 
 	// Checks to see if DB already exists
@@ -66,9 +70,9 @@ func CreateDatabase(t testing.TB, database string) {
 // DropDatabase - drops the database specified from the testing scope
 func DropDatabase(t testing.TB, database string) {
 	// Connect to the admin postgres database to drop the test database.
-	if database != "postgres" {
-		sourceWithPostgresDatabase := conn.GetConnectionStringWithDatabaseName(t, "postgres")
-		db, err := sql.Open("postgres", sourceWithPostgresDatabase)
+	if database != defaultDatabaseName {
+		sourceWithPostgresDatabase := conn.GetConnectionStringWithDatabaseName(t, defaultDatabaseName)
+		db, err := sql.Open(driverName, sourceWithPostgresDatabase)
 		require.NoError(t, err)
 
 		_, _ = db.Exec("DROP DATABASE " + database)
@@ -146,7 +150,12 @@ func (tp *TestPostgres) Teardown(t testing.TB) {
 
 // GetConnectionString returns a connection string for integration testing with Postgres
 func GetConnectionString(t testing.TB) string {
-	return conn.GetConnectionStringWithDatabaseName(t, env.GetString("POSTGRES_DB", "postgres"))
+	return conn.GetConnectionStringWithDatabaseName(t, env.GetString("POSTGRES_DB", defaultDatabaseName))
+}
+
+// GetConnectionStringWithDatabaseName returns a connection string for integration testing with Postgres
+func GetConnectionStringWithDatabaseName(t testing.TB, database string) string {
+	return conn.GetConnectionStringWithDatabaseName(t, database)
 }
 
 // OpenGormDB opens a Gorm DB to the Postgres DB
@@ -161,16 +170,6 @@ func CloseGormDB(t testing.TB, db *gorm.DB) {
 
 // SkipIfPostgresEnabled skips the tests if the Postgres flag is on
 func SkipIfPostgresEnabled(t testing.TB) {
-	if pkgEnv.PostgresDatastoreEnabled.BooleanSetting() {
-		t.Skip("Skipping test because Postgres is enabled")
-		t.SkipNow()
-	}
-}
-
-// SkipIfPostgresDisabled skips the tests if the Postgres flag is off
-func SkipIfPostgresDisabled(t testing.TB) {
-	if !pkgEnv.PostgresDatastoreEnabled.BooleanSetting() {
-		t.Skip("Skipping test because Postgres is disabled")
-		t.SkipNow()
-	}
+	t.Skip("Skipping test because Postgres is enabled")
+	t.SkipNow()
 }

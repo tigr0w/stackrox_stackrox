@@ -3,8 +3,9 @@ package search
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
+	"time"
 
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
@@ -32,6 +33,9 @@ const (
 
 	// EqualityPrefixSuffix is the prefix for an exact match
 	EqualityPrefixSuffix = `"`
+
+	// TimeRangePrefix is the prefix for a time range query
+	TimeRangePrefix = "tr/"
 
 	// MaxQueryParameters is the maximum number of query parameters for a single statement
 	MaxQueryParameters = math.MaxUint16
@@ -172,6 +176,11 @@ func (p *Pagination) AddSortOption(so *SortOption) *Pagination {
 	}
 	p.qp.SortOptions = append(p.qp.SortOptions, opt)
 	return p
+}
+
+// Proto returns the pagination as *v1.QueryPagination
+func (p *Pagination) Proto() *v1.QueryPagination {
+	return p.qp
 }
 
 // SortOption describes the way to sort the query
@@ -411,6 +420,13 @@ func (qb *QueryBuilder) AddBools(k FieldLabel, v ...bool) *QueryBuilder {
 	return qb
 }
 
+// AddTimeRangeField adds a range query between two times for the specific field.
+func (qb *QueryBuilder) AddTimeRangeField(field FieldLabel, from, to time.Time) *QueryBuilder {
+	value := fmt.Sprintf("%s%d-%d", TimeRangePrefix, from.UnixMilli(), to.UnixMilli())
+	qb.fieldsToValues[field] = append(qb.fieldsToValues[field], value)
+	return qb
+}
+
 // AddNumericField adds a numeric field.
 func (qb *QueryBuilder) AddNumericField(k FieldLabel, comparator storage.Comparator, value float32) *QueryBuilder {
 	return qb.AddStrings(k, NumericQueryString(comparator, value))
@@ -445,7 +461,7 @@ func (qb *QueryBuilder) Query() string {
 	for k, values := range qb.fieldsToValues {
 		pairs = append(pairs, fmt.Sprintf("%s:%s", k, strings.Join(values, ",")))
 	}
-	sort.Strings(pairs)
+	slices.Sort(pairs)
 	return strings.Join(pairs, "+")
 }
 

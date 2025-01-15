@@ -8,10 +8,9 @@ import (
 	graphConfigDS "github.com/stackrox/rox/central/networkgraph/config/datastore"
 	"github.com/stackrox/rox/central/networkgraph/entity/datastore/internal/store"
 	pgStore "github.com/stackrox/rox/central/networkgraph/entity/datastore/internal/store/postgres"
-	"github.com/stackrox/rox/central/networkgraph/entity/datastore/internal/store/rocksdb"
 	"github.com/stackrox/rox/central/networkgraph/entity/networktree"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/sensor/service/connection"
+	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/errorhelpers"
 	"github.com/stackrox/rox/pkg/errox"
@@ -21,8 +20,9 @@ import (
 	"github.com/stackrox/rox/pkg/networkgraph/tree"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
-	rocksdbBase "github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+	pkgSearch "github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
@@ -88,21 +88,6 @@ func GetBenchPostgresDataStore(t testing.TB, pool postgres.DB) (EntityDataStore,
 	return NewEntityDataStore(dbstore, graphConfigStore, treeMgr, sensorCnxMgr), nil
 }
 
-// GetTestRocksBleveDataStore provides a datastore connected to rocksdb and bleve for testing purposes.
-func GetTestRocksBleveDataStore(t *testing.T, rocksengine *rocksdbBase.RocksDB) (EntityDataStore, error) {
-	dbstore, err := rocksdb.New(rocksengine)
-	if err != nil {
-		return nil, err
-	}
-	graphConfigStore, err := graphConfigDS.GetTestRocksBleveDataStore(t, rocksengine)
-	if err != nil {
-		return nil, err
-	}
-	treeMgr := networktree.Singleton()
-	sensorCnxMgr := connection.ManagerSingleton()
-	return NewEntityDataStore(dbstore, graphConfigStore, treeMgr, sensorCnxMgr), nil
-}
-
 func (ds *dataStoreImpl) initNetworkTrees(ctx context.Context) {
 	// Create tree for default ones.
 	entitiesByCluster := make(map[string][]*storage.NetworkEntityInfo)
@@ -114,7 +99,7 @@ func (ds *dataStoreImpl) initNetworkTrees(ctx context.Context) {
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		log.Errorf("Failed to initialize network tree: %v", err)
 	}
 
@@ -191,6 +176,10 @@ func (ds *dataStoreImpl) GetAllEntitiesForCluster(ctx context.Context, clusterID
 		if entity.GetScope().GetClusterId() != "" && entity.GetScope().GetClusterId() != clusterID {
 			return false
 		}
+		// Send only the CIDR-blocks used to aggregate entities.
+		if entity.GetInfo().GetExternalSource().GetDiscovered() {
+			return false
+		}
 
 		return !excludeEntityForGraphConfig(graphConfig, entity)
 	})
@@ -237,10 +226,14 @@ func (ds *dataStoreImpl) GetAllMatchingEntities(ctx context.Context, pred func(e
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, errors.Wrap(err, "fetching network entities from storage")
 	}
 	return entities, nil
+}
+
+func (ds *dataStoreImpl) GetEntityByQuery(ctx context.Context, query *v1.Query) ([]*storage.NetworkEntity, error) {
+	return ds.storage.GetByQuery(ctx, query)
 }
 
 func (ds *dataStoreImpl) CreateExternalNetworkEntity(ctx context.Context, entity *storage.NetworkEntity, skipPush bool) error {
@@ -430,16 +423,15 @@ func (ds *dataStoreImpl) DeleteExternalNetworkEntitiesForCluster(ctx context.Con
 	defer ds.netEntityLock.Unlock()
 
 	var ids []string
-	if err := ds.storage.Walk(ctx, func(obj *storage.NetworkEntity) error {
-		// Skip default ones.
-		if obj.GetInfo().GetExternalSource().GetDefault() {
+	if err := ds.storage.WalkByQuery(ctx,
+		pkgSearch.NewQueryBuilder().AddBools(pkgSearch.DefaultExternalSource, false).ProtoQuery(),
+		func(obj *storage.NetworkEntity) error {
+			if clusterID == obj.GetScope().GetClusterId() {
+				ids = append(ids, obj.GetInfo().GetId())
+			}
 			return nil
-		}
-		if clusterID == obj.GetScope().GetClusterId() {
-			ids = append(ids, obj.GetInfo().GetId())
-		}
-		return nil
-	}); err != nil {
+		},
+	); err != nil {
 		return err
 	}
 

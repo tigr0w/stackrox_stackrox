@@ -1,5 +1,4 @@
 //go:build sql_integration
-// +build sql_integration
 
 package uuid
 
@@ -11,31 +10,24 @@ import (
 
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	"github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	pgStore "github.com/stackrox/rox/tools/generate-helpers/pg-table-bindings/testuuidkey/postgres"
 	"github.com/stretchr/testify/suite"
 )
 
 var (
 	ctx = sac.WithAllAccess(context.Background())
-
-	log = logging.LoggerForModule()
 )
 
 type SingleUUIDIndexSuite struct {
 	suite.Suite
 
-	pool    postgres.DB
-	store   pgStore.Store
-	indexer interface {
-		Search(ctx context.Context, q *v1.Query, opts ...blevesearch.SearchOption) ([]search.Result, error)
-	}
+	pool  postgres.DB
+	store pgStore.Store
 }
 
 func TestSingleUUIDIndex(t *testing.T) {
@@ -54,7 +46,6 @@ func (s *SingleUUIDIndexSuite) SetupTest() {
 	gormDB := pgtest.OpenGormDB(s.T(), source)
 	defer pgtest.CloseGormDB(s.T(), gormDB)
 	s.store = pgStore.CreateTableAndNewStore(ctx, s.pool, gormDB)
-	s.indexer = pgStore.NewIndexer(s.pool)
 }
 
 func (s *SingleUUIDIndexSuite) TearDownTest() {
@@ -107,7 +98,7 @@ func (s *SingleUUIDIndexSuite) TestDocIDs() {
 		s.Run(testCase.desc, func() {
 			so := search.NewSortOption(search.DocID)
 			q := search.NewQueryBuilder().AddDocIDs(testCase.docIDs...).WithPagination(search.NewPagination().AddSortOption(so)).ProtoQuery()
-			results, err := s.indexer.Search(ctx, q)
+			results, err := s.store.Search(ctx, q)
 			if testCase.errorText != "" {
 				s.Error(err, testCase.errorText)
 			} else {
@@ -115,7 +106,7 @@ func (s *SingleUUIDIndexSuite) TestDocIDs() {
 				s.Equal(testCase.docIDs, search.ResultsToIDs(results))
 
 				q = search.NewQueryBuilder().AddDocIDs(testCase.docIDs...).WithPagination(search.NewPagination().AddSortOption(so.Reversed(true))).ProtoQuery()
-				results, err = s.indexer.Search(ctx, q)
+				results, err = s.store.Search(ctx, q)
 				s.Require().NoError(err)
 
 				sort.Sort(sort.Reverse(sort.StringSlice(testCase.docIDs)))
@@ -182,7 +173,7 @@ func (s *SingleUUIDIndexSuite) TestSearchAfter() {
 	} {
 		s.Run(testCase.desc, func() {
 			q := search.NewQueryBuilder().WithPagination(testCase.pagination).ProtoQuery()
-			results, err := s.indexer.Search(ctx, q)
+			results, err := s.store.Search(ctx, q)
 			s.Equal(testCase.valid, err == nil)
 			s.Equal(testCase.results, search.ResultsToIDs(results))
 		})
@@ -205,7 +196,7 @@ func (s *SingleUUIDIndexSuite) TestAutocomplete() {
 	}
 	s.NoError(s.store.Upsert(ctx, obj))
 
-	optionsMap := schema.TestSingleUuidKeyStructsSchema.OptionsMap
+	optionsMap := schema.TestSingleUUIDKeyStructsSchema.OptionsMap
 	for _, testCase := range []struct {
 		field       search.FieldLabel
 		queryString string
@@ -330,7 +321,7 @@ func (s *SingleUUIDIndexSuite) TestAutocomplete() {
 			} else {
 				qb.AddStringsHighlighted(testCase.field, testCase.queryString)
 			}
-			results, err := s.indexer.Search(ctx, qb.ProtoQuery())
+			results, err := s.store.Search(ctx, qb.ProtoQuery())
 			s.NoError(err)
 			if len(testCase.results) > 0 {
 				s.Require().Len(results, 1)
@@ -416,7 +407,7 @@ func (s *SingleUUIDIndexSuite) TestMatches() {
 		},
 	} {
 		s.Run(testCase.desc, func() {
-			results, err := s.indexer.Search(ctx, testCase.q)
+			results, err := s.store.Search(ctx, testCase.q)
 			if testCase.expectErr {
 				s.Error(err)
 				return

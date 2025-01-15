@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/assert"
@@ -105,7 +105,7 @@ var (
 )
 
 func TestAggregator(t *testing.T) {
-	t.Setenv(env.ActiveVulnMgmt.EnvVar(), "true")
+	t.Setenv(features.ActiveVulnMgmt.EnvVar(), "true")
 
 	aggregator := &aggregatorImpl{cache: make(map[string]map[string]*ProcessUpdate)}
 	mockImageCache := set.NewStringSet()
@@ -217,7 +217,7 @@ func TestAggregator(t *testing.T) {
 	assert.NotContains(t, aggregator.cache[indicators2[0].GetDeploymentId()], containerToRemove)
 
 	// Test case 8: Indicators coming in with wrong image, no update
-	indicatorNewImage := indicators2[2].Clone()
+	indicatorNewImage := indicators2[2].CloneVT()
 	indicatorNewImage.ImageId = allImages[0]
 	aggregator.Add([]*storage.ProcessIndicator{indicatorNewImage})
 	deployToupdates = aggregator.GetAndPrune(scannedImageFunc, existingDeployments)

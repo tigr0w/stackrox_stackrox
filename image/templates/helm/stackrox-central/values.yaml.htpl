@@ -103,14 +103,24 @@
 ## If specified, this should be a map mapping file names to PEM-encoded contents.
 #additionalCAs: null
 #
+[<- if and .TelemetryEnabled (and (eq .TelemetryKey "") (eq .TelemetryEndpoint ""))>]
 #central:
 #
-#  # Settings for telemetry data collection. Telemetry is disabled by default.
+#  # Settings for telemetry data collection. Telemetry is enabled by default.
 #  telemetry:
-#    enabled: false
+#    enabled: true
 #    storage:
 #      endpoint: null
 #      key: null
+[<- else >]
+central:
+# # Settings for telemetry data collection.
+  telemetry:
+    enabled: [< .TelemetryEnabled >]
+    storage:
+      endpoint: "[< .TelemetryEndpoint >]"
+      key: "[< .TelemetryKey >]"
+[<- end >]
 #
 #
 #  config: "@config/central/config.yaml|config/central/config.yaml.default"
@@ -154,15 +164,6 @@
 #      memory: "8Gi"
 #      cpu: "4000m"
 #
-#  persistence:
-#    hostPath: null
-#    persistentVolumeClaim:
-#      claimName: null
-#      createClaim: null
-#      storageClass: null
-#      size: null
-#    none: null
-#
 #  exposure:
 #
 #    # LoadBalancer configuration.
@@ -194,7 +195,10 @@
 #    source:
 #      # ConnectionString should not be specified if the Central DB deployment is being managed by the helm chart
 #      # The connection string must be in the format described here https://www.postgresql.org/docs/current/static/libpq-connect.html#LIBPQ-CONNSTRING
-#      # Do NOT use a connection string with a password field. Instead specify the value below in the password section/
+#      # client_encoding=UTF8 is required in any connection string and the only supported encoding
+#      # statementTimeoutMs is ignored for external database connections
+#      # If using a connection that supports "statement_timeout" it is recommended to include "statement_timeout=1200000"
+#      # Do NOT use a connection string with a password field. Instead specify the value below in the password section.
 #      connectionString: null
 #      minConns: 10
 #      maxConns: 90
@@ -321,6 +325,222 @@
 #    key: null
 #    generate: null
 #
+## Configuration options relating to Scanner V4.
+#scannerV4:
+#
+#  # If this is set to false, Scanner V4 will be enabled and deployed.
+#  # If it is set to true, no other setting in this section will have any effect.
+#  disable: true
+#
+#  image:
+#    registry: null
+#    name: [< required "" .ScannerV4ImageRemote >]
+#    tag: [< required "" .ScannerV4ImageTag >]
+#    fullRef: null
+#
+#  indexer:
+#    # The log level for the indexer deployment. This typically does not need to be changed.
+#    logLevel: INFO
+#
+#    # If you want to enforce indexer to only run on certain nodes, you can specify
+#    # a node selector here to make sure Scanner V4 can only be scheduled on Nodes with the
+#    # given label.
+#    nodeSelector: null
+#
+#    # If the nodes selected by the node selector are tainted, you can specify the corresponding taint tolerations here.
+#    tolerations: null
+#
+#    # If scheduling needs specific affinities, you can specify the corresponding affinities here.
+#    affinity:
+#      podAntiAffinity:
+#        preferredDuringSchedulingIgnoredDuringExecution:
+#        - weight: 100
+#          podAffinityTerm:
+#            labelSelector:
+#              matchLabels:
+#                app: scanner-v4-indexer
+#            topologyKey: kubernetes.io/hostname
+#      nodeAffinity:
+#        preferredDuringSchedulingIgnoredDuringExecution:
+#        - weight: 50
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/infra
+#              operator: Exists
+#        - weight: 25
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/compute
+#              operator: Exists
+#        # From v1.20 node-role.kubernetes.io/control-plane replaces node-role.kubernetes.io/master (removed in
+#        # v1.25). We apply both because our goal is not to run pods on control plane nodes for any version of k8s.
+#        - weight: 100
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/master
+#              operator: DoesNotExist
+#        - weight: 100
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/control-plane
+#              operator: DoesNotExist
+#
+#    # Default number of indexer replicas created upon startup. The actual number might be higher
+#    # or lower if autoscaling is enabled (see below).
+#    replicas: 3
+#
+#    # Settings related to autoscaling the indexer deployment.
+#    autoscaling:
+#      # If true, autoscaling will be disabled. None of the other settings in this section will
+#      # have any effect.
+#      disable: false
+#      minReplicas: 2
+#      maxReplicas: 5
+#
+#    # Resource settings for the indexer deployment.
+#    resources:
+#      requests:
+#        memory: "1500Mi"
+#        cpu: "1000m"
+#      limits:
+#        memory: "3Gi"
+#        cpu: "2000m"
+#
+#    # Settings for the internal service-to-service TLS certificate used by indexer.
+#    # See the documentation for `ca` at the top level for an explanation.
+#    serviceTLS:
+#      cert: null
+#      key: null
+#      generate: null
+#
+#  matcher:
+#    # The log level for the matcher deployment. This typically does not need to be changed.
+#    logLevel: INFO
+#
+#    # If you want to enforce matcher to only run on certain nodes, you can specify
+#    # a node selector here to make sure Scanner V4 can only be scheduled on Nodes with the
+#    # given label.
+#    nodeSelector: null
+#
+#    # If the nodes selected by the node selector are tainted, you can specify the corresponding taint tolerations here.
+#    tolerations: null
+#
+#    # If scheduling needs specific affinities, you can specify the corresponding affinities here.
+#    affinity:
+#      podAntiAffinity:
+#        preferredDuringSchedulingIgnoredDuringExecution:
+#        - weight: 100
+#          podAffinityTerm:
+#            labelSelector:
+#              matchLabels:
+#                app: scanner-v4-matcher
+#            topologyKey: kubernetes.io/hostname
+#      nodeAffinity:
+#        preferredDuringSchedulingIgnoredDuringExecution:
+#        - weight: 50
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/infra
+#              operator: Exists
+#        - weight: 25
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/compute
+#              operator: Exists
+#        # From v1.20 node-role.kubernetes.io/control-plane replaces node-role.kubernetes.io/master (removed in
+#        # v1.25). We apply both because our goal is not to run pods on control plane nodes for any version of k8s.
+#        - weight: 100
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/master
+#              operator: DoesNotExist
+#        - weight: 100
+#          preference:
+#            matchExpressions:
+#            - key: node-role.kubernetes.io/control-plane
+#              operator: DoesNotExist
+#
+#    # Default number of matcher replicas created upon startup. The actual number might be higher
+#    # or lower if autoscaling is enabled (see below).
+#    replicas: 2
+#    # Settings related to autoscaling the matcher deployment.
+#    autoscaling:
+#      # If true, autoscaling will be disabled. None of the other settings in this section will
+#      # have any effect.
+#      disable: false
+#      minReplicas: 2
+#      maxReplicas: 3
+#
+#    # Resource settings for the matcher deployment.
+#    resources:
+#      requests:
+#        memory: "4Gi"
+#        cpu: "1000m"
+#      limits:
+#        memory: "5Gi"
+#        cpu: "2000m"
+#
+#    # Settings for the internal service-to-service TLS certificate used by matcher.
+#    # See the documentation for `ca` at the top level for an explanation.
+#    serviceTLS:
+#      cert: null
+#      key: null
+#      generate: null
+#
+#  db:
+#    image:
+#      registry: null
+#      name: [< required "" .ScannerV4DBImageRemote >]
+#      tag: [< required "" .ScannerV4ImageTag >]
+#      fullRef: null
+#
+#    # Resource settings for the DB deployment.
+#    resources:
+#      requests:
+#        cpu: "200m"
+#        memory: "2Gi"
+#      limits:
+#        cpu: "2000m"
+#        memory: "4Gi"
+#
+#    # Configure DB password. If `generate` is true, a new password will be
+#    # generated. If it is false, a valid password is expected in `value`.
+#    password:
+#      generate: null
+#      value: null
+#
+#    # Configure persistence backend for the DB.
+#    # By default a PVC is used. Unless a Storage Class is specified
+#    # a default Storage Class is expected.
+#    persistence:
+#      hostPath: null
+#      persistentVolumeClaim:
+#        claimName: "scanner-v4-db"
+#        size: "50Gi"
+#        createClaim: true
+#        storageClass: null
+#       none: null
+#
+#    nodeSelector: null
+#
+#    # Settings for the internal service-to-service TLS certificate used by the DB.
+#    # See the documentation for `ca` at the top level for an explanation.
+#    serviceTLS:
+#      cert: null
+#      key: null
+#      generate: null
+#
+#    postgresConfig: "@config-templates/scanner-v4-db/postgresql.conf|config-templates/scanner-v4-db/postgresql.conf.default"
+#    hbaConfig: "@config-templates/scanner-v4-db/pg_hba.conf|config-templates/scanner-v4-db/pg_hba.conf.default"
+#
+#    # Specifying configOverride mounts the specified config map in the same namespace which must contain
+#    # both pg_hba.conf and postgresql.conf. This should only be used when the default settings are not
+#    # sufficient and manual override is required.
+#    configOverride: null
+#
+#configAsCode:
+#  enabled: true
+#
 ## EXPERT SETTINGS. You usually do not need to touch those.
 #
 ## If set to true, allow deploying in a namespace other than "stackrox". This is unsupported, so
@@ -356,3 +576,7 @@
 #    # via `overrideAPIResources`.
 #    extraAPIResources: []
 #
+#monitoring:
+#  # Enables integration with OpenShift platform monitoring.
+#  openshift:
+#    enabled: true

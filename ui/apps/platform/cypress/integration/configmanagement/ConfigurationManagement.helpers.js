@@ -72,6 +72,20 @@ function tableHeaderRegExp(entitiesKey) {
     return new RegExp(`^(1 ${singular}|(?:0|2|3|4|5|6|7|8|9|[123456789]\\d+) ${plural})$`);
 }
 
+const countNounRegExp = {
+    // clusters has singular link by name
+    controls: /\d+ Controls?$/,
+    deployments: /^\d+ deployments?$/,
+    images: /\d+ images?$/,
+    // namespaces
+    // nodes
+    // policies
+    roles: /^\d+ Roles?$/,
+    secrets: /\d+ secrets?$/,
+    serviceaccounts: /^\d+ Service Accounts?$/,
+    subjects: /^\d+ Users & Groups$/,
+};
+
 // Title of widget is title case but has uppercase style.
 const widgetTitleForEntities = {
     clusters: 'Clusters',
@@ -139,13 +153,7 @@ function opnameForPrimaryAndSecondaryEntities(entitiesKey1, entitiesKey2) {
 }
 
 const routeMatcherMapForConfigurationManagementDashboard = getRouteMatcherMapForGraphQL([
-    'numPolicies',
-    'numCISControls',
-    'policyViolationsBySeverity',
-    'runStatuses',
     'complianceByControls',
-    'usersWithClusterAdminRoles',
-    'secrets',
 ]);
 
 export function visitConfigurationManagementDashboard() {
@@ -214,15 +222,17 @@ export function interactAndWaitForConfigurationManagementSecondaryEntityInSidePa
     cy.get(`[data-testid="breadcrumb-link-text"]:contains("${headingForEntity[entitiesKey2]}")`);
 }
 
-export function interactAndWaitForConfigurationManagementEntityPage(
-    interactionCallback,
-    entitiesKey
-) {
-    interactAndWaitForResponses(interactionCallback, getRouteMatcherMapForEntity(entitiesKey));
+// no longer intercepting on second gql request as on slow connections the
+// second request is not made since it's still waiting on first request
+// export function interactAndWaitForConfigurationManagementEntityPage(
+//     interactionCallback,
+//     entitiesKey
+// ) {
+//     interactAndWaitForResponses(interactionCallback, getRouteMatcherMapForEntity(entitiesKey));
 
-    cy.location('pathname').should('contain', getEntityPagePath(entitiesKey)); // contains because it ends with id
-    cy.get(`h1 + div:contains("${headingForEntity[entitiesKey]}")`);
-}
+//     cy.location('pathname').should('contain', getEntityPagePath(entitiesKey)); // contains because it ends with id
+//     cy.get(`h1 + div:contains("${headingForEntity[entitiesKey]}")`);
+// }
 
 export function interactAndWaitForConfigurationManagementSecondaryEntities(
     interactionCallback,
@@ -240,12 +250,27 @@ export function interactAndWaitForConfigurationManagementScan(interactionCallbac
         interactionCallback,
         routeMatcherMapForConfigurationManagementDashboard
     );
+
+    // ROX-24912
+    // Comment out for now and assume that scan results are available from compliance tests.
+    // Maybe interactAndWaitForResponses waits only for the first pair of responses from page visit.
+    // Apparently the negative assertion sometimes passes before ComplianceScanProgress renders.
+    // But auto-disappears prevents positive assertion as in scanCompliance helper function.
+    cy.get('div:contains("Compliance scanning in progress")', {
+        timeout: 30000,
+    }).should('not.exist');
 }
 
 export function navigateToSingleEntityPage(entitiesKey) {
-    interactAndWaitForConfigurationManagementEntityPage(() => {
-        cy.get('[data-testid="side-panel"] [aria-label="External link"]').click();
-    }, entitiesKey);
+    // interactAndWaitForConfigurationManagementEntityPage(() => {
+    //     cy.get('[data-testid="side-panel"] [aria-label="link"]').click();
+    // }, entitiesKey);
+
+    // no longer intercepting on second gql request as on slow connections the
+    // second request is not made since it's still waiting on first request
+    cy.get('[data-testid="side-panel"] [aria-label="link"]').click();
+    cy.location('pathname').should('contain', getEntityPagePath(entitiesKey)); // contains because it ends with id
+    cy.get(`h1 + div:contains("${headingForEntity[entitiesKey]}")`);
 }
 
 export const hasCountWidgetsFor = (entities) => {
@@ -266,8 +291,7 @@ export function clickOnCountWidget(entitiesKey, type) {
     }
 
     if (type === 'entityList') {
-        cy.get(`${selectors.groupedTabs}:contains('${entitiesKey}')`);
-        cy.get(`li.bg-base-100:contains("${entitiesKey}")`);
+        cy.get(`${selectors.groupedTabs}:contains('${headingForEntities[entitiesKey]}')`);
     }
 }
 
@@ -320,9 +344,9 @@ export const clickOnSingleEntityInTable = (entitiesKey1, entitiesKey2) => {
         });
 };
 
-export const hasTabsFor = (entities) => {
-    entities.forEach((entity) => {
-        cy.get(`${selectors.groupedTabs} div:contains("${entity}")`);
+export const hasTabsFor = (entitiesKeys) => {
+    entitiesKeys.forEach((entitiesKey) => {
+        cy.get(`${selectors.groupedTabs} div:contains("${headingForEntities[entitiesKey]}")`);
     });
 };
 
@@ -331,7 +355,7 @@ export const hasRelatedEntityFor = (entity) => {
 };
 
 // Assume at either entity page or entity in side panel.
-function entityCountMatchesTableRows(entitiesKey1, entitiesKey2, contextSelector) {
+function verifyWidgetLinkToTable(entitiesKey1, entitiesKey2, contextSelector) {
     const listEntity = widgetTitleForEntities[entitiesKey2];
     cy.get(`${selectors.countWidgets}:contains('${listEntity}')`)
         .find(selectors.countWidgetValue)
@@ -367,26 +391,32 @@ function entityCountMatchesTableRows(entitiesKey1, entitiesKey2, contextSelector
         });
 }
 
-export function pageEntityCountMatchesTableRows(entitiesKey1, entitiesKey2) {
-    entityCountMatchesTableRows(entitiesKey1, entitiesKey2, '[data-testid="panel"]');
+export function verifyWidgetLinkToTableFromSinglePage(entitiesKey1, entitiesKey2) {
+    visitConfigurationManagementEntityInSidePanel(entitiesKey1);
+    navigateToSingleEntityPage(entitiesKey1);
+    verifyWidgetLinkToTable(entitiesKey1, entitiesKey2, '[data-testid="panel"]');
 }
 
-export function sidePanelEntityCountMatchesTableRows(entitiesKey1, entitiesKey2) {
-    entityCountMatchesTableRows(entitiesKey1, entitiesKey2, '[data-testid="side-panel"]');
+export function verifyWidgetLinkToTableFromSidePanel(entitiesKey1, entitiesKey2) {
+    visitConfigurationManagementEntityInSidePanel(entitiesKey1);
+    verifyWidgetLinkToTable(entitiesKey1, entitiesKey2, '[data-testid="side-panel"]');
 }
 
-export function entityListCountMatchesTableLinkCount(entitiesKey1, entitiesKey2, entitiesRegExp2) {
+export function verifyTableLinkToSidePanelTable(entitiesKey1, entitiesKey2) {
     // 1. Visit list page for primary entities.
     visitConfigurationManagementEntities(entitiesKey1);
 
     cy.get('.rt-td')
-        .contains('a', entitiesRegExp2)
+        .contains('a', countNounRegExp[entitiesKey2])
         .then(($a) => {
             // 2. Visit secondary entities side panel.
             const opname = opnameForPrimaryAndSecondaryEntities(entitiesKey1, entitiesKey2);
-            interactAndWaitForResponses(() => {
-                cy.wrap($a).click();
-            }, getRouteMatcherMapForGraphQL([opname]));
+            interactAndWaitForResponses(
+                () => {
+                    cy.wrap($a).click();
+                },
+                getRouteMatcherMapForGraphQL([opname])
+            );
 
             const heading = headingForEntities[entitiesKey2];
             cy.get(

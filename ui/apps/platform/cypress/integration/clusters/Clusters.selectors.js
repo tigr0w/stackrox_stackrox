@@ -1,14 +1,14 @@
 import scopeSelectors from '../../helpers/scopeSelectors';
 
 export const selectors = {
-    clusters: scopeSelectors('[data-testid="clusters-table"]', {
+    clusters: {
         // Ignore the first checkbox column and last delete column.
         tableDataCell: '.rt-tr-group:not(.hidden) .rt-td:not(:first-child):not(.hidden)',
-    }),
+    },
     clusterForm: scopeSelectors('[data-testid="cluster-form"]', {
         nameInput: 'input[name="name"]',
     }),
-    clusterHealth: scopeSelectors('[data-testid="clusters-side-panel"]', {
+    clusterHealth: scopeSelectors('[data-testid="cluster-page"]', {
         clusterStatus: '[data-testid="clusterStatus"]',
         sensorStatus: '[data-testid="sensorStatus"]',
         collectorStatus: '[data-testid="collectorStatus"]',

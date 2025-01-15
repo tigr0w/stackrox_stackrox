@@ -1,3 +1,5 @@
+//go:build test_e2e
+
 package tests
 
 import (
@@ -65,6 +67,7 @@ type ActiveVulnerability struct {
 }
 
 func TestActiveVulnerability(t *testing.T) {
+	t.Skipf("Active Vunerability feature has been disabled for rebuilt later")
 	waitForImageScanned(t)
 	for idx, tc := range nginxImages {
 		t.Run(tc.version, func(t *testing.T) {
@@ -84,6 +87,7 @@ func runTestActiveVulnerability(t *testing.T, idx int, testCase nginxImage) {
 }
 
 func TestActiveVulnerability_SetImage(t *testing.T) {
+	t.Skipf("Active Vunerability feature has been disabled for rebuilt later")
 	waitForImageScanned(t)
 	setupDeploymentWithReplicas(t, nginxImages[0].getImage(), avmDeploymentName, 3)
 	defer teardownDeployment(t, avmDeploymentName)

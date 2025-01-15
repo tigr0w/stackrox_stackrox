@@ -6,8 +6,7 @@ import { entityComponentPropTypes, entityComponentDefaultProps } from 'constants
 import entityTypes from 'constants/entityTypes';
 import { defaultCountKeyMap } from 'constants/workflowPages.constants';
 import workflowStateContext from 'Containers/workflowStateContext';
-import WorkflowEntityPage from 'Containers/Workflow/WorkflowEntityPage';
-import useFeatureFlags from 'hooks/useFeatureFlags';
+import WorkflowEntityPage from '../WorkflowEntityPage';
 import {
     vulMgmtPolicyQuery,
     getScopeQuery,
@@ -28,31 +27,12 @@ const VulmMgmtEntityCluster = ({
 }) => {
     const workflowState = useContext(workflowStateContext);
 
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVMUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-
     const overviewQuery = gql`
-        query getCluster($id: ID!, $policyQuery: String) {
+        query getCluster($id: ID!) {
             result: cluster(id: $id) {
                 id
                 name
                 priority
-                policyStatus(query: $policyQuery) {
-                    status
-                    failingPolicies {
-                        id
-                        name
-                        description
-                        policyStatus
-                        latestViolation
-                        severity
-                        deploymentCount: failingDeploymentCount # field changed to failingDeploymentCount to improve performance
-                        lifecycleStages
-                        enforcementActions
-                        notifiers
-                        lastUpdated
-                    }
-                }
                 #createdAt
                 status {
                     orchestratorMetadata {
@@ -61,38 +41,23 @@ const VulmMgmtEntityCluster = ({
                     }
                 }
                 istioEnabled
-                policyCount(query: $policyQuery)
                 nodeCount
                 namespaceCount
                 deploymentCount
                 imageCount
-                ${
-                    showVMUpdates
-                        ? `
                 imageComponentCount
                 nodeComponentCount
                 imageVulnerabilityCount
                 nodeVulnerabilityCount
                 clusterVulnerabilityCount
-                `
-                        : `
-                componentCount
-                vulnCount
-                `
-                }
             }
         }
     `;
 
     function getListQuery(listFieldName, fragmentName, fragment) {
         // @TODO: if we are ever able to search for k8s and istio vulns, swap out this hack for a regular query
-        const isSearchingByVulnType = search && search['CVE Type'];
-        const parsedListFieldName =
-            isSearchingByVulnType && !showVMUpdates ? 'vulns: k8sVulns' : listFieldName;
-        const parsedEntityListType =
-            isSearchingByVulnType && !showVMUpdates
-                ? defaultCountKeyMap[entityTypes.K8S_CVE]
-                : defaultCountKeyMap[entityListType];
+        const parsedListFieldName = listFieldName;
+        const parsedEntityListType = defaultCountKeyMap[entityListType];
         return gql`
             query getCluster${entityListType}($id: ID!, $pagination: Pagination, $query: String, $policyQuery: String, $scopeQuery: String) {
                 result: cluster(id: $id) {

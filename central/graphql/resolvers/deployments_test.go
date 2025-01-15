@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/central/graphql/resolvers/loaders"
 	"github.com/stackrox/rox/central/views/imagecve"
+	imagesView "github.com/stackrox/rox/central/views/images"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/grpc/authz/allow"
@@ -19,6 +19,7 @@ import (
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestDeploymentResolvers(t *testing.T) {
@@ -45,6 +46,7 @@ func (s *DeploymentResolversTestSuite) SetupSuite() {
 	imgDataStore := CreateTestImageDatastore(s.T(), s.testDB, mockCtrl)
 	resolver, _ := SetupTestResolver(s.T(),
 		CreateTestDeploymentDatastore(s.T(), s.testDB, mockCtrl, imgDataStore),
+		imagesView.NewImageView(s.testDB.DB),
 		imgDataStore,
 		CreateTestImageComponentDatastore(s.T(), s.testDB, mockCtrl),
 		imagecve.NewCVEView(s.testDB.DB),

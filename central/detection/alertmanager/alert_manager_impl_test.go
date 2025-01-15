@@ -7,9 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
-	ptypes "github.com/gogo/protobuf/types"
-	"github.com/golang/mock/gomock"
 	alertMocks "github.com/stackrox/rox/central/alert/datastore/mocks"
 	"github.com/stackrox/rox/central/detection"
 	runtimeDetectorMocks "github.com/stackrox/rox/central/detection/runtime/mocks"
@@ -21,44 +18,50 @@ import (
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fixtures"
 	notifierMocks "github.com/stackrox/rox/pkg/notifier/mocks"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/protoconv"
+	"github.com/stackrox/rox/pkg/protomock"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 var (
-	nowProcess        = getProcessIndicator(ptypes.TimestampNow())
-	yesterdayProcess  = getProcessIndicator(protoconv.ConvertTimeToTimestamp(time.Now().Add(-24 * time.Hour)))
-	twoDaysAgoProcess = getProcessIndicator(protoconv.ConvertTimeToTimestamp(time.Now().Add(-2 * 24 * time.Hour)))
+	now        = time.Now()
+	yesterday  = now.Add(-24 * time.Hour)
+	twoDaysAgo = now.Add(-2 * 24 * time.Hour)
 
-	firstKubeEventViolation  = getKubeEventViolation("1", protoconv.ConvertTimeToTimestamp(time.Now().Add(-24*time.Hour)))
-	secondKubeEventViolation = getKubeEventViolation("2", ptypes.TimestampNow())
+	nowProcess        = getProcessIndicator(now)
+	yesterdayProcess  = getProcessIndicator(yesterday)
+	twoDaysAgoProcess = getProcessIndicator(twoDaysAgo)
 
-	firstNetworkFlowViolation  = getNetworkFlowViolation("1", protoconv.ConvertTimeToTimestamp(time.Now().Add(-24*time.Hour)))
-	secondNetworkFlowViolation = getNetworkFlowViolation("2", ptypes.TimestampNow())
+	firstKubeEventViolation  = getKubeEventViolation("1", yesterday)
+	secondKubeEventViolation = getKubeEventViolation("2", now)
+
+	firstNetworkFlowViolation  = getNetworkFlowViolation("1", yesterday)
+	secondNetworkFlowViolation = getNetworkFlowViolation("2", now)
 )
 
-func getKubeEventViolation(msg string, timestamp *ptypes.Timestamp) *storage.Alert_Violation {
+func getKubeEventViolation(msg string, violationTime time.Time) *storage.Alert_Violation {
 	return &storage.Alert_Violation{
 		Message: msg,
 		Type:    storage.Alert_Violation_K8S_EVENT,
-		Time:    timestamp,
+		Time:    protocompat.ConvertTimeToTimestampOrNil(&violationTime),
 	}
 }
 
-func getNetworkFlowViolation(msg string, networkFlowTimestamp *ptypes.Timestamp) *storage.Alert_Violation {
+func getNetworkFlowViolation(msg string, networkFlowTimestamp time.Time) *storage.Alert_Violation {
 	return &storage.Alert_Violation{
 		Message: msg,
 		MessageAttributes: &storage.Alert_Violation_KeyValueAttrs_{
 			KeyValueAttrs: &storage.Alert_Violation_KeyValueAttrs{
 				Attrs: []*storage.Alert_Violation_KeyValueAttrs_KeyValueAttr{
 					{
-						Key: "NetworkFlowTimestamp",
-						Value: protoconv.
-							ConvertTimestampToTimeOrNow(networkFlowTimestamp).
-							Format("2006-01-02 15:04:05 UTC"),
+						Key:   "NetworkFlowTimestamp",
+						Value: networkFlowTimestamp.Format("2006-01-02 15:04:05 UTC"),
 					},
 				},
 			},
@@ -67,11 +70,11 @@ func getNetworkFlowViolation(msg string, networkFlowTimestamp *ptypes.Timestamp)
 	}
 }
 
-func getProcessIndicator(timestamp *ptypes.Timestamp) *storage.ProcessIndicator {
+func getProcessIndicator(processTime time.Time) *storage.ProcessIndicator {
 	return &storage.ProcessIndicator{
 		Signal: &storage.ProcessSignal{
 			Name: "apt-get",
-			Time: timestamp,
+			Time: protocompat.ConvertTimeToTimestampOrNil(&processTime),
 		},
 	}
 }
@@ -176,17 +179,17 @@ func (suite *AlertManagerTestSuite) TestNotifyAndUpdateBatch() {
 
 	suite.T().Setenv(env.AlertRenotifDebounceDuration.EnvVar(), "5m")
 
-	resolvedAlerts := []*storage.Alert{alerts[0].Clone(), alerts[1].Clone()}
+	resolvedAlerts := []*storage.Alert{alerts[0].CloneVT(), alerts[1].CloneVT()}
 	resolvedAlerts[0].ResolvedAt = protoconv.MustConvertTimeToTimestamp(time.Now().Add(-10 * time.Minute))
 	resolvedAlerts[1].ResolvedAt = protoconv.MustConvertTimeToTimestamp(time.Now().Add(-2 * time.Minute))
 
 	suite.alertsMock.EXPECT().SearchRawAlerts(suite.ctx,
 		testutils.PredMatcher("query for dep 1", func(q *v1.Query) bool {
-			return strings.Contains(proto.MarshalTextString(q), "Dep1")
+			return strings.Contains(protocompat.MarshalTextString(q), "Dep1")
 		})).Return([]*storage.Alert{resolvedAlerts[0]}, nil)
 	suite.alertsMock.EXPECT().SearchRawAlerts(suite.ctx,
 		testutils.PredMatcher("query for dep 2", func(q *v1.Query) bool {
-			return strings.Contains(proto.MarshalTextString(q), "Dep2")
+			return strings.Contains(protocompat.MarshalTextString(q), "Dep2")
 		})).Return([]*storage.Alert{resolvedAlerts[1]}, nil)
 
 	// Only the first alert will get notified
@@ -214,12 +217,12 @@ func (suite *AlertManagerTestSuite) TestGetAlertsByDeployment() {
 	suite.NoError(err, "update should succeed")
 }
 
-func (suite *AlertManagerTestSuite) TestGetAlertsByClusterAndNotResourceType() {
+func (suite *AlertManagerTestSuite) TestGetAlertsByClusterAndResource() {
 	suite.alertsMock.EXPECT().SearchRawAlerts(suite.ctx,
 		testutils.PredMatcher("query for violation state, cluster id and resource type", queryHasFields(search.ViolationState, search.ClusterID, search.ResourceType)),
 	).Return(([]*storage.Alert)(nil), nil)
 
-	modified, err := suite.alertManager.AlertAndNotify(suite.ctx, nil, WithClusterID("cid"), WithoutResourceType(storage.ListAlert_DEPLOYMENT))
+	modified, err := suite.alertManager.AlertAndNotify(suite.ctx, nil, WithLifecycleStage(storage.LifecycleStage_RUNTIME), WithClusterID("cid"), WithNamespace("nn"), WithResource("rn", storage.Alert_Resource_SECRETS))
 	suite.False(modified.Cardinality() > 0)
 	suite.NoError(err, "update should succeed")
 }
@@ -235,10 +238,10 @@ func (suite *AlertManagerTestSuite) TestOnUpdatesWhenAlertsDoNotChange() {
 	suite.NoError(err, "update should succeed")
 }
 
-func (suite *AlertManagerTestSuite) TestMarksOldAlertsStale() {
+func (suite *AlertManagerTestSuite) TestMarksOldAlertsResolved() {
 	alerts := getAlerts()
 
-	suite.alertsMock.EXPECT().MarkAlertStaleBatch(suite.ctx, alerts[0].GetId()).Return([]*storage.Alert{alerts[0]}, nil)
+	suite.alertsMock.EXPECT().MarkAlertsResolvedBatch(suite.ctx, alerts[0].GetId()).Return([]*storage.Alert{alerts[0]}, nil)
 
 	// Unchanged alerts should not be updated.
 
@@ -294,14 +297,14 @@ func (suite *AlertManagerTestSuite) TestNewResourceAlertIsAdded() {
 
 func (suite *AlertManagerTestSuite) TestMergeResourceAlerts() {
 	alerts := getResourceAlerts()
-	newAlert := alerts[0].Clone()
+	newAlert := alerts[0].CloneVT()
 	newAlert.Violations[0].Message = "new-violation"
 
-	expectedMergedAlert := newAlert.Clone()
+	expectedMergedAlert := newAlert.CloneVT()
 	expectedMergedAlert.Violations = append(expectedMergedAlert.Violations, alerts[0].Violations...)
 
 	// Only the merged alert will be updated.
-	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, expectedMergedAlert).Return(nil)
+	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, protomock.GoMockMatcherEqualMessage(expectedMergedAlert)).Return(nil)
 
 	// Updated alert should notify
 	suite.notifierMock.EXPECT().ProcessAlert(gomock.Any(), newAlert).Return()
@@ -322,14 +325,14 @@ func (suite *AlertManagerTestSuite) TestMergeResourceAlerts() {
 func (suite *AlertManagerTestSuite) TestMergeResourceAlertsNoNotify() {
 	suite.T().Setenv("NOTIFY_EVERY_RUNTIME_EVENT", "false")
 	alerts := getResourceAlerts()
-	newAlert := alerts[0].Clone()
+	newAlert := alerts[0].CloneVT()
 	newAlert.Violations[0].Message = "new-violation"
 
-	expectedMergedAlert := newAlert.Clone()
+	expectedMergedAlert := newAlert.CloneVT()
 	expectedMergedAlert.Violations = append(expectedMergedAlert.Violations, alerts[0].Violations...)
 
 	// Only the merged alert will be updated.
-	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, expectedMergedAlert).Return(nil)
+	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, protomock.GoMockMatcherEqualMessage(expectedMergedAlert)).Return(nil)
 
 	// Updated alert should not notify
 
@@ -348,9 +351,9 @@ func (suite *AlertManagerTestSuite) TestMergeResourceAlertsNoNotify() {
 
 func (suite *AlertManagerTestSuite) TestMergeMultipleResourceAlerts() {
 	alerts := getResourceAlerts()
-	newAlert := alerts[0].Clone()
+	newAlert := alerts[0].CloneVT()
 	newAlert.Violations[0].Message = "new-violation"
-	newAlert2 := alerts[0].Clone()
+	newAlert2 := alerts[0].CloneVT()
 	newAlert2.Violations[0].Message = "new-violation-2"
 
 	// There will be two calls to Upsert
@@ -376,18 +379,18 @@ func (suite *AlertManagerTestSuite) TestMergeMultipleResourceAlerts() {
 
 func (suite *AlertManagerTestSuite) TestMergeResourceAlertsKeepsNewViolationsIfMoreThanMax() {
 	alerts := getResourceAlerts()
-	newAlert := alerts[0].Clone()
+	newAlert := alerts[0].CloneVT()
 	newAlert.Violations = make([]*storage.Alert_Violation, maxRunTimeViolationsPerAlert)
 	for i := 0; i < maxRunTimeViolationsPerAlert; i++ {
 		newAlert.Violations[i] = &storage.Alert_Violation{Message: fmt.Sprintf("new-violation-%d", i), Type: storage.Alert_Violation_K8S_EVENT}
 	}
 
-	expectedMergedAlert := newAlert.Clone()
+	expectedMergedAlert := newAlert.CloneVT()
 	expectedMergedAlert.Violations = append(expectedMergedAlert.Violations, alerts[0].Violations...)
 	expectedMergedAlert.Violations = expectedMergedAlert.Violations[:maxRunTimeViolationsPerAlert]
 
 	// Only the merged alert will be updated.
-	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, expectedMergedAlert).Return(nil)
+	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, protomock.GoMockMatcherEqualMessage(expectedMergedAlert)).Return(nil)
 
 	// Updated alert should notify if set to
 	if env.NotifyOnEveryRuntimeEvent() {
@@ -410,18 +413,18 @@ func (suite *AlertManagerTestSuite) TestMergeResourceAlertsKeepsNewViolationsIfM
 func (suite *AlertManagerTestSuite) TestMergeResourceAlertsKeepsNewViolationsIfMoreThanMaxNoNotify() {
 	suite.T().Setenv("NOTIFY_EVERY_RUNTIME_EVENT", "false")
 	alerts := getResourceAlerts()
-	newAlert := alerts[0].Clone()
+	newAlert := alerts[0].CloneVT()
 	newAlert.Violations = make([]*storage.Alert_Violation, maxRunTimeViolationsPerAlert)
 	for i := 0; i < maxRunTimeViolationsPerAlert; i++ {
 		newAlert.Violations[i] = &storage.Alert_Violation{Message: fmt.Sprintf("new-violation-%d", i), Type: storage.Alert_Violation_K8S_EVENT}
 	}
 
-	expectedMergedAlert := newAlert.Clone()
+	expectedMergedAlert := newAlert.CloneVT()
 	expectedMergedAlert.Violations = append(expectedMergedAlert.Violations, alerts[0].Violations...)
 	expectedMergedAlert.Violations = expectedMergedAlert.Violations[:maxRunTimeViolationsPerAlert]
 
 	// Only the merged alert will be updated.
-	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, expectedMergedAlert).Return(nil)
+	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, protomock.GoMockMatcherEqualMessage(expectedMergedAlert)).Return(nil)
 
 	// Updated alert should not notify
 
@@ -444,13 +447,13 @@ func (suite *AlertManagerTestSuite) TestMergeResourceAlertsOnlyKeepsMaxViolation
 	for i := 0; i < maxRunTimeViolationsPerAlert; i++ {
 		alerts[0].Violations[i] = &storage.Alert_Violation{Message: fmt.Sprintf("old-violation-%d", i), Type: storage.Alert_Violation_K8S_EVENT}
 	}
-	newAlert := alerts[0].Clone()
+	newAlert := alerts[0].CloneVT()
 	newAlert.Violations[0].Message = "new-violation"
 
-	expectedMergedAlert := newAlert.Clone()
+	expectedMergedAlert := newAlert.CloneVT()
 
 	// Only the merged alert will be updated.
-	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, expectedMergedAlert).Return(nil)
+	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, protomock.GoMockMatcherEqualMessage(expectedMergedAlert)).Return(nil)
 
 	// Updated alert should notify if set to
 	suite.notifierMock.EXPECT().ProcessAlert(gomock.Any(), newAlert).Return()
@@ -475,13 +478,13 @@ func (suite *AlertManagerTestSuite) TestMergeResourceAlertsOnlyKeepsMaxViolation
 	for i := 0; i < maxRunTimeViolationsPerAlert; i++ {
 		alerts[0].Violations[i] = &storage.Alert_Violation{Message: fmt.Sprintf("old-violation-%d", i), Type: storage.Alert_Violation_K8S_EVENT}
 	}
-	newAlert := alerts[0].Clone()
+	newAlert := alerts[0].CloneVT()
 	newAlert.Violations[0].Message = "new-violation"
 
-	expectedMergedAlert := newAlert.Clone()
+	expectedMergedAlert := newAlert.CloneVT()
 
 	// Only the merged alert will be updated.
-	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, expectedMergedAlert).Return(nil)
+	suite.alertsMock.EXPECT().UpsertAlert(suite.ctx, protomock.GoMockMatcherEqualMessage(expectedMergedAlert)).Return(nil)
 
 	// Updated alert should not notify
 
@@ -498,7 +501,7 @@ func (suite *AlertManagerTestSuite) TestMergeResourceAlertsOnlyKeepsMaxViolation
 	suite.NoError(err, "update should succeed")
 }
 
-func (suite *AlertManagerTestSuite) TestOldResourceAlertAreMarkedAsStaleWhenPolicyIsRemoved() {
+func (suite *AlertManagerTestSuite) TestOldResourceAlertAreMarkedAsResolvedWhenPolicyIsRemoved() {
 	alerts := getResourceAlerts()
 	newAlert := fixtures.GetResourceAlert()
 
@@ -519,7 +522,7 @@ func (suite *AlertManagerTestSuite) TestOldResourceAlertAreMarkedAsStaleWhenPoli
 	}
 
 	// Verify that the other alerts get marked as stale and that the notifier sends a notification for them
-	suite.alertsMock.EXPECT().MarkAlertStaleBatch(suite.ctx, ids).Return(alerts, nil)
+	suite.alertsMock.EXPECT().MarkAlertsResolvedBatch(suite.ctx, ids).Return(alerts, nil)
 
 	for _, a := range alerts {
 		suite.notifierMock.EXPECT().ProcessAlert(gomock.Any(), a).Return()
@@ -570,7 +573,7 @@ func TestMergeProcessesFromOldIntoNew(t *testing.T) {
 			out := mergeProcessesFromOldIntoNew(c.old, c.new)
 			assert.Equal(t, c.expectedOutput, out)
 			if c.expectedNew != nil {
-				assert.Equal(t, c.expectedNew, c.new)
+				protoassert.Equal(t, c.expectedNew, c.new)
 			}
 		})
 	}
@@ -700,7 +703,7 @@ func TestMergeRunTimeAlerts(t *testing.T) {
 			out := mergeRunTimeAlerts(c.old, c.new)
 			assert.Equal(t, c.expectedOutput, out)
 			if c.expectedNew != nil {
-				assert.Equal(t, c.expectedNew, c.new)
+				protoassert.Equal(t, c.expectedNew, c.new)
 			}
 		})
 	}
@@ -709,16 +712,11 @@ func TestMergeRunTimeAlerts(t *testing.T) {
 func TestFindAlert(t *testing.T) {
 	resourceAlerts := []*storage.Alert{getResourceAlerts()[0], fixtures.GetResourceAlert()}
 
-	snoozedAlert := getAlerts()[0].Clone()
-	snoozedAlert.State = storage.ViolationState_SNOOZED
-	snoozedResourceAlert := getResourceAlerts()[0].Clone()
-	snoozedResourceAlert.State = storage.ViolationState_SNOOZED
+	resourceAlertWithAltPolicy := getResourceAlerts()[0].CloneVT()
+	resourceAlertWithAltPolicy.Policy = getPolicies()[0].CloneVT()
 
-	resourceAlertWithAltPolicy := getResourceAlerts()[0].Clone()
-	resourceAlertWithAltPolicy.Policy = getPolicies()[0].Clone()
-
-	resourceAlertWithAltPolicyAndResource := getResourceAlerts()[1].Clone()
-	resourceAlertWithAltPolicyAndResource.Policy = getPolicies()[0].Clone()
+	resourceAlertWithAltPolicyAndResource := getResourceAlerts()[1].CloneVT()
+	resourceAlertWithAltPolicyAndResource.Policy = getPolicies()[0].CloneVT()
 
 	for _, c := range []struct {
 		desc     string
@@ -734,12 +732,6 @@ func TestFindAlert(t *testing.T) {
 			expected: getAlerts()[0],
 		},
 		{
-			desc:     "Same policy, same deploy, Diff state, No alert found",
-			toFind:   snoozedAlert,
-			alerts:   getAlerts(),
-			expected: nil,
-		},
-		{
 			desc:     "Diff policy, Diff deploy, Same state, No alert found",
 			toFind:   fixtures.GetAlert(),
 			alerts:   getAlerts(),
@@ -751,12 +743,6 @@ func TestFindAlert(t *testing.T) {
 			toFind:   getResourceAlerts()[0],
 			alerts:   resourceAlerts,
 			expected: getResourceAlerts()[0],
-		},
-		{
-			desc:     "Same policy, Same resource, Diff state, No alert found",
-			toFind:   snoozedResourceAlert,
-			alerts:   resourceAlerts,
-			expected: nil,
 		},
 		{
 			desc:     "Diff policy, Same resource, Same state, No alert found",
@@ -828,7 +814,7 @@ func TestFindAlert(t *testing.T) {
 	} {
 		t.Run(c.desc, func(t *testing.T) {
 			found := findAlert(c.toFind, c.alerts)
-			assert.Equal(t, c.expected, found)
+			protoassert.Equal(t, c.expected, found)
 		})
 	}
 }
@@ -844,19 +830,19 @@ func getAlerts() []*storage.Alert {
 			Id:     "alert1",
 			Policy: getPolicies()[0],
 			Entity: &storage.Alert_Deployment_{Deployment: getDeployments()[0]},
-			Time:   &ptypes.Timestamp{Seconds: 100},
+			Time:   protocompat.GetProtoTimestampFromSeconds(100),
 		},
 		{
 			Id:     "alert2",
 			Policy: getPolicies()[1],
 			Entity: &storage.Alert_Deployment_{Deployment: getDeployments()[1]},
-			Time:   &ptypes.Timestamp{Seconds: 200},
+			Time:   protocompat.GetProtoTimestampFromSeconds(200),
 		},
 		{
 			Id:     "alert3",
 			Policy: getPolicies()[2],
 			Entity: &storage.Alert_Deployment_{Deployment: getDeployments()[2]},
-			Time:   &ptypes.Timestamp{Seconds: 300},
+			Time:   protocompat.GetProtoTimestampFromSeconds(300),
 		},
 	}
 }
@@ -986,7 +972,7 @@ func getResourceAlerts() []*storage.Alert {
 			Policy:         fixtures.GetAuditLogEventSourcePolicy(),
 			Entity:         &storage.Alert_Resource_{Resource: getResources()[0]},
 			LifecycleStage: storage.LifecycleStage_RUNTIME,
-			Time:           &ptypes.Timestamp{Seconds: 100},
+			Time:           protocompat.GetProtoTimestampFromSeconds(100),
 			Violations:     []*storage.Alert_Violation{{Message: "violation-alert-1", Type: storage.Alert_Violation_K8S_EVENT}},
 		},
 		{
@@ -994,7 +980,7 @@ func getResourceAlerts() []*storage.Alert {
 			Policy:         fixtures.GetAuditLogEventSourcePolicy(),
 			Entity:         &storage.Alert_Resource_{Resource: getResources()[1]},
 			LifecycleStage: storage.LifecycleStage_RUNTIME,
-			Time:           &ptypes.Timestamp{Seconds: 200},
+			Time:           protocompat.GetProtoTimestampFromSeconds(200),
 			Violations:     []*storage.Alert_Violation{{Message: "violation-alert-2", Type: storage.Alert_Violation_K8S_EVENT}},
 		},
 		{
@@ -1002,7 +988,7 @@ func getResourceAlerts() []*storage.Alert {
 			Policy:         fixtures.GetAuditLogEventSourcePolicy(),
 			Entity:         &storage.Alert_Resource_{Resource: getResources()[2]},
 			LifecycleStage: storage.LifecycleStage_RUNTIME,
-			Time:           &ptypes.Timestamp{Seconds: 300},
+			Time:           protocompat.GetProtoTimestampFromSeconds(300),
 			Violations:     []*storage.Alert_Violation{{Message: "violation-alert-3", Type: storage.Alert_Violation_K8S_EVENT}},
 		},
 		{
@@ -1010,7 +996,7 @@ func getResourceAlerts() []*storage.Alert {
 			Policy:         fixtures.GetAuditLogEventSourcePolicy(),
 			Entity:         &storage.Alert_Resource_{Resource: getResources()[3]},
 			LifecycleStage: storage.LifecycleStage_RUNTIME,
-			Time:           &ptypes.Timestamp{Seconds: 400},
+			Time:           protocompat.GetProtoTimestampFromSeconds(400),
 			Violations:     []*storage.Alert_Violation{{Message: "violation-alert-4", Type: storage.Alert_Violation_K8S_EVENT}},
 		},
 		{
@@ -1018,7 +1004,7 @@ func getResourceAlerts() []*storage.Alert {
 			Policy:         fixtures.GetAuditLogEventSourcePolicy(),
 			Entity:         &storage.Alert_Resource_{Resource: getResources()[4]},
 			LifecycleStage: storage.LifecycleStage_RUNTIME,
-			Time:           &ptypes.Timestamp{Seconds: 500},
+			Time:           protocompat.GetProtoTimestampFromSeconds(500),
 			Violations:     []*storage.Alert_Violation{{Message: "violation-alert-5", Type: storage.Alert_Violation_K8S_EVENT}},
 		},
 	}

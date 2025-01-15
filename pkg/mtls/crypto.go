@@ -60,11 +60,6 @@ const (
 
 	ephemeralProfileWithExpirationInDays             = "ephemeralWithExpirationInDays"
 	ephemeralProfileWithExpirationInDaysCertLifetime = 2 * 24 * time.Hour
-
-	// CentralDBCertFileName is the default file name for Central DB certificate.
-	CentralDBCertFileName = "central-db-cert.pem"
-	// CentralDBKeyFileName is the default file name for Central DB key.
-	CentralDBKeyFileName = "central-db-key.pem"
 )
 
 var (
@@ -103,6 +98,18 @@ var (
 
 	// ScannerDBSubject is the identity used in certificates for Scanners Postgres DB
 	ScannerDBSubject = Subject{ServiceType: storage.ServiceType_SCANNER_DB_SERVICE, Identifier: "Scanner DB"}
+
+	// ScannerV4IndexerSubject is the identity used in certificates for Scanner V4 Indexer.
+	ScannerV4IndexerSubject = Subject{ServiceType: storage.ServiceType_SCANNER_V4_INDEXER_SERVICE, Identifier: "Scanner V4 Indexer"}
+
+	// ScannerV4MatcherSubject is the identity used in certificates for Scanner V4 Matcher.
+	ScannerV4MatcherSubject = Subject{ServiceType: storage.ServiceType_SCANNER_V4_MATCHER_SERVICE, Identifier: "Scanner V4 Matcher"}
+
+	// ScannerV4DBSubject is the identity used in certificates for Scanner V4 DB.
+	ScannerV4DBSubject = Subject{ServiceType: storage.ServiceType_SCANNER_V4_DB_SERVICE, Identifier: "Scanner V4 DB"}
+
+	// ScannerV4Subject is the identity used in certificates for Scanner V4 running in combo-mode (testing, only).
+	ScannerV4Subject = Subject{ServiceType: storage.ServiceType_SCANNER_V4_SERVICE, Identifier: "Scanner V4"}
 
 	readCACertOnce     sync.Once
 	caCert             *x509.Certificate

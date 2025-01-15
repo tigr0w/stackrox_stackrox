@@ -3,16 +3,10 @@ package search
 import (
 	"context"
 
-	podIndexer "github.com/stackrox/rox/central/pod/index"
-	"github.com/stackrox/rox/central/pod/store"
+	"github.com/stackrox/rox/central/pod/datastore/internal/store"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/search"
-)
-
-var (
-	log = logging.LoggerForModule()
 )
 
 // Searcher provides search functionality on existing pods
@@ -24,10 +18,10 @@ type Searcher interface {
 	SearchRawPods(ctx context.Context, q *v1.Query) ([]*storage.Pod, error)
 }
 
-// New returns a new instance of Searcher for the given storage and indexer.
-func New(storage store.Store, podIndexer podIndexer.Indexer) Searcher {
+// New returns a new instance of Searcher for the given storage.
+func New(storage store.Store) Searcher {
 	return &searcherImpl{
 		storage:  storage,
-		searcher: formatSearcher(podIndexer),
+		searcher: formatSearcher(storage),
 	}
 }

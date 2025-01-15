@@ -1,7 +1,6 @@
 import React, { useEffect, CSSProperties } from 'react';
 import {
     Alert,
-    AlertVariant,
     Bullseye,
     Flex,
     FlexItem,
@@ -13,12 +12,12 @@ import {
     Tabs,
     TabTitleText,
     Text,
-    TextContent,
-    TextVariants,
+    Title,
 } from '@patternfly/react-core';
 
 import useTabs from 'hooks/patternfly/useTabs';
 import useFetchDeployment from 'hooks/useFetchDeployment';
+import usePermissions from 'hooks/usePermissions';
 import {
     getListenPorts,
     getNodeById,
@@ -38,10 +37,11 @@ import { deploymentTabs } from '../utils/deploymentUtils';
 import useFetchNetworkFlows from '../api/useFetchNetworkFlows';
 
 const sidebarHeadingStyleConstant = {
-    '--pf-u-max-width--MaxWidth': '26ch',
+    '--pf-v5-u-max-width--MaxWidth': '26ch',
 } as CSSProperties;
 
 type DeploymentSideBarProps = {
+    labelledById: string; // corresponds to aria-labelledby prop of TopologySideBar
     deploymentId: string;
     nodes: CustomNodeModel[];
     edges: CustomEdgeModel[];
@@ -51,6 +51,7 @@ type DeploymentSideBarProps = {
 };
 
 function DeploymentSideBar({
+    labelledById,
     deploymentId,
     nodes,
     edges,
@@ -59,6 +60,9 @@ function DeploymentSideBar({
     defaultDeploymentTab,
 }: DeploymentSideBarProps) {
     // component state
+    const { hasReadAccess } = usePermissions();
+    const hasReadAccessForDeploymentExtension = hasReadAccess('DeploymentExtension');
+    const hasReadAccessForNetworkPolicy = hasReadAccess('NetworkPolicy');
     const { deployment, isLoading: isLoadingDeployment, error } = useFetchDeployment(deploymentId);
     const { activeKeyTab, onSelectTab, setActiveKeyTab } = useTabs({
         defaultTab: defaultDeploymentTab,
@@ -102,7 +106,7 @@ function DeploymentSideBar({
     if (isLoadingDeployment) {
         return (
             <Bullseye>
-                <Spinner isSVG size="lg" />
+                <Spinner size="lg" />
             </Bullseye>
         );
     }
@@ -111,7 +115,7 @@ function DeploymentSideBar({
         return (
             <Stack>
                 <StackItem>
-                    <Flex direction={{ default: 'row' }} className="pf-u-p-md pf-u-mb-0">
+                    <Flex direction={{ default: 'row' }} className="pf-v5-u-p-md pf-v5-u-mb-0">
                         <FlexItem>
                             <DeploymentIcon />
                         </FlexItem>
@@ -119,9 +123,10 @@ function DeploymentSideBar({
                 </StackItem>
                 <StackItem>
                     <Alert
-                        variant={AlertVariant.danger}
+                        variant="danger"
                         title={error.toString()}
-                        className="pf-u-my-lg pf-u-mx-lg"
+                        component="p"
+                        className="pf-v5-u-my-lg pf-v5-u-mx-lg"
                     />
                 </StackItem>
             </Stack>
@@ -131,30 +136,26 @@ function DeploymentSideBar({
     return (
         <Stack>
             <StackItem>
-                <Flex direction={{ default: 'row' }} className="pf-u-p-md pf-u-mb-0">
+                <Flex direction={{ default: 'row' }} className="pf-v5-u-p-md pf-v5-u-mb-0">
                     <FlexItem>
                         <DeploymentIcon />
                     </FlexItem>
                     <FlexItem>
-                        <TextContent>
-                            <Text
-                                component={TextVariants.h1}
-                                className="pf-u-font-size-xl pf-u-max-width"
-                                style={sidebarHeadingStyleConstant}
-                                data-testid="drawer-title"
-                            >
-                                {deployment?.name}
-                            </Text>
-                        </TextContent>
-                        <TextContent>
-                            <Text
-                                component={TextVariants.h2}
-                                className="pf-u-font-size-sm pf-u-color-200"
-                                data-testid="drawer-subtitle"
-                            >
-                                in &quot;{deployment?.clusterName} / {deployment?.namespace}&quot;
-                            </Text>
-                        </TextContent>
+                        <Title
+                            headingLevel="h2"
+                            id={labelledById}
+                            className="pf-v5-u-max-width"
+                            style={sidebarHeadingStyleConstant}
+                            data-testid="drawer-title"
+                        >
+                            {deployment?.name}
+                        </Title>
+                        <Text
+                            className="pf-v5-u-font-size-sm pf-v5-u-color-200"
+                            data-testid="drawer-subtitle"
+                        >
+                            in &quot;{deployment?.clusterName} / {deployment?.namespace}&quot;
+                        </Text>
                     </FlexItem>
                 </Flex>
             </StackItem>
@@ -174,19 +175,25 @@ function DeploymentSideBar({
                                 title={<TabTitleText>{deploymentTabs.FLOWS}</TabTitleText>}
                                 disabled={isBaselineSimulationOn}
                             />
-                            <Tab
-                                eventKey={deploymentTabs.BASELINE}
-                                tabContentId={deploymentTabs.BASELINE}
-                                title={<TabTitleText>{deploymentTabs.BASELINE}</TabTitleText>}
-                            />
-                            <Tab
-                                eventKey={deploymentTabs.NETWORK_POLICIES}
-                                tabContentId={deploymentTabs.NETWORK_POLICIES}
-                                title={
-                                    <TabTitleText>{deploymentTabs.NETWORK_POLICIES}</TabTitleText>
-                                }
-                                disabled={isBaselineSimulationOn}
-                            />
+                            {hasReadAccessForDeploymentExtension && (
+                                <Tab
+                                    eventKey={deploymentTabs.BASELINE}
+                                    tabContentId={deploymentTabs.BASELINE}
+                                    title={<TabTitleText>{deploymentTabs.BASELINE}</TabTitleText>}
+                                />
+                            )}
+                            {hasReadAccessForNetworkPolicy && (
+                                <Tab
+                                    eventKey={deploymentTabs.NETWORK_POLICIES}
+                                    tabContentId="Network_policies"
+                                    title={
+                                        <TabTitleText>
+                                            {deploymentTabs.NETWORK_POLICIES}
+                                        </TabTitleText>
+                                    }
+                                    disabled={isBaselineSimulationOn}
+                                />
+                            )}
                         </Tabs>
                     </StackItem>
                     <StackItem isFilled style={{ overflow: 'auto' }}>
@@ -228,7 +235,7 @@ function DeploymentSideBar({
                             eventKey={deploymentTabs.BASELINE}
                             id={deploymentTabs.BASELINE}
                             hidden={activeKeyTab !== deploymentTabs.BASELINE}
-                            className="pf-u-h-100"
+                            className="pf-v5-u-h-100"
                         >
                             {activeKeyTab === deploymentTabs.BASELINE && (
                                 <DeploymentBaselines
@@ -238,16 +245,18 @@ function DeploymentSideBar({
                                 />
                             )}
                         </TabContent>
-                        <TabContent
-                            eventKey={deploymentTabs.NETWORK_POLICIES}
-                            id={deploymentTabs.NETWORK_POLICIES}
-                            hidden={activeKeyTab !== deploymentTabs.NETWORK_POLICIES}
-                        >
-                            <NetworkPolicies
-                                entityName={deployment.name}
-                                policyIds={deploymentPolicyIds}
-                            />
-                        </TabContent>
+                        {hasReadAccessForNetworkPolicy && (
+                            <TabContent
+                                eventKey={deploymentTabs.NETWORK_POLICIES}
+                                id="Network_policies"
+                                hidden={activeKeyTab !== deploymentTabs.NETWORK_POLICIES}
+                            >
+                                <NetworkPolicies
+                                    entityName={deployment.name}
+                                    policyIds={deploymentPolicyIds}
+                                />
+                            </TabContent>
+                        )}
                     </StackItem>
                 </>
             )}

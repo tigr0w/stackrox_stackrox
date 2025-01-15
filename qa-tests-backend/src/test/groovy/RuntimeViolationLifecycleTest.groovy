@@ -15,7 +15,10 @@ import services.AlertService
 import util.Timer
 
 import spock.lang.Tag
+import spock.lang.IgnoreIf
 
+@Tag("PZ")
+@IgnoreIf({ Env.COLLECTION_METHOD == "NO_COLLECTION" })
 class RuntimeViolationLifecycleTest extends BaseSpecification  {
     static final private String APTGETPOLICY = "Ubuntu Package Manager Execution"
 
@@ -173,7 +176,7 @@ class RuntimeViolationLifecycleTest extends BaseSpecification  {
 
         cleanup:
         if (deploymentCreated) {
-            orchestrator.deleteDeployment(DEPLOYMENT)
+            orchestrator.deleteAndWaitForDeploymentDeletion(DEPLOYMENT)
         }
 
         // Restore the original policy.
@@ -219,7 +222,7 @@ class RuntimeViolationLifecycleTest extends BaseSpecification  {
 
         cleanup:
         if (!deploymentDeleted) {
-            orchestrator.deleteDeployment(DEPLOYMENT)
+            orchestrator.deleteAndWaitForDeploymentDeletion(DEPLOYMENT)
         }
     }
 }

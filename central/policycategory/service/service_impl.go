@@ -4,10 +4,9 @@ import (
 	"context"
 	"regexp"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/policycategory/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
@@ -15,19 +14,18 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"google.golang.org/grpc"
 )
 
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
-		// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-		user.With(permissions.View(resources.Policy)): {
+		user.With(permissions.View(resources.WorkflowAdministration)): {
 			"/v1.PolicyCategoryService/GetPolicyCategory",
 			"/v1.PolicyCategoryService/GetPolicyCategories",
 		},
-		// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-		user.With(permissions.Modify(resources.Policy)): {
+		user.With(permissions.Modify(resources.WorkflowAdministration)): {
 			"/v1.PolicyCategoryService/PostPolicyCategory",
 			"/v1.PolicyCategoryService/RenamePolicyCategory",
 			"/v1.PolicyCategoryService/DeletePolicyCategory",

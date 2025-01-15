@@ -1,6 +1,7 @@
 import React, { ReactElement } from 'react';
 import { TextInput, PageSection, Form, Checkbox } from '@patternfly/react-core';
 import * as yup from 'yup';
+import merge from 'lodash/merge';
 
 import { ClairV4ImageIntegration } from 'types/imageIntegration.proto';
 
@@ -46,9 +47,7 @@ function ClairV4IntegrationForm({
     initialValues = null,
     isEditable = false,
 }: IntegrationFormProps<ClairV4ImageIntegration>): ReactElement {
-    const formInitialValues = initialValues
-        ? ({ ...defaultValues, ...initialValues } as ClairV4ImageIntegration)
-        : defaultValues;
+    const formInitialValues: ClairV4ImageIntegration = merge({}, defaultValues, initialValues);
     const {
         values,
         touched,
@@ -89,7 +88,7 @@ function ClairV4IntegrationForm({
                             type="text"
                             id="name"
                             value={values.name}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -106,7 +105,7 @@ function ClairV4IntegrationForm({
                             type="text"
                             id="clairV4.endpoint"
                             value={values.clairV4.endpoint}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -116,7 +115,7 @@ function ClairV4IntegrationForm({
                             label="Disable TLS certificate validation (insecure)"
                             id="clairV4.insecure"
                             isChecked={values.clairV4.insecure}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />

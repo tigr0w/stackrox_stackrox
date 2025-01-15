@@ -6,7 +6,7 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/delegatedregistry"
-	"github.com/stackrox/rox/pkg/expiringcache"
+	"github.com/stackrox/rox/pkg/images/cache"
 	"github.com/stackrox/rox/pkg/images/integration"
 	"github.com/stackrox/rox/pkg/integrationhealth"
 	"github.com/stackrox/rox/pkg/logging"
@@ -35,6 +35,7 @@ const (
 	ForceRefetchScansOnly
 	ForceRefetchSignaturesOnly
 	ForceRefetchCachedValuesOnly
+	UseImageNamesRefetchCachedValues
 )
 
 // forceRefetchCachedValues implies whether the cached values within the database should be skipped and refetched.
@@ -66,6 +67,13 @@ type EnrichmentContext struct {
 	// Delegable indicates enrichment request can be delegated to a secured cluster.
 	// Set via ad-hoc requests such as "roxctl image scan".
 	Delegable bool
+
+	// ClusterID contains the ID of the cluster to delegate the enrichment request to if the request is Delegable.
+	// Used to override the delegated registry configuration.
+	ClusterID string
+
+	// Namespace contains the name of the namespace used to filter NetworkPolicies for Deployments.
+	Namespace string
 
 	Source *RequestSource
 }
@@ -112,7 +120,7 @@ type ImageEnricher interface {
 	EnrichImage(ctx context.Context, enrichCtx EnrichmentContext, image *storage.Image) (EnrichmentResult, error)
 	// EnrichWithVulnerabilities will enrich an image with its components and their associated vulnerabilities only.
 	// This will always force re-enrichment and not take existing values into account.
-	EnrichWithVulnerabilities(image *storage.Image, components *scannerV1.Components, notes []scannerV1.Note) (EnrichmentResult, error)
+	EnrichWithVulnerabilities(image *storage.Image, components *scannerTypes.ScanComponents, notes []scannerV1.Note) (EnrichmentResult, error)
 	// EnrichWithSignatureVerificationData will enrich an image with signature verification results only.
 	// This will always force re-verification and not take existing values into account.
 	EnrichWithSignatureVerificationData(ctx context.Context, image *storage.Image) (EnrichmentResult, error)
@@ -135,7 +143,7 @@ type signatureVerifierForIntegrations func(ctx context.Context, integrations []*
 
 // New returns a new ImageEnricher instance for the given subsystem.
 // (The subsystem is just used for Prometheus metrics.)
-func New(cvesSuppressor CVESuppressor, cvesSuppressorV2 CVESuppressor, is integration.Set, subsystem pkgMetrics.Subsystem, metadataCache expiringcache.Cache,
+func New(cvesSuppressor CVESuppressor, cvesSuppressorV2 CVESuppressor, is integration.Set, subsystem pkgMetrics.Subsystem, metadataCache cache.ImageMetadata,
 	imageGetter ImageGetter, healthReporter integrationhealth.Reporter,
 	signatureIntegrationGetter SignatureIntegrationGetter, scanDelegator delegatedregistry.Delegator) ImageEnricher {
 	enricher := &enricherImpl{
@@ -144,7 +152,7 @@ func New(cvesSuppressor CVESuppressor, cvesSuppressorV2 CVESuppressor, is integr
 		integrations:     is,
 
 		// number of consecutive errors per registry or scanner to ascertain health of the integration
-		errorsPerRegistry:         make(map[registryTypes.ImageRegistry]int32, len(is.RegistrySet().GetAll())),
+		errorsPerRegistry:         make(map[registryTypes.ImageRegistry]int32),
 		errorsPerScanner:          make(map[scannerTypes.ImageScannerWithDataSource]int32, len(is.ScannerSet().GetAll())),
 		integrationHealthReporter: healthReporter,
 

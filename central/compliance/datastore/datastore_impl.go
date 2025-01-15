@@ -9,11 +9,11 @@ import (
 	"github.com/stackrox/rox/central/compliance/datastore/internal/store"
 	"github.com/stackrox/rox/central/compliance/datastore/types"
 	"github.com/stackrox/rox/central/compliance/standards"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sync"
 )
 
@@ -174,11 +174,6 @@ func (ds *datastoreImpl) StoreComplianceDomain(ctx context.Context, domain *stor
 }
 
 func (ds *datastoreImpl) PerformStoredAggregation(ctx context.Context, args *StoredAggregationArgs) ([]*storage.ComplianceAggregation_Result, []*storage.ComplianceAggregation_Source, map[*storage.ComplianceAggregation_Result]*storage.ComplianceDomain, error) {
-	// TODO(ROX-9134): consider storing compliance results for Unrestricted scope
-	if true {
-		return args.AggregationFunc()
-	}
-
 	// Check for a pre-computed aggregation for this query
 	results, sources, domainMap, err := ds.storage.GetAggregationResult(ctx, args.QueryString, args.GroupBy, args.Unit)
 	if err != nil {

@@ -1,10 +1,9 @@
 import static util.Helpers.withRetry
 
-import java.util.concurrent.TimeUnit
-
 import io.grpc.StatusRuntimeException
 
 import io.stackrox.proto.storage.ClusterOuterClass
+import io.stackrox.proto.storage.ExternalBackupOuterClass.S3URLStyle
 import io.stackrox.proto.storage.NotifierOuterClass
 import io.stackrox.proto.storage.PolicyOuterClass
 import io.stackrox.proto.storage.ScopeOuterClass
@@ -15,6 +14,8 @@ import objects.ClairScannerIntegration
 import objects.Deployment
 import objects.ECRRegistryIntegration
 import objects.EmailNotifier
+import objects.GHCRImageIntegration
+import objects.GoogleArtifactRegistry
 import objects.GCRImageIntegration
 import objects.GenericNotifier
 import objects.NetworkPolicy
@@ -29,7 +30,6 @@ import services.ClusterService
 import services.ExternalBackupService
 import services.ImageIntegrationService
 import services.NetworkPolicyService
-import services.NotifierService
 import services.PolicyService
 import util.Env
 import util.MailServer
@@ -37,12 +37,11 @@ import util.SplunkUtil
 import util.SyslogServer
 
 import org.junit.Assume
-import org.junit.Rule
-import org.junit.rules.Timeout
 import spock.lang.IgnoreIf
 import spock.lang.Tag
 import spock.lang.Unroll
 
+@Tag("PZ")
 class IntegrationsTest extends BaseSpecification {
     static final private String NOTIFIERDEPLOYMENT = "netpol-notification-test-deployment"
 
@@ -56,10 +55,6 @@ class IntegrationsTest extends BaseSpecification {
     private static final CA_CERT = Env.mustGetInCI("GENERIC_WEBHOOK_SERVER_CA_CONTENTS")
 
     static final private Integer WAIT_FOR_VIOLATION_TIMEOUT = 30
-
-    @Rule
-    @SuppressWarnings(["JUnitPublicProperty"])
-    Timeout globalTimeout = new Timeout(1000, TimeUnit.SECONDS)
 
     def setupSpec() {
         orchestrator.batchCreateDeployments(DEPLOYMENTS)
@@ -187,15 +182,15 @@ class IntegrationsTest extends BaseSpecification {
     @Tag("Integration")
     // splunk is not supported on P/Z
     @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
-    def "Verify Splunk Integration (legacy mode: #legacy)"() {
+    def "Verify Splunk Integration"() {
         given:
         "the integration is tested"
-        SplunkUtil.SplunkDeployment parts = SplunkUtil.createSplunk(orchestrator,
-                Constants.ORCHESTRATOR_NAMESPACE, true)
+        SplunkUtil.SplunkDeployment parts = SplunkUtil.createSplunk(orchestrator, Constants.ORCHESTRATOR_NAMESPACE)
+        SplunkUtil.waitForSplunkBoot(parts.splunkPortForward.localPort)
 
         when:
         "call the grpc API for the splunk integration."
-        SplunkNotifier notifier = new SplunkNotifier(legacy, parts.collectorSvc.name, parts.splunkPortForward.localPort)
+        SplunkNotifier notifier = new SplunkNotifier(parts.collectorSvc.name, parts.splunkPortForward.localPort)
         notifier.createNotifier()
 
         and:
@@ -238,17 +233,11 @@ class IntegrationsTest extends BaseSpecification {
             SplunkUtil.tearDownSplunk(orchestrator, parts)
         }
         notifier.deleteNotifier()
-
-        where:
-        "Data inputs are"
-        legacy << [false, true]
     }
 
     @Unroll
     @Tag("BAT")
     @Tag("Notifiers")
-    // slack notifications are not supported on P/Z
-    @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
     def "Verify Network Simulator Notifications: #type"() {
         when:
         "create notifier"
@@ -353,8 +342,6 @@ class IntegrationsTest extends BaseSpecification {
             PolicyService.deletePolicy(policyId)
         }
         for (Notifier notifier : notifierTypes) {
-            notifier.validateViolationResolution()
-            notifier.cleanup()
             notifier.deleteNotifier()
         }
 
@@ -465,7 +452,6 @@ class IntegrationsTest extends BaseSpecification {
             PolicyService.deletePolicy(policyId)
         }
         for (Notifier notifier : notifierTypes) {
-            notifier.cleanup()
             notifier.deleteNotifier()
         }
         ClusterService.updateAdmissionController(oldAdmCtrlConfig)
@@ -512,7 +498,9 @@ class IntegrationsTest extends BaseSpecification {
         then:
         "verify test integration"
         // Test integration for S3 performs test backup (and rollback).
-        assert ExternalBackupService.testExternalBackup(backup)
+        withRetry(3, 10) {
+            assert ExternalBackupService.getExternalBackupClient().testExternalBackup(backup)
+        }
 
         where:
         "configurations are:"
@@ -526,16 +514,70 @@ class IntegrationsTest extends BaseSpecification {
         "S3 without endpoint" | Env.mustGetAWSS3BucketName() | Env.mustGetAWSS3BucketRegion() |
                 ""                                                   | Env.mustGetAWSAccessKeyID() |
                 Env.mustGetAWSSecretAccessKey()
-        "GCS"                 | Env.mustGetGCSBucketName()   | Env.mustGetGCSBucketRegion()   |
+        "GCS"                 | Env.mustGetGCSBucketName()   | "us-east-1"                    |
                 "storage.googleapis.com"                             | Env.mustGetGCPAccessKeyID() |
                 Env.mustGetGCPAccessKey()
     }
 
     @Unroll
+    @Tag("Integration")
+    def "Verify S3 Compatible Integration: #integrationName"() {
+        when:
+        "the integration is tested"
+        def backup = ExternalBackupService.getS3CompatibleIntegrationConfig(integrationName, endpoint, urlStyle)
+
+        then:
+        "verify test integration"
+        // Test integration for S3 compatible performs test backup (and rollback).
+        withRetry(3, 10) {
+            assert ExternalBackupService.getExternalBackupClient().testExternalBackup(backup)
+        }
+
+        where:
+        "configurations are:"
+
+        // Cloudflare R2 requires an active credit card subscription to access the buckets.
+        // See BitWarden item `06917dbc-17be-40f9-b8e1-b1a1015ce473` for the account details.
+        integrationName                          | endpoint
+        | urlStyle
+        "Cloudflare R2/path-based/no-prefix"     | Env.mustGetCloudflareR2Endpoint()
+        | S3URLStyle.S3_URL_STYLE_PATH
+        "Cloudflare R2/path-based/https"         | "https://${Env.mustGetCloudflareR2Endpoint()}"
+        | S3URLStyle.S3_URL_STYLE_PATH
+        "Cloudflare R2/virtual-hosted/no-prefix" | Env.mustGetCloudflareR2Endpoint()
+        | S3URLStyle.S3_URL_STYLE_VIRTUAL_HOSTED
+        "Cloudflare R2/virtual-hosted/https"     | "https://${Env.mustGetCloudflareR2Endpoint()}"
+        | S3URLStyle.S3_URL_STYLE_VIRTUAL_HOSTED
+    }
+
+    @Unroll
+    @Tag("Integration")
+    def "Verify GCS Integration: #integrationName"() {
+        setup:
+        Assume.assumeTrue(!useWorkloadId || Env.HAS_WORKLOAD_IDENTITIES)
+
+        when:
+        "the integration is tested"
+        def backup = ExternalBackupService.getGCSIntegrationConfig(integrationName, useWorkloadId)
+
+        then:
+        "verify test integration"
+        // Test integration for GCS performs test backup (and rollback).
+        withRetry(3, 10) {
+            assert ExternalBackupService.getExternalBackupClient().testExternalBackup(backup)
+        }
+
+        where:
+        "configurations are:"
+
+        integrationName                | bucket                     | useWorkloadId
+        "GCS with service account key" | Env.mustGetGCSBucketName() | false
+        "GCS with workload identity"   | Env.mustGetGCSBucketName() | true
+    }
+
+    @Unroll
     @Tag("BAT")
     @Tag("Notifiers")
-    // slack notifications are not supported on P/Z
-    @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
     def "Verify Policy Violation Notifications Destination Overrides: #type"() {
         when:
         "Create notifier"
@@ -588,8 +630,6 @@ class IntegrationsTest extends BaseSpecification {
             PolicyService.deletePolicy(policyId)
         }
 
-        notifier.validateViolationResolution()
-        notifier.cleanup()
         notifier.deleteNotifier()
 
         if (namespaceAnnotation != null) {
@@ -628,15 +668,15 @@ class IntegrationsTest extends BaseSpecification {
          */
         "Slack deploy override"   |
                 new SlackNotifier("slack test", "slack-key")   |
-                null   |
+                null                                                    |
                 new Deployment()
                         .setName("policy-violation-generic-notification-deploy-override")
                         .addLabel("app", "policy-violation-generic-notification-deploy-override")
-                        .addAnnotation("slack-key", NotifierService.SLACK_ALT_WEBHOOK)
+                        .addAnnotation("slack-key", Env.mustGetSlackAltWebhook())
                         .setImage("quay.io/rhacs-eng/qa-multi-arch-nginx:latest")
         "Slack namespace override"   |
                 new SlackNotifier("slack test", "slack-key")   |
-                [key: "slack-key", value: NotifierService.SLACK_ALT_WEBHOOK] |
+                [key: "slack-key", value: Env.mustGetSlackAltWebhook()] |
                 new Deployment()
                         .setName("policy-violation-generic-notification-ns-override")
                         .addLabel("app", "policy-violation-generic-notification-ns-override")
@@ -651,6 +691,7 @@ class IntegrationsTest extends BaseSpecification {
 
         Assume.assumeTrue(imageIntegration.isTestable())
         Assume.assumeTrue(!testAspect.contains("IAM") || ClusterService.isEKS())
+        Assume.assumeTrue(!testAspect.contains("workload identity") || Env.HAS_WORKLOAD_IDENTITIES)
 
         when:
         "the integration is tested"
@@ -668,15 +709,21 @@ class IntegrationsTest extends BaseSpecification {
         where:
         "tests are:"
 
-        imageIntegration                 | customArgs      | testAspect
-        new StackroxScannerIntegration() | [:]             | "default config"
-        new ClairScannerIntegration()    | [:]             | "default config"
-        new QuayImageIntegration()       | [:]             | "default config"
-        new GCRImageIntegration()        | [:]             | "default config"
-        new AzureRegistryIntegration()   | [:]             | "default config"
-        new ECRRegistryIntegration()     | [:]             | "default config"
-        new ECRRegistryIntegration()     | [endpoint: "",] | "without endpoint"
-        new ECRRegistryIntegration()     | [useIam: true,] | "requires IAM"
+        imageIntegration                 | customArgs         | testAspect
+        new StackroxScannerIntegration() | [:]                | "default config"
+        new ClairScannerIntegration()    | [:]                | "default config"
+        new QuayImageIntegration()       | [:]                | "default config"
+        new GHCRImageIntegration()       | [:]                | "default config"
+        new GoogleArtifactRegistry()     | [:]                | "default config"
+        new GoogleArtifactRegistry()     | [wifEnabled: true]
+                                                              | "requires workload identity"
+        new GCRImageIntegration()        | [:]                | "default config"
+        new GCRImageIntegration()        | [includeScanner: false, wifEnabled: true]
+                                                              | "requires workload identity"
+        new AzureRegistryIntegration()   | [:]                | "default config"
+        new ECRRegistryIntegration()     | [:]                | "default config"
+        new ECRRegistryIntegration()     | [endpoint: ""]     | "without endpoint"
+        new ECRRegistryIntegration()     | [useIam: true]     | "requires IAM"
     }
 
     @Unroll
@@ -754,7 +801,7 @@ class IntegrationsTest extends BaseSpecification {
         }       | StatusRuntimeException |
         /invalid endpoint: endpoint cannot reference localhost/ |
         "invalid endpoint"
-        new GCRImageIntegration() | { [serviceAccount: Env.mustGet("GOOGLE_CREDENTIALS_GCR_NO_ACCESS_KEY"),]
+        new GCRImageIntegration() | { [serviceAccount: Env.mustGetGCRNoAccessServiceAccount(),]
         }       | StatusRuntimeException | /PermissionDenied/ | "account without access"
         new GCRImageIntegration() | { [project: "not-a-project",]
         }       | StatusRuntimeException | /PermissionDenied/ | "incorrect project"
@@ -763,6 +810,8 @@ class IntegrationsTest extends BaseSpecification {
     @Tag("Integration")
     @Tag("BAT")
     // syslog test image is not multi-arch, docker files have x86 only dependencies
+    // https://hub.docker.com/r/rsyslog/syslog_appliance_alpine
+    // https://github.com/rsyslog/rsyslog-docker/tree/master/appliance/alpine
     @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
     def "Verify syslog notifier"() {
         given:

@@ -17,6 +17,8 @@ type RequestParams struct {
 	Code      int
 	GRPCReq   any
 	HTTPReq   *http.Request
+	// HTTP Headers or, for pure gRPC, the metadata.
+	Headers func(string) []string
 }
 
 // ServiceMethod describes a service method with its gRPC and HTTP variants.
@@ -39,6 +41,16 @@ func (rp *RequestParams) PathMatches(pattern string) bool {
 func (rp *RequestParams) HasPathIn(patterns []string) bool {
 	for _, p := range patterns {
 		if rp.PathMatches(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasUserAgentWith returns true if UserAgent contains any of the sub-strings.
+func (rp *RequestParams) HasUserAgentWith(substrings []string) bool {
+	for _, pattern := range substrings {
+		if strings.Contains(rp.UserAgent, pattern) {
 			return true
 		}
 	}

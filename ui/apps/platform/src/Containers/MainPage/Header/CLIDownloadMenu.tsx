@@ -1,13 +1,8 @@
 import React, { useState, ReactElement } from 'react';
-import { withRouter } from 'react-router-dom';
 import { connect } from 'react-redux';
 import { DownloadIcon } from '@patternfly/react-icons';
-import {
-    ApplicationLauncher,
-    ApplicationLauncherItem,
-    Flex,
-    FlexItem,
-} from '@patternfly/react-core';
+import { Flex, FlexItem } from '@patternfly/react-core';
+import { ApplicationLauncher, ApplicationLauncherItem } from '@patternfly/react-core/deprecated';
 import Raven from 'raven-js';
 
 import { actions } from 'reducers/notifications';
@@ -44,11 +39,25 @@ function CLIDownloadMenu({ addToast, removeToast }: CLIDownloadMenuProps): React
             Mac x86_64
         </ApplicationLauncherItem>,
         <ApplicationLauncherItem
+            key="app-launcher-item-cli-mac-arm64"
+            component="button"
+            onClick={handleDownloadCLI('darwin-arm64')}
+        >
+            Mac arm_64
+        </ApplicationLauncherItem>,
+        <ApplicationLauncherItem
             key="app-launcher-item-cli-linux-amd64"
             component="button"
             onClick={handleDownloadCLI('linux-amd64')}
         >
             Linux x86_64
+        </ApplicationLauncherItem>,
+        <ApplicationLauncherItem
+            key="app-launcher-item-cli-linux-arm64"
+            component="button"
+            onClick={handleDownloadCLI('linux-arm64')}
+        >
+            Linux arm_64
         </ApplicationLauncherItem>,
         <ApplicationLauncherItem
             key="app-launcher-item-cli-linux-ppc64le"
@@ -77,13 +86,8 @@ function CLIDownloadMenu({ addToast, removeToast }: CLIDownloadMenuProps): React
         setIsCLIMenuOpen(!isCLIMenuOpen);
     }
 
-    // The className prop overrides `font-weight: 600` for button in ui-components.css file.
     const CLIDownloadIcon = (
-        <Flex
-            alignItems={{ default: 'alignItemsCenter' }}
-            spaceItems={{ default: 'spaceItemsSm' }}
-            className="pf-u-font-weight-normal"
-        >
+        <Flex alignItems={{ default: 'alignItemsCenter' }} spaceItems={{ default: 'spaceItemsSm' }}>
             <FlexItem>
                 <DownloadIcon alt="" />
             </FlexItem>
@@ -109,4 +113,4 @@ const mapDispatchToProps = {
     removeToast: actions.removeOldestNotification,
 };
 
-export default withRouter(connect(null, mapDispatchToProps)(CLIDownloadMenu));
+export default connect(null, mapDispatchToProps)(CLIDownloadMenu);

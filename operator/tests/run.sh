@@ -34,12 +34,18 @@ _EO_KUTTL_HELP_
                "${kuttl_help}" \
                "make" "-C" "operator" "deploy-previous-via-olm"
 
+    image_prefetcher_system_await
+
     info "Executing operator upgrade test"
     junit_wrap test-upgrade \
                "Test operator upgrade from previously released version to the current one." \
                "${kuttl_help}" \
                "make" "-C" "operator" "test-upgrade" || FAILED=1
     store_test_results "operator/build/kuttl-test-artifacts-upgrade" "kuttl-test-artifacts-upgrade"
+    if junit_contains_failure "$(stored_test_results "kuttl-test-artifacts-upgrade")"; then
+        # Prevent double-reporting
+        remove_junit_record test-upgrade
+    fi
     [[ $FAILED = 0 ]] || die "operator upgrade tests failed"
 
     info "Executing operator e2e tests"
@@ -48,13 +54,17 @@ _EO_KUTTL_HELP_
                "${kuttl_help}" \
                "make" "-C" "operator" "test-e2e-deployed" || FAILED=1
     store_test_results "operator/build/kuttl-test-artifacts" "kuttl-test-artifacts"
+    if junit_contains_failure "$(stored_test_results "kuttl-test-artifacts")"; then
+        # Prevent double-reporting
+        remove_junit_record test-e2e
+    fi
     [[ $FAILED = 0 ]] || die "operator e2e tests failed"
 
     info "Executing Operator Bundle Scorecard tests"
     junit_wrap bundle-test-image \
                 "Run scorecard tests." \
                 "See log for error details." \
-                "$ROOT/operator/scripts/retry.sh" "4" "2" \
+                "$ROOT/operator/hack/retry.sh" "4" "2" \
                 "make" "-C" "operator" "bundle-test-image"
 }
 

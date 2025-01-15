@@ -3,9 +3,14 @@ import { Link } from 'react-router-dom';
 import lowerCase from 'lodash/lowerCase';
 import capitalize from 'lodash/capitalize';
 
-import { vulnManagementPath } from 'routePaths';
-import KeyValuePairs from 'Components/KeyValuePairs';
+import {
+    vulnerabilitiesPlatformWorkloadCvesPath,
+    vulnerabilitiesWorkloadCvesPath,
+} from 'routePaths';
+
 import CollapsibleCard from 'Components/CollapsibleCard';
+import useFeatureFlags from 'hooks/useFeatureFlags';
+import KeyValuePairs from './KeyValuePairs';
 
 const containerConfigMap = {
     command: { label: 'Commands' },
@@ -23,7 +28,9 @@ const getContainerConfigurations = (container) => {
     return { command, args, ports, volumes, secrets };
 };
 
-const ContainerImage = ({ image }) => {
+const ContainerImage = ({ image, vulnMgmtBasePath }) => {
+    const imageDetailsPageURL = `${vulnMgmtBasePath}/images/${image.id}`;
+
     if (!image?.name?.fullName) {
         return null;
     }
@@ -46,7 +53,7 @@ const ContainerImage = ({ image }) => {
             <div className="font-700 inline">Image Name: </div>
             <Link
                 className="hover:text-primary-800 leading-normal word-break"
-                to={`${vulnManagementPath}/image/${image.id}`}
+                to={imageDetailsPageURL}
             >
                 {image.name.fullName}
             </Link>
@@ -110,6 +117,15 @@ const ContainerSecrets = ({ secrets }) => {
 
 const ContainerConfigurations = ({ deployment }) => {
     const title = 'Container configuration';
+    const { isFeatureFlagEnabled } = useFeatureFlags();
+    const usePlatformWorkloadCvePath =
+        isFeatureFlagEnabled('ROX_PLATFORM_CVE_SPLIT') &&
+        deployment &&
+        deployment.platformComponent;
+    const vulnMgmtBasePath = usePlatformWorkloadCvePath
+        ? vulnerabilitiesPlatformWorkloadCvesPath
+        : vulnerabilitiesWorkloadCvesPath;
+
     let containers = [];
     if (deployment.containers) {
         containers = deployment.containers.map((container) => {
@@ -117,15 +133,15 @@ const ContainerConfigurations = ({ deployment }) => {
             const { id, resources, volumes, secrets } = container;
             return (
                 <div key={id} data-testid="deployment-container-configuration">
-                    <ContainerImage image={container.image} />
+                    <ContainerImage image={container.image} vulnMgmtBasePath={vulnMgmtBasePath} />
                     {data && <KeyValuePairs data={data} keyValueMap={containerConfigMap} />}
                     {!!resources && !!volumes && !!secrets && (
                         <>
                             <div className="py-3 border-b border-base-300">
                                 <div className="pr-1 font-700 ">Resources:</div>
-                                <ul className="ml-2 mt-2 w-full">
+                                <div className="ml-2 mt-2 w-full">
                                     <Resources resources={resources} />
-                                </ul>
+                                </div>
                             </div>
                             <div className="py-3 border-b border-base-300">
                                 <div className="pr-1 font-700">Volumes:</div>
@@ -135,9 +151,9 @@ const ContainerConfigurations = ({ deployment }) => {
                             </div>
                             <div className="py-3 border-b border-base-300">
                                 <div className="pr-1 font-700">Secrets:</div>
-                                <ul className="ml-2 mt-2 w-full">
+                                <div className="ml-2 mt-2 w-full">
                                     <ContainerSecrets secrets={secrets} />
-                                </ul>
+                                </div>
                             </div>
                         </>
                     )}

@@ -53,7 +53,7 @@ export const defaultMinimalReadAccessResources = [
     'NetworkPolicy',
     'NetworkGraph',
     'Node',
-    'Policy',
+    'WorkflowAdministration',
     'Secret',
 ];
 
@@ -72,45 +72,11 @@ export const defaultSelectedRole = {
     resourceToAccess: defaultNewRolePermissions,
 };
 
-// TODO: ROX-13888 Remove WorkflowAdministration.
-export const resourceSubstitutions: Record<string, string[]> = {
-    Access: ['AuthProvider', 'Group', 'Licenses', 'Role', 'User'],
-    Administration: [
-        'AllComments',
-        'Config',
-        'DebugLogs',
-        'NetworkGraphConfig',
-        'ProbeUpload',
-        'ScannerBundle',
-        'ScannerDefinitions',
-        'SensorUpgradeConfig',
-        'ServiceIdentity',
-    ],
-    Cluster: ['ClusterCVE'],
-    Compliance: ['ComplianceRuns'],
-    DeploymentExtension: ['Indicator', 'NetworkBaseline', 'ProcessWhitelist', 'Risk'],
-    Integration: [
-        'APIToken',
-        'BackupPlugins',
-        'ImageIntegration',
-        'Notifier',
-        'SignatureIntegration',
-    ],
-    Image: ['ImageComponent'],
-    WorkflowAdministration: ['Policy', 'VulnerabilityReports'],
-};
+export const resourceSubstitutions: Record<string, string[]> = {};
 
-// TODO: ROX-13888 Remove Policy, VulnerabilityReports.
-export const resourceRemovalReleaseVersions = new Map<ResourceName, string>([
-    ['Policy', '4.1'],
-    ['VulnerabilityReports', '4.1'],
-]);
+export const resourceRemovalReleaseVersions = new Map<ResourceName, string>([]);
 
 // TODO(ROX-11453): Remove this mapping once the old resources are fully deprecated.
-export const replacedResourceMapping = new Map<ResourceName, string>([
-    // TODO: ROX-13888 Remove Policy, VulnerabilityReports.
-    ['Policy', 'WorkflowAdministration'],
-    ['VulnerabilityReports', 'WorkflowAdministration'],
-]);
+export const replacedResourceMapping = new Map<ResourceName, string>([]);
 
 export const deprecatedResourceRowStyle = { backgroundColor: 'rgb(255,250,205)' };

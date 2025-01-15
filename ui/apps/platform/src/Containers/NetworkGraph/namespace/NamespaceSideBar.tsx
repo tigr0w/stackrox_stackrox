@@ -9,12 +9,11 @@ import {
     Tabs,
     TabTitleText,
     Text,
-    TextContent,
-    TextVariants,
+    Title,
 } from '@patternfly/react-core';
+import uniq from 'lodash/uniq';
 
 import useTabs from 'hooks/patternfly/useTabs';
-import { uniq } from 'lodash';
 import {
     getDeploymentNodesInNamespace,
     getNodeById,
@@ -27,13 +26,20 @@ import NamespaceDeployments from './NamespaceDeployments';
 import NetworkPolicies from '../common/NetworkPolicies';
 
 type NamespaceSideBarProps = {
+    labelledById: string; // corresponds to aria-labelledby prop of TopologySideBar
     namespaceId: string;
     nodes: CustomNodeModel[];
     edges: CustomEdgeModel[];
     onNodeSelect: (id: string) => void;
 };
 
-function NamespaceSideBar({ namespaceId, nodes, edges, onNodeSelect }: NamespaceSideBarProps) {
+function NamespaceSideBar({
+    labelledById,
+    namespaceId,
+    nodes,
+    edges,
+    onNodeSelect,
+}: NamespaceSideBarProps) {
     // component state
     const { activeKeyTab, onSelectTab } = useTabs({
         defaultTab: 'Deployments',
@@ -61,26 +67,19 @@ function NamespaceSideBar({ namespaceId, nodes, edges, onNodeSelect }: Namespace
     return (
         <Stack>
             <StackItem>
-                <Flex direction={{ default: 'row' }} className="pf-u-p-md pf-u-mb-0">
+                <Flex direction={{ default: 'row' }} className="pf-v5-u-p-md pf-v5-u-mb-0">
                     <FlexItem>
                         <NamespaceIcon />
                     </FlexItem>
                     <FlexItem>
-                        <TextContent>
-                            <Text component={TextVariants.h1} className="pf-u-font-size-xl">
-                                {namespaceNode?.label}
-                            </Text>
-                        </TextContent>
-                        <TextContent>
-                            <Text
-                                component={TextVariants.h2}
-                                className="pf-u-font-size-sm pf-u-color-200"
-                            >
-                                in &quot;
-                                {cluster}
-                                &quot;
-                            </Text>
-                        </TextContent>
+                        <Title headingLevel="h2" id={labelledById}>
+                            {namespaceNode?.label}
+                        </Title>
+                        <Text className="pf-v5-u-font-size-sm pf-v5-u-color-200">
+                            in &quot;
+                            {cluster}
+                            &quot;
+                        </Text>
                     </FlexItem>
                 </Flex>
             </StackItem>
@@ -93,7 +92,7 @@ function NamespaceSideBar({ namespaceId, nodes, edges, onNodeSelect }: Namespace
                     />
                     <Tab
                         eventKey="Network policies"
-                        tabContentId="Network policies"
+                        tabContentId="Network_policies"
                         title={<TabTitleText>Network policies</TabTitleText>}
                     />
                 </Tabs>
@@ -108,9 +107,9 @@ function NamespaceSideBar({ namespaceId, nodes, edges, onNodeSelect }: Namespace
                 </TabContent>
                 <TabContent
                     eventKey="Network policies"
-                    id="Network policies"
+                    id="Network_policies"
                     hidden={activeKeyTab !== 'Network policies'}
-                    className="pf-u-h-100"
+                    className="pf-v5-u-h-100"
                 >
                     <NetworkPolicies
                         entityName={namespaceNode?.label || ''}

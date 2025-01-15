@@ -8,6 +8,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	appVersioned "github.com/openshift/client-go/apps/clientset/versioned"
 	configVersioned "github.com/openshift/client-go/config/clientset/versioned"
+	operatorVersioned "github.com/openshift/client-go/operator/clientset/versioned"
 	routeVersioned "github.com/openshift/client-go/route/clientset/versioned"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/env"
@@ -17,10 +18,12 @@ import (
 	"github.com/stackrox/rox/sensor/kubernetes/client"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/apimachinery/pkg/watch"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic"
+	fakeDynamic "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -47,7 +50,12 @@ func init() {
 
 // clientSetImpl implements our client.Interface
 type clientSetImpl struct {
-	kubernetes kubernetes.Interface
+	kubernetes        kubernetes.Interface
+	dynamic           dynamic.Interface
+	openshiftApps     appVersioned.Interface
+	openshiftConfig   configVersioned.Interface
+	openshiftRoute    routeVersioned.Interface
+	openshiftOperator operatorVersioned.Interface
 }
 
 // Kubernetes returns the fake Kubernetes clientset
@@ -55,24 +63,29 @@ func (c *clientSetImpl) Kubernetes() kubernetes.Interface {
 	return c.kubernetes
 }
 
-// OpenshiftApps returns nil for the openshift client for config
+// OpenshiftApps returns the fake openshift client for apps
 func (c *clientSetImpl) OpenshiftApps() appVersioned.Interface {
-	return nil
+	return c.openshiftApps
 }
 
-// OpenshiftConfig returns nil for the openshift client for apps
+// OpenshiftConfig returns the fake openshift client for config
 func (c *clientSetImpl) OpenshiftConfig() configVersioned.Interface {
-	return nil
+	return c.openshiftConfig
 }
 
-// Dynamic returns nil
+// Dynamic returns the fake dynamic client
 func (c *clientSetImpl) Dynamic() dynamic.Interface {
-	return nil
+	return c.dynamic
 }
 
-// OpenshiftRoute implements the client interface.
+// OpenshiftRoute returns the fake openshift client for route
 func (c *clientSetImpl) OpenshiftRoute() routeVersioned.Interface {
-	return nil
+	return c.openshiftRoute
+}
+
+// OpenshiftOperator returns the fake openshift client for operator
+func (c *clientSetImpl) OpenshiftOperator() operatorVersioned.Interface {
+	return c.openshiftOperator
 }
 
 // WorkloadManager encapsulates running a fake Kubernetes client
@@ -130,7 +143,7 @@ func NewWorkloadManager(config *WorkloadManagerConfig) *WorkloadManager {
 	if storagePath := env.FakeWorkloadStoragePath.Setting(); storagePath != "" {
 		db, err = pebble.Open(storagePath, &pebble.Options{})
 		if err != nil {
-			log.Panicf("could not open id storage")
+			log.Panic("could not open id storage")
 		}
 	}
 
@@ -141,7 +154,7 @@ func NewWorkloadManager(config *WorkloadManagerConfig) *WorkloadManager {
 	}
 	mgr.initializePreexistingResources()
 
-	log.Infof("Created Workload manager for workload")
+	log.Info("Created Workload manager for workload")
 	log.Infof("Workload: %s", string(data))
 	log.Infof("Rendered workload: %+v", workload)
 	return mgr
@@ -227,9 +240,19 @@ func (w *WorkloadManager) initializePreexistingResources() {
 		Compiler:     "gc",
 		Platform:     "linux/amd64",
 	}
-	w.client = &clientSetImpl{
-		kubernetes: w.fakeClient,
+	scheme := runtime.NewScheme()
+	gvr := schema.GroupVersionResource{
+		Group:    "apiextensions.k8s.io",
+		Version:  "v1",
+		Resource: "customresourcedefinitions",
 	}
+
+	clientSet := &clientSetImpl{
+		kubernetes: w.fakeClient,
+		dynamic:    fakeDynamic.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{gvr: "CustomResourceDefinitionList"}),
+	}
+	initializeOpenshiftClients(clientSet)
+	w.client = clientSet
 
 	go w.clearActions()
 

@@ -5,22 +5,18 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
-	"time"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/alert/datastore"
 	"github.com/stackrox/rox/central/alert/mappings"
 	baselineDatastore "github.com/stackrox/rox/central/processbaseline/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/batcher"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errorhelpers"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/grpc/authz"
@@ -28,8 +24,8 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	pkgNotifier "github.com/stackrox/rox/pkg/notifier"
 	"github.com/stackrox/rox/pkg/processbaseline"
-	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/paginated"
 	"github.com/stackrox/rox/pkg/sync"
@@ -41,8 +37,6 @@ var (
 )
 
 const (
-	badSnoozeErrorMsg = "'snooze_till' timestamp must be at a future time"
-
 	maxListAlertsReturned = 1000
 	alertResolveBatchSize = 100
 )
@@ -59,7 +53,6 @@ var (
 		},
 		user.With(permissions.Modify(resources.Alert)): {
 			"/v1.AlertService/ResolveAlert",
-			"/v1.AlertService/SnoozeAlert",
 			"/v1.AlertService/ResolveAlerts",
 			"/v1.AlertService/DeleteAlerts",
 		},
@@ -320,6 +313,7 @@ func (s *serviceImpl) ResolveAlert(ctx context.Context, req *v1.ResolveAlertRequ
 			if err != nil {
 				log.Errorf("Error syncing baseline with cluster %q: %v", alert.GetDeployment().GetClusterId(), err)
 			}
+			log.Infof("Successfully sent process baseline to cluster %q: %s", alert.GetDeployment().GetClusterId(), baseline.GetId())
 		}
 	}
 
@@ -388,9 +382,6 @@ func (s *serviceImpl) changeAlertsState(ctx context.Context, alerts []*storage.A
 	b := batcher.New(len(alerts), alertResolveBatchSize)
 	for start, end, valid := b.Next(); valid; start, end, valid = b.Next() {
 		for _, alert := range alerts[start:end] {
-			if state != storage.ViolationState_SNOOZED {
-				alert.SnoozeTill = nil
-			}
 			alert.State = state
 		}
 		err := s.dataStore.UpsertAlerts(ctx, alerts[start:end])
@@ -406,9 +397,6 @@ func (s *serviceImpl) changeAlertsState(ctx context.Context, alerts []*storage.A
 }
 
 func (s *serviceImpl) changeAlertState(ctx context.Context, alert *storage.Alert, state storage.ViolationState) error {
-	if state != storage.ViolationState_SNOOZED {
-		alert.SnoozeTill = nil
-	}
 	alert.State = state
 	err := s.dataStore.UpsertAlert(ctx, alert)
 	if err != nil {
@@ -417,30 +405,6 @@ func (s *serviceImpl) changeAlertState(ctx context.Context, alert *storage.Alert
 	}
 	s.notifier.ProcessAlert(ctx, alert)
 	return nil
-}
-
-func (s *serviceImpl) SnoozeAlert(ctx context.Context, req *v1.SnoozeAlertRequest) (*v1.Empty, error) {
-	if req.GetSnoozeTill() == nil {
-		return nil, errors.Wrap(errox.InvalidArgs, "'snooze_till' cannot be nil")
-	}
-	if protoconv.ConvertTimestampToTimeOrNow(req.GetSnoozeTill()).Before(time.Now()) {
-		return nil, errors.Wrap(errox.InvalidArgs, badSnoozeErrorMsg)
-	}
-	alert, exists, err := s.dataStore.GetAlert(ctx, req.GetId())
-	if err != nil {
-		log.Error(err)
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.Wrapf(errox.NotFound, "alert with id '%s' does not exist", req.GetId())
-	}
-	alert.SnoozeTill = req.GetSnoozeTill()
-	err = s.changeAlertState(ctx, alert, storage.ViolationState_SNOOZED)
-	if err != nil {
-		log.Error(err)
-		return nil, err
-	}
-	return &v1.Empty{}, nil
 }
 
 // DeleteAlerts is a maintenance function that deletes alerts from the store
@@ -605,17 +569,10 @@ func getMapOfAlertCounts(alerts []search.Result, groupByFunc func(alert search.R
 			}
 			// There is a difference in how enum matches are stored in postgres vs rockdb. In postgres they are
 			// stored as string values, in rocksdb as int values. Courtesy: Mandar.
-			if env.PostgresDatastoreEnabled.BooleanSetting() {
-				severity := storage.Severity_value[a.Matches[field.GetFieldPath()][0]]
-				groups[g][(storage.Severity(severity))]++
-			} else {
-				severity, _ := strconv.Atoi(a.Matches[field.GetFieldPath()][0])
-				groups[g][(storage.Severity(severity))]++
-			}
-
+			severity := storage.Severity_value[a.Matches[field.GetFieldPath()][0]]
+			groups[g][(storage.Severity(severity))]++
 		}
 	}
-
 	return
 }
 

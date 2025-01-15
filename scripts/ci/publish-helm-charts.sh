@@ -27,19 +27,13 @@ if is_release_test_stream "$version"; then
 	# send to #acs-slack-integration-testing when testing the release process
 	webhook_url="${SLACK_MAIN_WEBHOOK}"
 else
-	# send to #eng-release
+	# send to #acs-release-notifications
 	webhook_url="${RELEASE_WORKFLOW_NOTIFY_WEBHOOK}"
 fi
 
 [[ -n "${webhook_url}" ]] || die "No Slack webhook found"
 
 tmp_remote_repository="$(mktemp -d)"
-
-gitbot(){
-	git -c "user.name=RoxBot" -c "user.email=roxbot@stackrox.com" \
-		-c "url.https://${GITHUB_TOKEN}:x-oauth-basic@github.com/.insteadOf=https://github.com/" \
-		"${@}"
-}
 
 gitbot clone "$remote_repository" "$tmp_remote_repository"
 
@@ -49,8 +43,8 @@ gitbot -C "$tmp_remote_repository" checkout -b "$branch_name"
 
 mkdir "${tmp_remote_repository}/${remote_subdirectory}/${version}"
 
-cp -a "${central_services_chart}/stackrox" "${tmp_remote_repository}/${remote_subdirectory}/${version}/central-services"
-cp -a "${secured_cluster_services_chart}/stackrox" "${tmp_remote_repository}/${remote_subdirectory}/${version}/secured-cluster-services"
+cp -a "${central_services_chart}/opensource" "${tmp_remote_repository}/${remote_subdirectory}/${version}/central-services"
+cp -a "${secured_cluster_services_chart}/opensource" "${tmp_remote_repository}/${remote_subdirectory}/${version}/secured-cluster-services"
 
 mkdir "${tmp_remote_repository}/${remote_subdirectory}/rhacs/${version}"
 

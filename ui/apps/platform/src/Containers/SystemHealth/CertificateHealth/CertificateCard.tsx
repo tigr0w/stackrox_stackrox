@@ -9,8 +9,9 @@ import {
     Flex,
     FlexItem,
 } from '@patternfly/react-core';
-import { DownloadIcon, ExternalLinkAltIcon } from '@patternfly/react-icons';
+import { DownloadIcon } from '@patternfly/react-icons';
 
+import ExternalLink from 'Components/PatternFly/IconText/ExternalLink';
 import useMetadata from 'hooks/useMetadata';
 import usePermissions from 'hooks/usePermissions';
 import { generateCertSecretForComponent } from 'services/CertGenerationService';
@@ -90,13 +91,13 @@ function CertificateCard({ component, pollingCount }: CertificateCardProps): Rea
     const icon = isFetchingInitialRequest
         ? SpinnerIcon
         : !expirationDate || !currentDatetime
-        ? ErrorIcon
-        : healthIconMap[getCredentialExpiryVariant(expirationDate, currentDatetime)];
+          ? ErrorIcon
+          : healthIconMap[getCredentialExpiryVariant(expirationDate, currentDatetime)];
 
     return (
         <Card isCompact>
             <CardHeader>
-                <Flex className="pf-u-flex-grow-1">
+                <Flex className="pf-v5-u-flex-grow-1">
                     <FlexItem>{icon}</FlexItem>
                     <FlexItem>
                         <CardTitle component="h2">{title}</CardTitle>
@@ -121,7 +122,7 @@ function CertificateCard({ component, pollingCount }: CertificateCardProps): Rea
                                 icon={<DownloadIcon />}
                                 isDisabled={isDownloading}
                                 isLoading={isDownloading}
-                                isSmall
+                                size="sm"
                                 onClick={onDownload}
                             >
                                 Download YAML
@@ -129,25 +130,18 @@ function CertificateCard({ component, pollingCount }: CertificateCardProps): Rea
                         </FlexItem>
                         {version && (
                             <FlexItem align={{ default: 'alignRight' }}>
-                                <Button
-                                    variant="link"
-                                    isInline
-                                    component="a"
-                                    href={getVersionedDocs(
-                                        version,
-                                        'configuration/reissue-internal-certificates.html'
-                                    )}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                >
-                                    <Flex
-                                        alignItems={{ default: 'alignItemsCenter' }}
-                                        spaceItems={{ default: 'spaceItemsSm' }}
+                                <ExternalLink>
+                                    <a
+                                        href={getVersionedDocs(
+                                            version,
+                                            'configuration/reissue-internal-certificates.html'
+                                        )}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
                                     >
-                                        <span>Generate a diagnostic bundle</span>
-                                        <ExternalLinkAltIcon color="var(--pf-global--link--Color)" />
-                                    </Flex>
-                                </Button>
+                                        Reissuing internal certificates
+                                    </a>
+                                </ExternalLink>
                             </FlexItem>
                         )}
                     </Flex>
@@ -165,7 +159,8 @@ function CertificateCard({ component, pollingCount }: CertificateCardProps): Rea
                         isInline
                         variant="warning"
                         title={errorMessageFetching}
-                        className="pf-u-mt-md"
+                        component="p"
+                        className="pf-v5-u-mt-md"
                     />
                 )}
                 {errorMessageDownloading && (
@@ -173,7 +168,8 @@ function CertificateCard({ component, pollingCount }: CertificateCardProps): Rea
                         isInline
                         variant="danger"
                         title={errorMessageDownloading}
-                        className="pf-u-mt-md"
+                        component="p"
+                        className="pf-v5-u-mt-md"
                     />
                 )}
             </CardBody>

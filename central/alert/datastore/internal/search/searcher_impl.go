@@ -5,37 +5,20 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/stackrox/rox/central/alert/datastore/internal/index"
 	"github.com/stackrox/rox/central/alert/datastore/internal/store"
-	"github.com/stackrox/rox/central/alert/mappings"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/alert/convert"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/logging"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
-	"github.com/stackrox/rox/pkg/search/paginated"
-	"github.com/stackrox/rox/pkg/search/sortfields"
-)
-
-var (
-	log = logging.LoggerForModule()
-
-	alertSearchHelper            = sac.ForResource(resources.Alert).MustCreateSearchHelper(mappings.OptionsMap)
-	alertPostgresSACSearchHelper = sac.ForResource(resources.Alert).MustCreatePgSearchHelper()
 )
 
 // searcherImpl provides an intermediary implementation layer for AlertStorage.
 type searcherImpl struct {
 	storage           store.Store
-	indexer           index.Indexer
 	formattedSearcher search.Searcher
 }
 
-// SearchAlerts retrieves SearchResults from the indexer and storage
+// SearchAlerts retrieves SearchResults from the storage
 func (ds *searcherImpl) SearchAlerts(ctx context.Context, q *v1.Query) ([]*v1.SearchResult, error) {
 	alerts, results, err := ds.searchListAlerts(ctx, q)
 	if err != nil {
@@ -48,25 +31,22 @@ func (ds *searcherImpl) SearchAlerts(ctx context.Context, q *v1.Query) ([]*v1.Se
 	return protoResults, nil
 }
 
-// SearchListAlerts retrieves list alerts from the indexer and storage
+// SearchListAlerts retrieves list alerts from the storage
 func (ds *searcherImpl) SearchListAlerts(ctx context.Context, q *v1.Query) ([]*storage.ListAlert, error) {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		q = applyDefaultState(q)
-		alerts, err := ds.storage.GetByQuery(ctx, q)
-		if err != nil {
-			return nil, err
-		}
-		listAlerts := make([]*storage.ListAlert, 0, len(alerts))
-		for _, alert := range alerts {
-			listAlerts = append(listAlerts, convert.AlertToListAlert(alert))
-		}
-		return listAlerts, nil
+	q = applyDefaultState(q)
+	alerts, err := ds.storage.GetByQuery(ctx, q)
+	if err != nil {
+		return nil, err
 	}
-	alerts, _, err := ds.searchListAlerts(ctx, q)
-	return alerts, err
+	listAlerts := make([]*storage.ListAlert, 0, len(alerts))
+	for _, alert := range alerts {
+		listAlerts = append(listAlerts, convert.AlertToListAlert(alert))
+	}
+	return listAlerts, nil
+
 }
 
-// SearchRawAlerts retrieves Alerts from the indexer and storage
+// SearchRawAlerts retrieves Alerts from the storage
 func (ds *searcherImpl) SearchRawAlerts(ctx context.Context, q *v1.Query) ([]*storage.Alert, error) {
 	alerts, err := ds.searchAlerts(ctx, q)
 	return alerts, err
@@ -90,19 +70,8 @@ func (ds *searcherImpl) searchListAlerts(ctx context.Context, q *v1.Query) ([]*s
 }
 
 func (ds *searcherImpl) searchAlerts(ctx context.Context, q *v1.Query) ([]*storage.Alert, error) {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		q = applyDefaultState(q)
-		return ds.storage.GetByQuery(ctx, q)
-	}
-	results, err := ds.Search(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	alerts, _, err := ds.storage.GetMany(ctx, search.ResultsToIDs(results))
-	if err != nil {
-		return nil, err
-	}
-	return alerts, nil
+	q = applyDefaultState(q)
+	return ds.storage.GetByQuery(ctx, q)
 }
 
 // Search takes a SearchRequest and finds any matches
@@ -147,17 +116,8 @@ func convertAlert(alert *storage.ListAlert, result search.Result) *v1.SearchResu
 // Helper functions which format our searching.
 ///////////////////////////////////////////////
 
-func formatSearcher(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher {
-	var filteredSearcher search.Searcher
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		// Make the UnsafeSearcher safe.
-		filteredSearcher = alertPostgresSACSearchHelper.FilteredSearcher(unsafeSearcher)
-	} else {
-		filteredSearcher = alertSearchHelper.FilteredSearcher(unsafeSearcher) // Make the UnsafeSearcher safe.
-		filteredSearcher = sortfields.TransformSortFields(filteredSearcher, mappings.OptionsMap)
-		filteredSearcher = paginated.Paginated(filteredSearcher)
-	}
-	withDefaultViolationState := withDefaultActiveViolations(filteredSearcher)
+func formatSearcher(searcher search.Searcher) search.Searcher {
+	withDefaultViolationState := withDefaultActiveViolations(searcher)
 	return withDefaultViolationState
 }
 

@@ -1,11 +1,11 @@
 import React from 'react';
-import { TableComposable, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
+import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { gql } from '@apollo/client';
 
 import { UseURLSortResult } from 'hooks/useURLSort';
-import DatePhraseTd from '../components/DatePhraseTd';
+import DateDistance from 'Components/DateDistance';
 import EmptyTableResults from '../components/EmptyTableResults';
-import ImageNameTd from '../components/ImageNameTd';
+import ImageNameLink from '../components/ImageNameLink';
 
 export type ImageResources = {
     imageCount: number;
@@ -46,7 +46,7 @@ export type ImageResourceTableProps = {
 
 function ImageResourceTable({ data, getSortParams }: ImageResourceTableProps) {
     return (
-        <TableComposable borders={false} variant="compact">
+        <Table borders={false} variant="compact">
             <Thead noWrap>
                 <Tr>
                     <Th sort={getSortParams('Image')}>Name</Th>
@@ -61,22 +61,26 @@ function ImageResourceTable({ data, getSortParams }: ImageResourceTableProps) {
                     <Tbody
                         key={id}
                         style={{
-                            borderBottom: '1px solid var(--pf-c-table--BorderColor)',
+                            borderBottom: '1px solid var(--pf-v5-c-table--BorderColor)',
                         }}
                     >
                         <Tr>
-                            <Td>{name ? <ImageNameTd id={id} name={name} /> : 'NAME UNKNOWN'}</Td>
+                            <Td dataLabel="Name" width={50}>
+                                {name ? <ImageNameLink id={id} name={name} /> : 'NAME UNKNOWN'}
+                            </Td>
                             {/* Given that this is in the context of a deployment, when would `deploymentCount` ever be less than zero? */}
-                            <Td>{deploymentCount > 0 ? 'Active' : 'Inactive'}</Td>
-                            <Td>{operatingSystem}</Td>
-                            <Td>
-                                <DatePhraseTd date={scanTime} />
+                            <Td dataLabel="Image status">
+                                {deploymentCount > 0 ? 'Active' : 'Inactive'}
+                            </Td>
+                            <Td dataLabel="Image OS">{operatingSystem}</Td>
+                            <Td dataLabel="Created">
+                                <DateDistance date={scanTime} />
                             </Td>
                         </Tr>
                     </Tbody>
                 );
             })}
-        </TableComposable>
+        </Table>
     );
 }
 

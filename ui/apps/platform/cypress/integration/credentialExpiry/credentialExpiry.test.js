@@ -9,8 +9,8 @@ import {
     visitSystemConfigurationWithScannerCredentialExpiryBanner,
 } from './credentialExpiry.helpers';
 
-const centralCredentialExpiryBanner = '.pf-c-banner:contains("Central certificate")';
-const scannerCredentialExpiryBanner = '.pf-c-banner:contains("Scanner certificate")';
+const centralCredentialExpiryBanner = '.pf-v5-c-banner:contains("Central certificate")';
+const scannerCredentialExpiryBanner = '.pf-v5-c-banner:contains("Scanner certificate")';
 
 describe('Credential expiry', () => {
     withAuth();
@@ -27,22 +27,26 @@ describe('Credential expiry', () => {
         it('should display banner without download button if user does not have the required permission', () => {
             const expiry = dateFns.addMinutes(dateFns.addHours(new Date(), 23), 30);
 
-            const staticResponseForPermissions = {
-                fixture: 'auth/mypermissionsMinimalAccess.json',
-            };
+            cy.fixture('auth/mypermissionsMinimalAccess.json').then(({ resourceToAccess }) => {
+                const staticResponseForPermissions = {
+                    body: {
+                        resourceToAccess: { ...resourceToAccess, Administration: 'READ_ACCESS' },
+                    },
+                };
 
-            visitSystemConfigurationWithCentralCredentialExpiryBanner(
-                expiry,
-                staticResponseForPermissions
-            );
+                visitSystemConfigurationWithCentralCredentialExpiryBanner(
+                    expiry,
+                    staticResponseForPermissions
+                );
 
-            cy.get(centralCredentialExpiryBanner)
-                .invoke('text')
-                .then((text) => {
-                    expect(text).to.include('Central certificate expires in 23 hours');
-                    expect(text).to.include('Contact your administrator');
-                });
-            cy.get(centralCredentialExpiryBanner).find('button').should('not.exist');
+                cy.get(centralCredentialExpiryBanner)
+                    .invoke('text')
+                    .then((text) => {
+                        expect(text).to.include('Central certificate expires in 23 hours');
+                        expect(text).to.include('Contact your administrator');
+                    });
+                cy.get(centralCredentialExpiryBanner).find('button').should('not.exist');
+            });
         });
 
         it('should show a warning banner if the expiry date is within 4-14 days', () => {
@@ -50,7 +54,7 @@ describe('Credential expiry', () => {
 
             visitSystemConfigurationWithCentralCredentialExpiryBanner(expiry);
 
-            cy.get(centralCredentialExpiryBanner).should('have.class', 'pf-m-warning');
+            cy.get(centralCredentialExpiryBanner).should('have.class', 'pf-m-gold');
         });
 
         it('should show a danger banner if the expiry date is less than or equal to 3 days', () => {
@@ -58,7 +62,7 @@ describe('Credential expiry', () => {
 
             visitSystemConfigurationWithCentralCredentialExpiryBanner(expiry);
 
-            cy.get(centralCredentialExpiryBanner).should('have.class', 'pf-m-danger');
+            cy.get(centralCredentialExpiryBanner).should('have.class', 'pf-m-red');
         });
 
         it('should download the YAML', () => {
@@ -84,22 +88,26 @@ describe('Credential expiry', () => {
         it("should display banner without download button if user doesn't have the required permission", () => {
             const expiry = dateFns.addMinutes(dateFns.addHours(new Date(), 23), 30);
 
-            const staticResponseForPermissions = {
-                fixture: 'auth/mypermissionsMinimalAccess.json',
-            };
+            cy.fixture('auth/mypermissionsMinimalAccess.json').then(({ resourceToAccess }) => {
+                const staticResponseForPermissions = {
+                    body: {
+                        resourceToAccess: { ...resourceToAccess, Administration: 'READ_ACCESS' },
+                    },
+                };
 
-            visitSystemConfigurationWithScannerCredentialExpiryBanner(
-                expiry,
-                staticResponseForPermissions
-            );
+                visitSystemConfigurationWithScannerCredentialExpiryBanner(
+                    expiry,
+                    staticResponseForPermissions
+                );
 
-            cy.get(scannerCredentialExpiryBanner)
-                .invoke('text')
-                .then((text) => {
-                    expect(text).to.include('Scanner certificate expires in 23 hours');
-                    expect(text).to.include('Contact your administrator');
-                });
-            cy.get(scannerCredentialExpiryBanner).find('button').should('not.exist');
+                cy.get(scannerCredentialExpiryBanner)
+                    .invoke('text')
+                    .then((text) => {
+                        expect(text).to.include('Scanner certificate expires in 23 hours');
+                        expect(text).to.include('Contact your administrator');
+                    });
+                cy.get(scannerCredentialExpiryBanner).find('button').should('not.exist');
+            });
         });
 
         it('should show a warning banner if the expiry date is within 4-14 days', () => {
@@ -107,7 +115,7 @@ describe('Credential expiry', () => {
 
             visitSystemConfigurationWithScannerCredentialExpiryBanner(expiry);
 
-            cy.get(scannerCredentialExpiryBanner).should('have.class', 'pf-m-warning');
+            cy.get(scannerCredentialExpiryBanner).should('have.class', 'pf-m-gold');
         });
 
         it('should show a danger banner if the expiry date is greater than 14 days', () => {
@@ -115,7 +123,7 @@ describe('Credential expiry', () => {
 
             visitSystemConfigurationWithScannerCredentialExpiryBanner(expiry);
 
-            cy.get(scannerCredentialExpiryBanner).should('have.class', 'pf-m-danger');
+            cy.get(scannerCredentialExpiryBanner).should('have.class', 'pf-m-red');
         });
 
         it('should download the YAML', () => {

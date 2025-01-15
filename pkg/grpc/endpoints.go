@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/grpc/alpn"
 	"github.com/stackrox/rox/pkg/mtls/verifier"
 	"github.com/stackrox/rox/pkg/netutil"
@@ -20,6 +22,22 @@ import (
 	downgradingServer "golang.stackrox.io/grpc-http1/server"
 	"google.golang.org/grpc"
 )
+
+const (
+	defaultMaxHTTP2ConcurrentStreams = 100 // HTTP/2 spec recommendation for minimum value
+)
+
+var (
+	maxHTTP2ConcurrentStreamsSetting = env.RegisterIntegerSetting("ROX_HTTP2_MAX_CONCURRENT_STREAMS", defaultMaxHTTP2ConcurrentStreams)
+)
+
+func maxHTTP2ConcurrentStreams() uint32 {
+	if maxHTTP2ConcurrentStreamsSetting.IntegerSetting() <= 0 {
+		return defaultMaxHTTP2ConcurrentStreams
+	}
+
+	return uint32(maxHTTP2ConcurrentStreamsSetting.IntegerSetting())
+}
 
 // EndpointConfig configures an endpoint through which the server is exposed.
 type EndpointConfig struct {
@@ -155,7 +173,10 @@ func (c *EndpointConfig) instantiate(httpHandler http.Handler, grpcSrv *grpc.Ser
 				"":                      &httpLis,
 			}
 
-			tlsutils.ALPNDemux(lis, protoMap, tlsutils.ALPNDemuxConfig{OnHandshakeError: tlsHandshakeErrorHandler})
+			tlsutils.ALPNDemux(lis, protoMap, tlsutils.ALPNDemuxConfig{
+				OnHandshakeError:    tlsHandshakeErrorHandler,
+				TLSHandshakeTimeout: env.TLSHandshakeTimeout.DurationSetting(),
+			})
 		}
 	}
 
@@ -178,7 +199,9 @@ func (c *EndpointConfig) instantiate(httpHandler http.Handler, grpcSrv *grpc.Ser
 			ErrorLog:  golog.New(httpErrorLogger{}, "", golog.LstdFlags),
 		}
 		if !c.NoHTTP2 {
-			var h2Srv http2.Server
+			h2Srv := http2.Server{
+				MaxConcurrentStreams: maxHTTP2ConcurrentStreams(),
+			}
 			if err := http2.ConfigureServer(httpSrv, &h2Srv); err != nil {
 				log.Warnf("Failed to instantiate endpoint listening at %q for HTTP/2", c.ListenEndpoint)
 			} else {
@@ -196,6 +219,11 @@ func (c *EndpointConfig) instantiate(httpHandler http.Handler, grpcSrv *grpc.Ser
 			srv:      httpSrv,
 			listener: httpLis,
 			endpoint: c,
+			stopper: func() {
+				if err := httpSrv.Shutdown(context.Background()); err != nil {
+					log.Warnf("Stopping HTTP listener: %s", err)
+				}
+			},
 		})
 	}
 	if grpcLis != nil {

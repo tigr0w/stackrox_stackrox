@@ -11,18 +11,22 @@ import {
 import { gql, useQuery } from '@apollo/client';
 import { Pagination as PaginationParam } from 'services/types';
 
-import useURLPagination from 'hooks/useURLPagination';
+import TableErrorComponent from 'Components/PatternFly/TableErrorComponent';
+import { UseURLPaginationResult } from 'hooks/useURLPagination';
 import useURLSort from 'hooks/useURLSort';
 import useSelectToggle from 'hooks/patternfly/useSelectToggle';
-import { deploymentsDefaultSort, defaultDeploymentSortFields } from '../sortUtils';
-import TableErrorComponent from '../components/TableErrorComponent';
+
+import { getPaginationParams, getRequestQueryStringForSearchFilter } from 'utils/searchUtils';
+import { getDefaultWorkloadSortOption, getWorkloadSortFields } from '../../utils/sortUtils';
 import DeploymentResourceTable, {
     DeploymentResources,
     deploymentResourcesFragment,
 } from './DeploymentResourceTable';
+import useWorkloadCveViewContext from '../hooks/useWorkloadCveViewContext';
 
 export type ImagePageResourcesProps = {
     imageId: string;
+    pagination: UseURLPaginationResult;
 };
 
 const imageResourcesQuery = gql`
@@ -35,11 +39,12 @@ const imageResourcesQuery = gql`
     }
 `;
 
-function ImagePageResources({ imageId }: ImagePageResourcesProps) {
-    const { page, perPage, setPage, setPerPage } = useURLPagination(20);
+function ImagePageResources({ imageId, pagination }: ImagePageResourcesProps) {
+    const { baseSearchFilter } = useWorkloadCveViewContext();
+    const { page, perPage, setPage, setPerPage } = pagination;
     const { sortOption, getSortParams } = useURLSort({
-        sortFields: defaultDeploymentSortFields,
-        defaultSortOption: deploymentsDefaultSort,
+        sortFields: getWorkloadSortFields('Deployment'),
+        defaultSortOption: getDefaultWorkloadSortOption('Deployment'),
         onSort: () => setPage(1),
     });
 
@@ -51,12 +56,8 @@ function ImagePageResources({ imageId }: ImagePageResourcesProps) {
     >(imageResourcesQuery, {
         variables: {
             id: imageId,
-            query: '',
-            pagination: {
-                offset: (page - 1) * perPage,
-                limit: perPage,
-                sortOption,
-            },
+            query: getRequestQueryStringForSearchFilter(baseSearchFilter),
+            pagination: getPaginationParams({ page, perPage, sortOption }),
         },
     });
 
@@ -65,12 +66,12 @@ function ImagePageResources({ imageId }: ImagePageResourcesProps) {
 
     return (
         <>
-            <PageSection component="div" variant="light" className="pf-u-py-md pf-u-px-xl">
+            <PageSection component="div" variant="light" className="pf-v5-u-py-md pf-v5-u-px-xl">
                 <Text>Navigate to resources associated with this image</Text>
             </PageSection>
             <Divider component="div" />
             <PageSection
-                className="pf-u-display-flex pf-u-flex-direction-column pf-u-flex-grow-1"
+                className="pf-v5-u-display-flex pf-v5-u-flex-direction-column pf-v5-u-flex-grow-1"
                 component="div"
             >
                 {error && (
@@ -81,31 +82,30 @@ function ImagePageResources({ imageId }: ImagePageResourcesProps) {
                 )}
                 {loading && !imageResourcesData && (
                     <Bullseye>
-                        <Spinner isSVG />
+                        <Spinner />
                     </Bullseye>
                 )}
                 {imageResourcesData && (
                     <ExpandableSection
                         toggleText={`Deployments (${deploymentCount})`}
-                        onToggle={deploymentTableToggle.onToggle}
+                        onToggle={() =>
+                            deploymentTableToggle.onToggle(!deploymentTableToggle.isOpen)
+                        }
                         isExpanded={deploymentTableToggle.isOpen}
                         style={
                             {
-                                '--pf-c-expandable-section__content--MarginTop':
-                                    'var(--pf-global--spacer--xs)',
+                                '--pf-v5-c-expandable-section__content--MarginTop':
+                                    'var(--pf-v5-global--spacer--xs)',
                             } as CSSProperties
                         }
                     >
-                        <div className="pf-u-background-color-100 pf-u-pt-sm">
+                        <div className="pf-v5-u-background-color-100 pf-v5-u-pt-sm">
                             <Pagination
                                 itemCount={deploymentCount}
                                 page={page}
                                 perPage={perPage}
                                 onSetPage={(_, newPage) => setPage(newPage)}
                                 onPerPageSelect={(_, newPerPage) => {
-                                    if (deploymentCount < (page - 1) * newPerPage) {
-                                        setPage(1);
-                                    }
                                     setPerPage(newPerPage);
                                 }}
                             />

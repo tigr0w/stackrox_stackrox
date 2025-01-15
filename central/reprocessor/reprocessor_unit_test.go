@@ -1,16 +1,22 @@
 package reprocessor
 
 import (
+	"context"
 	"testing"
 
-	protobuf "github.com/gogo/protobuf/types"
-	"github.com/golang/mock/gomock"
 	"github.com/pkg/errors"
 	nodeDatastoreMocks "github.com/stackrox/rox/central/node/datastore/mocks"
 	riskManagerMocks "github.com/stackrox/rox/central/risk/manager/mocks"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
+	imageEnricher "github.com/stackrox/rox/pkg/images/enricher"
+	"github.com/stackrox/rox/pkg/images/enricher/mocks"
 	nodesEnricherMocks "github.com/stackrox/rox/pkg/nodes/enricher/mocks"
+	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+	"github.com/stackrox/rox/pkg/testutils"
+	"go.uber.org/mock/gomock"
 )
 
 func Test_loopImpl_reprocessNode(t *testing.T) {
@@ -43,7 +49,7 @@ func Test_loopImpl_reprocessNode(t *testing.T) {
 			setUpMocks: func(t *testing.T, a *args, m *mocks) {
 				node := &storage.Node{
 					OsImage:     "Something that is not RHCOS",
-					LastUpdated: protobuf.TimestampNow(),
+					LastUpdated: protocompat.TimestampNow(),
 				}
 				gomock.InOrder(
 					m.nodes.EXPECT().GetNode(gomock.Any(), gomock.Eq(a.id)).Times(1).Return(node, true, nil),
@@ -68,12 +74,8 @@ func Test_loopImpl_reprocessNode(t *testing.T) {
 			want: false,
 		},
 	}
-	t.Setenv("ROX_RHCOS_NODE_SCANNING", "true")
-	if !env.RHCOSNodeScanning.BooleanSetting() {
-		t.Log("Assuming this is a release build, so skipping due to ROX_RHCOS_NODE_SCANNING=false")
-		return
-	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			m := mocks{
@@ -92,4 +94,49 @@ func Test_loopImpl_reprocessNode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReprocessWatchedImageDelegation(t *testing.T) {
+	t.Run("delegation disabled", func(t *testing.T) {
+		testutils.MustUpdateFeature(t, features.DelegateWatchedImageReprocessing, false)
+
+		enrichmentCtx := gomock.Cond(func(ctxRaw any) bool {
+			// Ensure that the enrichment isn't delegable.
+			ectx := ctxRaw.(imageEnricher.EnrichmentContext)
+			return !ectx.Delegable
+		})
+
+		ctrl := gomock.NewController(t)
+		enricher := mocks.NewMockImageEnricher(ctrl)
+		enricher.EXPECT().EnrichImage(emptyCtx, enrichmentCtx, gomock.Any())
+
+		loop := &loopImpl{imageEnricher: enricher}
+		loop.reprocessWatchedImage("example.com/repo/path:tag")
+	})
+
+	t.Run("delegation enabled", func(t *testing.T) {
+		testutils.MustUpdateFeature(t, features.DelegateWatchedImageReprocessing, true)
+
+		ctx := gomock.Cond(func(ctxRaw any) bool {
+			// Delegation will fail if context does not have image read access.
+			ctx := ctxRaw.(context.Context)
+			scopeChecker := sac.GlobalAccessScopeChecker(ctx).
+				AccessMode(storage.Access_READ_ACCESS).
+				Resource(resources.Image)
+
+			return scopeChecker.IsAllowed()
+		})
+		enrichmentCtx := gomock.Cond(func(ctxRaw any) bool {
+			// The enrichment must be delegable.
+			ectx := ctxRaw.(imageEnricher.EnrichmentContext)
+			return ectx.Delegable
+		})
+
+		ctrl := gomock.NewController(t)
+		enricher := mocks.NewMockImageEnricher(ctrl)
+		enricher.EXPECT().EnrichImage(ctx, enrichmentCtx, gomock.Any())
+
+		loop := &loopImpl{imageEnricher: enricher}
+		loop.reprocessWatchedImage("example.com/repo/path:tag")
+	})
 }

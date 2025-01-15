@@ -93,6 +93,10 @@ function print_rbac_instructions {
 
 echo "Creating sensor RBAC roles..."
 ${KUBE_COMMAND} apply -f "$DIR/sensor-rbac.yaml" || print_rbac_instructions
+if [[ -f "$DIR/sensor-compliance-rbac.yaml" ]]; then
+    echo "Creating sensor compliance RBAC roles..."
+    ${KUBE_COMMAND} apply -f "$DIR/sensor-compliance-rbac.yaml"
+fi
 echo "Creating sensor network policies..."
 ${KUBE_COMMAND} apply -f "$DIR/sensor-netpol.yaml" || exit 1
 
@@ -143,7 +147,6 @@ ${KUBE_COMMAND} apply -f "$DIR/collector-rbac.yaml" || print_rbac_instructions
 echo "Creating collector network policies..."
 ${KUBE_COMMAND} apply -f "$DIR/collector-netpol.yaml"
 if [[ -f "$DIR/collector-pod-security.yaml" ]]; then
-  ${KUBE_COMMAND} apply -f "$DIR/collector-pod-security.yaml"
   if [[ "${SUPPORTS_PSP}" -eq 0 ]]; then
     echo "Pod security policies are not supported on this cluster. Skipping..."
   else

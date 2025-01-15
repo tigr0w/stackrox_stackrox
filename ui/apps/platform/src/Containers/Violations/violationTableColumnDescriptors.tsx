@@ -1,19 +1,23 @@
 import React, { ReactElement } from 'react';
+import { Link } from 'react-router-dom';
 import pluralize from 'pluralize';
 import dateFns from 'date-fns';
-import { Button, ButtonVariant, Flex, FlexItem, Tooltip } from '@patternfly/react-core';
+import startCase from 'lodash/startCase';
+import { Flex, FlexItem, Tooltip } from '@patternfly/react-core';
+import { ExclamationCircleIcon } from '@patternfly/react-icons';
 
+import IconText from 'Components/PatternFly/IconText/IconText';
 import PolicySeverityIconText from 'Components/PatternFly/IconText/PolicySeverityIconText';
-import LinkShim from 'Components/PatternFly/LinkShim';
 import dateTimeFormat from 'constants/dateTimeFormat';
 import { lifecycleStageLabels } from 'messages/common';
 import {
     BLOCKING_ENFORCEMENT_ACTIONS,
     ENFORCEMENT_ACTIONS_AS_PAST_TENSE,
 } from 'constants/enforcementActions';
+import { resourceTypes } from 'constants/entityTypes';
 import LIFECYCLE_STAGES from 'constants/lifecycleStages';
 import { violationsBasePath } from 'routePaths';
-import { ListAlert } from './types/violationTypes';
+import { ListAlert } from 'types/alert.proto';
 
 type EntityTableCellProps = {
     // original: ListAlert;
@@ -31,12 +35,13 @@ function EntityTableCell({ original }: EntityTableCellProps): ReactElement {
     const { commonEntityInfo, resource, deployment } = original;
     const { name } = resource || deployment;
     const { namespace, clusterName } = commonEntityInfo;
+
+    const entityPath = namespace ? `${clusterName}/${namespace}` : clusterName;
+
     return (
         <Flex direction={{ default: 'column' }}>
-            <FlexItem className="pf-u-mb-0">{name}</FlexItem>
-            <FlexItem className="pf-u-color-200 pf-u-font-size-xs">
-                {`in "${clusterName}/${namespace}"`}
-            </FlexItem>
+            <FlexItem className="pf-v5-u-mb-0">{name}</FlexItem>
+            <FlexItem className="pf-v5-u-color-200 pf-v5-u-font-size-xs">{`in "${entityPath}"`}</FlexItem>
         </Flex>
     );
 }
@@ -64,7 +69,12 @@ type EnforcementTableCellProps = {
 function EnforcementColumn({ original }: EnforcementTableCellProps): ReactElement {
     if (BLOCKING_ENFORCEMENT_ACTIONS.has(original.enforcementAction)) {
         const message = `${ENFORCEMENT_ACTIONS_AS_PAST_TENSE[original?.enforcementAction]}`;
-        return <div className="text-alert-700">{message}</div>;
+        return (
+            <IconText
+                icon={<ExclamationCircleIcon color="var(--pf-v5-global--danger-color--100)" />}
+                text={message}
+            />
+        );
     }
 
     const count = original?.enforcementCount;
@@ -87,9 +97,7 @@ const tableColumnDescriptor = [
             const url = `${violationsBasePath}/${original.id as string}`;
             return (
                 <Tooltip content={original?.policy?.description || 'No description available'}>
-                    <Button variant={ButtonVariant.link} isInline component={LinkShim} href={url}>
-                        {original?.policy?.name}
-                    </Button>
+                    <Link to={url}>{original?.policy?.name}</Link>
                 </Tooltip>
             );
         },
@@ -102,7 +110,18 @@ const tableColumnDescriptor = [
     {
         Header: 'Type',
         accessor: 'commonEntityInfo.resourceType',
-        Cell: ({ value }): string => value.toLowerCase() as string,
+        Cell: ({ value, original }): string => {
+            const deployment = original?.deployment || {};
+            if (
+                value === resourceTypes.DEPLOYMENT &&
+                deployment.deploymentType &&
+                typeof deployment.deploymentType === 'string' &&
+                deployment.deploymentType.length > 0
+            ) {
+                return deployment.deploymentType as string;
+            }
+            return startCase(value.toLowerCase());
+        },
     },
     {
         Header: 'Enforced',

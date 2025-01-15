@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *PermissionSetsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE permission_sets CASCADE")
 	s.T().Log("permission_sets", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *PermissionSetsStoreSuite) TestStore() {
 	foundPermissionSet, exists, err = store.Get(ctx, permissionSet.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(permissionSet, foundPermissionSet)
+	protoassert.Equal(s.T(), permissionSet, foundPermissionSet)
 
-	permissionSetCount, err := store.Count(ctx)
+	permissionSetCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, permissionSetCount)
-	permissionSetCount, err = store.Count(withNoAccessCtx)
+	permissionSetCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(permissionSetCount)
 
@@ -75,11 +78,6 @@ func (s *PermissionSetsStoreSuite) TestStore() {
 	s.True(permissionSetExists)
 	s.NoError(store.Upsert(ctx, permissionSet))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, permissionSet), sac.ErrResourceAccessDenied)
-
-	foundPermissionSet, exists, err = store.Get(ctx, permissionSet.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(permissionSet, foundPermissionSet)
 
 	s.NoError(store.Delete(ctx, permissionSet.GetId()))
 	foundPermissionSet, exists, err = store.Get(ctx, permissionSet.GetId())
@@ -99,13 +97,13 @@ func (s *PermissionSetsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, permissionSets))
 
-	permissionSetCount, err = store.Count(ctx)
+	permissionSetCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, permissionSetCount)
 
 	s.NoError(store.DeleteMany(ctx, permissionSetIDs))
 
-	permissionSetCount, err = store.Count(ctx)
+	permissionSetCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, permissionSetCount)
 }

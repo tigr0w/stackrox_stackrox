@@ -1,12 +1,12 @@
 import React from 'react';
-import { Select, SelectOption } from '@patternfly/react-core';
+import { Select, SelectOption } from '@patternfly/react-core/deprecated';
 
-import { Cluster } from 'types/cluster.proto';
+import { ClusterScopeObject } from 'services/RolesService';
 import useSelectToggle from 'hooks/patternfly/useSelectToggle';
 import { ClusterIcon } from '../common/NetworkGraphIcons';
 
-type ClusterSelectorProps = {
-    clusters: Cluster[];
+export type ClusterSelectorProps = {
+    clusters: ClusterScopeObject[];
     selectedClusterName?: string;
     searchFilter: Partial<Record<string, string | string[]>>;
     setSearchFilter: (newFilter: Partial<Record<string, string | string[]>>) => void;
@@ -39,7 +39,7 @@ function ClusterSelector({
     const clusterSelectOptions: JSX.Element[] = clusters.map((cluster) => (
         <SelectOption key={cluster.id} value={cluster.name}>
             <span>
-                <ClusterIcon className="pf-u-mr-xs" /> {cluster.name}
+                <ClusterIcon className="pf-v5-u-mr-xs" /> {cluster.name}
             </span>
         </SelectOption>
     ));
@@ -50,12 +50,12 @@ function ClusterSelector({
             isPlain
             placeholderText={
                 <span>
-                    <ClusterIcon className="pf-u-mr-xs" />{' '}
+                    <ClusterIcon className="pf-v5-u-mr-xs" />{' '}
                     <span style={{ position: 'relative', top: '1px' }}>Cluster</span>
                 </span>
             }
             toggleAriaLabel="Select a cluster"
-            onToggle={toggleIsClusterOpen}
+            onToggle={(_e, v) => toggleIsClusterOpen(v)}
             onSelect={onClusterSelect}
             isOpen={isClusterOpen}
             selections={selectedClusterName}

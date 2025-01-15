@@ -6,6 +6,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/ComplianceAsCode/compliance-operator/pkg/apis/compliance/v1alpha1"
 	"github.com/mailru/easyjson"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/compliance/framework"
@@ -14,7 +15,6 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/compliance/compress"
 	"github.com/stackrox/rox/pkg/compliance/data"
-	"github.com/stackrox/rox/pkg/complianceoperator/api/v1alpha1"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/search"
@@ -31,22 +31,21 @@ type repository struct {
 	nodes       map[string]*storage.Node
 	deployments map[string]*storage.Deployment
 
-	unresolvedAlerts      []*storage.ListAlert
-	networkPolicies       map[string]*storage.NetworkPolicy
-	networkGraph          *v1.NetworkGraph
-	policies              map[string]*storage.Policy
-	images                []*storage.ListImage
-	imageIntegrations     []*storage.ImageIntegration
-	registries            []framework.ImageMatcher
-	scanners              []framework.ImageMatcher
-	processIndicators     []*storage.ProcessIndicator
-	networkFlows          []*storage.NetworkFlow
-	notifiers             []*storage.Notifier
-	roles                 []*storage.K8SRole
-	bindings              []*storage.K8SRoleBinding
-	cisDockerRunCheck     bool
-	cisKubernetesRunCheck bool
-	categoryToPolicies    map[string]set.StringSet // maps categories to policy set
+	unresolvedAlerts             []*storage.ListAlert
+	deploymentsToNetworkPolicies map[string][]*storage.NetworkPolicy
+	policies                     map[string]*storage.Policy
+	images                       []*storage.ListImage
+	imageIntegrations            []*storage.ImageIntegration
+	registries                   []framework.ImageMatcher
+	scanners                     []framework.ImageMatcher
+	sshProcessIndicators         []*storage.ProcessIndicator
+	hasProcessIndicators         bool
+	flowsWithDeploymentDst       []*storage.NetworkFlow
+	notifiers                    []*storage.Notifier
+	roles                        []*storage.K8SRole
+	bindings                     []*storage.K8SRoleBinding
+	cisKubernetesRunCheck        bool
+	categoryToPolicies           map[string]set.StringSet // maps categories to policy set
 
 	complianceOperatorResults map[string][]*storage.ComplianceOperatorCheckResult
 
@@ -67,12 +66,8 @@ func (r *repository) Deployments() map[string]*storage.Deployment {
 	return r.deployments
 }
 
-func (r *repository) NetworkPolicies() map[string]*storage.NetworkPolicy {
-	return r.networkPolicies
-}
-
-func (r *repository) NetworkGraph() *v1.NetworkGraph {
-	return r.networkGraph
+func (r *repository) DeploymentsToNetworkPolicies() map[string][]*storage.NetworkPolicy {
+	return r.deploymentsToNetworkPolicies
 }
 
 func (r *repository) Policies() map[string]*storage.Policy {
@@ -91,12 +86,16 @@ func (r *repository) ImageIntegrations() []*storage.ImageIntegration {
 	return r.imageIntegrations
 }
 
-func (r *repository) ProcessIndicators() []*storage.ProcessIndicator {
-	return r.processIndicators
+func (r *repository) SSHProcessIndicators() []*storage.ProcessIndicator {
+	return r.sshProcessIndicators
 }
 
-func (r *repository) NetworkFlows() []*storage.NetworkFlow {
-	return r.networkFlows
+func (r *repository) HasProcessIndicators() bool {
+	return r.hasProcessIndicators
+}
+
+func (r *repository) NetworkFlowsWithDeploymentDst() []*storage.NetworkFlow {
+	return r.flowsWithDeploymentDst
 }
 
 func (r *repository) Notifiers() []*storage.Notifier {
@@ -123,10 +122,6 @@ func (r *repository) NodeResults() map[string]map[string]*compliance.ComplianceS
 	return r.nodeResults
 }
 
-func (r *repository) CISDockerTriggered() bool {
-	return r.cisDockerRunCheck
-}
-
 func (r *repository) CISKubernetesTriggered() bool {
 	return r.cisKubernetesRunCheck
 }
@@ -143,9 +138,9 @@ func (r *repository) ComplianceOperatorResults() map[string][]*storage.Complianc
 	return r.complianceOperatorResults
 }
 
-func newRepository(ctx context.Context, domain framework.ComplianceDomain, scrapeResults map[string]*compliance.ComplianceReturn, factory *factory) (*repository, error) {
+func newRepository(ctx context.Context, domain framework.ComplianceDomain, factory *factory) (*repository, error) {
 	r := &repository{}
-	if err := r.init(ctx, domain, scrapeResults, factory); err != nil {
+	if err := r.init(ctx, domain, factory); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -163,14 +158,6 @@ func deploymentsByID(deployments []*storage.Deployment) map[string]*storage.Depl
 	result := make(map[string]*storage.Deployment, len(deployments))
 	for _, deployment := range deployments {
 		result[deployment.GetId()] = deployment
-	}
-	return result
-}
-
-func networkPoliciesByID(policies []*storage.NetworkPolicy) map[string]*storage.NetworkPolicy {
-	result := make(map[string]*storage.NetworkPolicy, len(policies))
-	for _, policy := range policies {
-		result[policy.GetId()] = policy
 	}
 	return result
 }
@@ -201,7 +188,11 @@ func policyCategories(policies []*storage.Policy) map[string]set.StringSet {
 	return result
 }
 
-func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain, scrapeResults map[string]*compliance.ComplianceReturn, f *factory) error {
+func deploymentIngressFlowsPredicate(props *storage.NetworkFlowProperties) bool {
+	return props.GetDstEntity().GetType() == storage.NetworkEntityInfo_DEPLOYMENT
+}
+
+func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain, f *factory) error {
 	r.cluster = domain.Cluster().Cluster()
 	r.nodes = nodesByID(framework.Nodes(domain))
 
@@ -220,14 +211,13 @@ func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain
 	if err != nil {
 		return err
 	}
-	r.networkPolicies = networkPoliciesByID(networkPolicies)
 
 	networkTree := f.netTreeMgr.GetNetworkTree(ctx, clusterID)
 	if networkTree == nil {
 		networkTree = f.netTreeMgr.CreateNetworkTree(ctx, clusterID)
 	}
 
-	r.networkGraph = f.networkGraphEvaluator.GetGraph(clusterID, nil, deployments, networkTree, networkPolicies, false)
+	r.deploymentsToNetworkPolicies = f.networkGraphEvaluator.GetApplyingPoliciesPerDeployment(deployments, networkTree, networkPolicies)
 
 	policies, err := f.policyStore.GetAllPolicies(ctx)
 	if err != nil {
@@ -256,10 +246,21 @@ func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain
 		r.scanners = append(r.scanners, scannerIntegration.GetScanner())
 	}
 
-	r.processIndicators, err = f.processIndicatorStore.SearchRawProcessIndicators(ctx, clusterQuery)
+	sshProcessQuery := search.NewQueryBuilder().AddRegexes(search.ProcessExecPath, ".*ssh.*").ProtoQuery()
+	sshQuery := search.ConjunctionQuery(clusterQuery, sshProcessQuery)
+
+	r.sshProcessIndicators, err = f.processIndicatorStore.SearchRawProcessIndicators(ctx, sshQuery)
 	if err != nil {
 		return err
 	}
+
+	hasIndicatorsQuery := clusterQuery.CloneVT()
+	hasIndicatorsQuery.Pagination.Limit = 1
+	result, err := f.processIndicatorStore.Search(ctx, hasIndicatorsQuery)
+	if err != nil {
+		return err
+	}
+	r.hasProcessIndicators = len(result) != 0
 
 	flowStore, err := f.networkFlowDataStore.GetFlowStore(ctx, domain.Cluster().ID())
 	if err != nil {
@@ -267,7 +268,8 @@ func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain
 	} else if flowStore == nil {
 		return errors.Errorf("no flows found for cluster %q", domain.Cluster().ID())
 	}
-	r.networkFlows, _, err = flowStore.GetAllFlows(ctx, nil)
+
+	r.flowsWithDeploymentDst, _, err = flowStore.GetMatchingFlows(ctx, deploymentIngressFlowsPredicate, nil)
 	if err != nil {
 		return err
 	}
@@ -289,7 +291,7 @@ func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain
 
 	alertQuery := search.ConjunctionQuery(
 		clusterQuery,
-		search.NewQueryBuilder().AddExactMatches(search.ViolationState, storage.ViolationState_ACTIVE.String(), storage.ViolationState_SNOOZED.String()).ProtoQuery(),
+		search.NewQueryBuilder().AddExactMatches(search.ViolationState, storage.ViolationState_ACTIVE.String()).ProtoQuery(),
 	)
 	alertQuery.Pagination = infPagination
 	r.unresolvedAlerts, err = f.alertStore.SearchListAlerts(ctx, alertQuery)
@@ -313,10 +315,24 @@ func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return err
 	}
 
+	cisKubernetesStandardID, err := f.standardsRepo.GetCISKubernetesStandardID()
+	if err != nil {
+		return err
+	}
+
+	kubeCISRunResults, err := f.complianceStore.GetLatestRunResults(ctx, clusterID, cisKubernetesStandardID, 0)
+	if err == nil && kubeCISRunResults.LastSuccessfulResults != nil {
+		r.cisKubernetesRunCheck = true
+	}
+
+	return nil
+}
+
+func (r *repository) AddHostScrapedData(scrapeResults map[string]*compliance.ComplianceReturn) {
 	// Flatten the files so we can do direct lookups on the nested values
 	for _, n := range scrapeResults {
 		totalNodeFiles := data.FlattenFileMap(n.GetFiles())
@@ -326,30 +342,6 @@ func (r *repository) init(ctx context.Context, domain framework.ComplianceDomain
 	r.hostScrape = scrapeResults
 
 	r.nodeResults = getNodeResults(scrapeResults)
-
-	// check for latest compliance results to determine
-	// if CIS benchmarks were ever run
-	cisDockerStandardID, err := f.standardsRepo.GetCISDockerStandardID()
-	if err != nil {
-		return err
-	}
-
-	cisKubernetesStandardID, err := f.standardsRepo.GetCISKubernetesStandardID()
-	if err != nil {
-		return err
-	}
-
-	dockerCISRunResults, err := f.complianceStore.GetLatestRunResults(ctx, clusterID, cisDockerStandardID, 0)
-	if err == nil && dockerCISRunResults.LastSuccessfulResults != nil {
-		r.cisDockerRunCheck = true
-	}
-
-	kubeCISRunResults, err := f.complianceStore.GetLatestRunResults(ctx, clusterID, cisKubernetesStandardID, 0)
-	if err == nil && kubeCISRunResults.LastSuccessfulResults != nil {
-		r.cisKubernetesRunCheck = true
-	}
-
-	return nil
 }
 
 func getNodeResults(scrapeResults map[string]*compliance.ComplianceReturn) map[string]map[string]*compliance.ComplianceStandardResult {

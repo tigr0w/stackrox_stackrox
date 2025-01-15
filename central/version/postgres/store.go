@@ -5,33 +5,26 @@ import (
 	"time"
 
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/logging"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
-	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
-	"github.com/stackrox/rox/pkg/sync"
 )
 
 const (
 	getStmt = "SELECT seqnum, version, minseqnum, lastpersisted FROM versions LIMIT 1"
-	// TODO(ROX-16774) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
+	// TODO(ROX-18005) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
 	// the older database.  In that case we will need to process the serialized data.
 	getPreviousStmt = "SELECT serialized FROM versions LIMIT 1"
 	deleteStmt      = "DELETE FROM versions"
 )
 
-var (
-	log    = logging.LoggerForModule()
-	schema = pkgSchema.VersionsSchema
-)
-
 // Store access versions in database
 type Store interface {
 	Get(ctx context.Context) (*storage.Version, bool, error)
-	// TODO(ROX-16774) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
+	// TODO(ROX-18005) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
 	// the older database.  In that case we will need to process the serialized data.
 	GetPrevious(ctx context.Context) (*storage.Version, bool, error)
 	Upsert(ctx context.Context, obj *storage.Version) error
@@ -39,8 +32,7 @@ type Store interface {
 }
 
 type storeImpl struct {
-	db    postgres.DB
-	mutex sync.Mutex
+	db postgres.DB
 }
 
 // New returns a new Store instance using the provided sql instance.
@@ -55,7 +47,7 @@ func insertIntoVersions(ctx context.Context, tx *postgres.Tx, obj *storage.Versi
 		obj.GetSeqNum(),
 		obj.GetVersion(),
 		obj.GetMinSeqNum(),
-		pgutils.NilOrTime(obj.GetLastPersisted()),
+		protocompat.NilOrTime(obj.GetLastPersisted()),
 	}
 
 	finalStr := "INSERT INTO versions (seqnum, version, minseqnum, lastpersisted) VALUES($1, $2, $3, $4)"
@@ -67,7 +59,7 @@ func insertIntoVersions(ctx context.Context, tx *postgres.Tx, obj *storage.Versi
 }
 
 func (s *storeImpl) Upsert(ctx context.Context, obj *storage.Version) error {
-	return pgutils.Retry(func() error {
+	return pgutils.Retry(ctx, func() error {
 		return s.retryableUpsert(ctx, obj)
 	})
 }
@@ -107,7 +99,7 @@ func (s *storeImpl) retryableUpsert(ctx context.Context, obj *storage.Version) e
 
 // Get returns the object, if it exists from the store
 func (s *storeImpl) Get(ctx context.Context) (*storage.Version, bool, error) {
-	return pgutils.Retry3(func() (*storage.Version, bool, error) {
+	return pgutils.Retry3(ctx, func() (*storage.Version, bool, error) {
 		return s.retryableGet(ctx)
 	})
 }
@@ -146,15 +138,15 @@ func (s *storeImpl) retryableGet(ctx context.Context) (*storage.Version, bool, e
 }
 
 // GetPrevious returns the object, if it exists from central_previous
-// TODO(ROX-16774) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
+// TODO(ROX-18005) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
 // the older database.  In that case we will need to process the serialized data.
 func (s *storeImpl) GetPrevious(ctx context.Context) (*storage.Version, bool, error) {
-	return pgutils.Retry3(func() (*storage.Version, bool, error) {
+	return pgutils.Retry3(ctx, func() (*storage.Version, bool, error) {
 		return s.retryableGetPrevious(ctx)
 	})
 }
 
-// TODO(ROX-16774) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
+// TODO(ROX-18005) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
 // the older database.  In that case we will need to process the serialized data.
 func (s *storeImpl) retryableGetPrevious(ctx context.Context) (*storage.Version, bool, error) {
 	scopeChecker := sac.GlobalAccessScopeChecker(ctx).AccessMode(storage.Access_READ_ACCESS)
@@ -175,7 +167,7 @@ func (s *storeImpl) retryableGetPrevious(ctx context.Context) (*storage.Version,
 	}
 
 	var msg storage.Version
-	if err := msg.Unmarshal(data); err != nil {
+	if err := msg.UnmarshalVTUnsafe(data); err != nil {
 		return nil, false, err
 	}
 	return &msg, true, nil
@@ -191,7 +183,7 @@ func (s *storeImpl) acquireConn(ctx context.Context, _ ops.Op, _ string) (*postg
 
 // Delete removes the specified ID from the store
 func (s *storeImpl) Delete(ctx context.Context) error {
-	return pgutils.Retry(func() error {
+	return pgutils.Retry(ctx, func() error {
 		return s.retryableDelete(ctx)
 	})
 }

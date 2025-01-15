@@ -4,7 +4,6 @@ import (
 	"context"
 
 	v1 "github.com/stackrox/rox/generated/api/v1"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/search"
 )
 
@@ -13,7 +12,7 @@ func TransformCategoryNameFields(searcher search.Searcher) search.Searcher {
 	return search.FuncSearcher{
 		SearchFunc: func(ctx context.Context, q *v1.Query) ([]search.Result, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 
@@ -24,7 +23,7 @@ func TransformCategoryNameFields(searcher search.Searcher) search.Searcher {
 		},
 		CountFunc: func(ctx context.Context, q *v1.Query) (int, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 
@@ -38,10 +37,6 @@ func TransformCategoryNameFields(searcher search.Searcher) search.Searcher {
 
 func handleCategoryNameQuery(q *v1.Query) {
 	if q.GetQuery() == nil {
-		return
-	}
-
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
 		return
 	}
 

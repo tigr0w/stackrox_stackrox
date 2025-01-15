@@ -2,13 +2,12 @@ package pgutils
 
 import (
 	"context"
+	"net"
 	"reflect"
 	"regexp"
 	"strings"
-	"time"
 
-	"github.com/gogo/protobuf/types"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres"
@@ -51,19 +50,6 @@ func ConvertEnumSliceToIntArray[T ~int32](enumSlice []T) []int32 {
 	return resultSlice
 }
 
-// NilOrTime allows for a proto timestamp to be stored a timestamp type in Postgres
-func NilOrTime(t *types.Timestamp) *time.Time {
-	if t == nil {
-		return nil
-	}
-	ts, err := types.TimestampFromProto(t)
-	if err != nil {
-		return nil
-	}
-	ts = ts.Round(time.Microsecond)
-	return &ts
-}
-
 // NilOrUUID allows for a proto string to be stored as a UUID type in Postgres
 func NilOrUUID(value string) *uuid.UUID {
 	if value == "" {
@@ -76,12 +62,32 @@ func NilOrUUID(value string) *uuid.UUID {
 	return &id
 }
 
+// NilOrCIDR allows for a proto string to be stored as a CIDR type in Postgres
+func NilOrCIDR(value string) *net.IPNet {
+	if value == "" {
+		return nil
+	}
+	_, cidr, err := net.ParseCIDR(value)
+	if err != nil {
+		return nil
+	}
+	return cidr
+}
+
+// EmptyOrMap allows for map to be stored explicit as an empty object ({}) rather than null.
+func EmptyOrMap[K comparable, V any, M map[K]V](m M) interface{} {
+	if m == nil {
+		return make(M)
+	}
+	return m
+}
+
 // CreateTableFromModel executes input create statement using the input connection.
 func CreateTableFromModel(ctx context.Context, db *gorm.DB, createStmt *postgres.CreateStmts) {
 	// Partitioned tables are not supported by Gorm migration or models
 	// For partitioned tables the necessary DDL will be contained in PartitionCreate.
 	if !createStmt.Partition {
-		err := Retry(func() error {
+		err := Retry(ctx, func() error {
 			return db.WithContext(ctx).AutoMigrate(createStmt.GormModel)
 		})
 		err = errors.Wrapf(err, "Error creating table for %q: %v", reflect.TypeOf(createStmt.GormModel), err)

@@ -1,5 +1,5 @@
 import React, { ReactElement, useState } from 'react';
-import { Select, SelectVariant } from '@patternfly/react-core';
+import { Select } from '@patternfly/react-core/deprecated';
 
 export type SelectSingleProps = {
     toggleIcon?: ReactElement;
@@ -13,6 +13,9 @@ export type SelectSingleProps = {
     isCreatable?: boolean;
     variant?: 'typeahead' | null;
     placeholderText?: string;
+    onBlur?: React.FocusEventHandler<HTMLTextAreaElement>;
+    menuAppendTo?: () => HTMLElement;
+    footer?: React.ReactNode;
 };
 
 function SelectSingle({
@@ -27,10 +30,11 @@ function SelectSingle({
     isCreatable = false,
     variant = null,
     placeholderText = '',
+    onBlur,
+    menuAppendTo,
+    footer,
 }: SelectSingleProps): ReactElement {
     const [isOpen, setIsOpen] = useState(false);
-
-    const isTypeahead = variant === 'typeahead' ? SelectVariant.typeahead : SelectVariant.single;
 
     function onSelect(_event, selection) {
         // The mouse event is not useful.
@@ -40,19 +44,22 @@ function SelectSingle({
 
     return (
         <Select
-            variant={isTypeahead}
+            variant={variant === 'typeahead' ? 'typeahead' : 'single'}
             toggleIcon={toggleIcon}
             toggleAriaLabel={toggleAriaLabel}
             id={id}
             isDisabled={isDisabled}
             isOpen={isOpen}
             onSelect={onSelect}
-            onToggle={setIsOpen}
+            onToggle={(_event, val) => setIsOpen(val)}
             selections={value}
             direction={direction}
             isCreatable={isCreatable}
             placeholderText={placeholderText}
             toggleId={id}
+            onBlur={onBlur}
+            menuAppendTo={menuAppendTo}
+            footer={footer}
         >
             {children}
         </Select>

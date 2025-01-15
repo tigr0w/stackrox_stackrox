@@ -34,27 +34,50 @@
     $.Values, we apply some bootstrap defaults.
    */}}
 {{ $rox := deepCopy $values }}
-
+{{ $_ := set $ "_rox" $rox }}
 
 {{ $configShape := $.Files.Get "internal/config-shape.yaml" | fromYaml }}
-
-{{/* Only merge scanner config shapes if feature flag is enabled and kubectl output is disabled */}}
-[< if (not .KubectlOutput) ->]
+{{/* Only merge scanner config shapes if kubectl output is disabled */}}
+[<- if not .KubectlOutput >]
   {{ $configShapeScanner := $.Files.Get "internal/scanner-config-shape.yaml" | fromYaml }}
-  {{ $_ := include "srox.mergeInto" (list $rox $configShape $configShapeScanner) }}
-[< else >]
-  {{ $_ := include "srox.mergeInto" (list $rox $configShape) }}
-[< end >]
+  {{ $_ = include "srox.mergeInto" (list $configShape $configShapeScanner) }}
+  {{/* Only merge scanner-v4 config shapes if kubectl output is disabled and feature flag is enabled */}}
+  {{ $configShapeScannerV4 := $.Files.Get "internal/scanner-v4-config-shape.yaml" | fromYaml }}
+  {{ $_ = include "srox.mergeInto" (list $configShape $configShapeScannerV4) }}
+[<- end >]
 
-{{ $_ = set $ "_rox" $rox }}
+{{ $_ = include "srox.mergeInto" (list $rox $configShape) }}
+{{ $_ = set $._rox "_configShape" $configShape }}
 
 {{/* Set the config fingerprint as computed or overridden via values. */}}
 {{ $configFP = default $configFP $._rox.meta.configFingerprintOverride }}
 {{ $_ = set $._rox "_configFP" $configFP }}
 
 {{/* Global state (accessed from sub-templates) */}}
-{{ $state := dict "notes" list "warnings" list "referencedImages" dict "generated" dict }}
+{{ $state := dict }}
+{{ $_ = set $state "generated" dict }}
+{{ $_ = set $state "notes" list }}
+{{ $_ = set $state "warnings" list }}
+{{ $_ = set $state "referencedImages" dict }}
+{{ $_ = set $state "referencedStorageClasses" list }}
 {{ $_ = set $._rox "_state" $state }}
+
+{{- include "srox.checkVersionRequirements" $ -}}
+
+{{/* Sanity checks.*/}}
+{{- if not (kindIs "invalid" ._rox.clusterLabels) }}
+  {{- if not (kindIs "map" ._rox.clusterLabels) }}
+    {{ include "srox.fail" (printf "type mismatch: clusterLabels is a %s, but must be a dict" (kindOf ._rox.clusterLabels)) }}
+  {{- end }}
+  {{- range $key, $val := ._rox.clusterLabels }}
+    {{- if not (kindIs "string" $key) }}
+      {{ include "srox.fail" (printf "type mismatch: clusterLabels contains the key %v of type %s, but only string keys are allowed" $key (kindOf $key)) }}
+    {{- end }}
+    {{- if not (kindIs "string" $val) }}
+      {{ include "srox.fail" (printf "type mismatch: clusterLabels.%v is of type %s, but only string values are allowed" $key (kindOf $val)) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
 
 {{/*
     API Server setup. The problem with `.Capabilities.APIVersions` is that Helm does not
@@ -87,35 +110,16 @@
 
 {{/* Openshift monitoring */}}
 {{ if $._rox.enableOpenShiftMonitoring }}
-  {{ if (ne $._rox.env.openshift 4) }}
-    {{ include "srox.fail" "'enableOpenShiftMonitoring' is set to true, but the chart is not being deployed in an OpenShift 4 cluster." }}
-  {{ end }}
-  
-  {{/* Override monitoring exposure when openshift monitoring is desired */}}
-  {{ if not $._rox.exposeMonitoring }}
-    {{ include "srox.warn" (list . "The default or set value of 'exposeMonitoring' is false but 'enableOpenShiftMonitoring' is true.") }}
-    {{ include "srox.warn" (list . "'exposeMonitoring' will be overridden and set to true.") }}
-    {{ $_ := set $._rox "exposeMonitoring" true }}
-  {{ end }}
-  
-  {{ if not $._rox.sensor.exposeMonitoring }}
-    {{ include "srox.warn" (list . "The default or set value of 'sensor.exposeMonitoring' is false but 'enableOpenShiftMonitoring' is true.") }}
-    {{ include "srox.warn" (list . "'sensor.exposeMonitoring' will be overridden and set to true.") }}
-    {{ $_ := set $._rox.sensor "exposeMonitoring" true }}
-  {{ end }}
-  
-  {{ if not $._rox.collector.exposeMonitoring }}
-    {{ include "srox.warn" (list . "The default or set value of 'collector.exposeMonitoring' is false but 'enableOpenShiftMonitoring' is true.") }}
-    {{ include "srox.warn" (list . "'collector.exposeMonitoring' will be overridden and set to true.") }}
-    {{ $_ := set $._rox.collector "exposeMonitoring" true }}
-  {{ end }}
-  
-  {{ if not $._rox.admissionControl.exposeMonitoring }}
-    {{ include "srox.warn" (list . "The default or set value of 'admissionControl.exposeMonitoring' is false but 'enableOpenShiftMonitoring' is true.") }}
-    {{ include "srox.warn" (list . "'admissionControl.exposeMonitoring' will be overridden and set to true.") }}
-    {{ $_ := set $._rox.admissionControl "exposeMonitoring" true }}
-  {{ end }}
-  {{ include "srox.note" (list $ (printf "To have openshift-monitoring include metrics from the %s namespace a label metadata is required. Run: oc label namespace/%s openshift.io/cluster-monitoring=true." .Release.Namespace .Release.Namespace)) }}
+  {{ include "srox.warn" (list . "enableOpenShiftMonitoring option was replaced with monitoring.openshift.enabled") }}
+  {{ $_ := set $._rox "monitoring" (dict "openshift" (dict "enabled" true)) }}
+{{ end }}
+{{/* Default `monitoring.openshift.enabled = true` unless `env.openshift != 4`. */}}
+{{ if kindIs "invalid" $._rox.monitoring.openshift.enabled }}
+{{ $_ := set $._rox "monitoring" (dict "openshift" (dict "enabled" (eq $._rox.env.openshift 4))) }}
+{{ end }}
+{{ if and $._rox.monitoring.openshift.enabled (ne $._rox.env.openshift 4) }}
+  {{ include "srox.warn" (list . "'monitoring.openshift.enabled' is set to true, but the chart is not being deployed in an OpenShift 4 cluster. Proceeding with 'monitoring.openshift.enabled=false'.") }}
+  {{ $_ := set $._rox "monitoring" (dict "openshift" (dict "enabled" false)) }}
 {{ end }}
 
 [<- if .AutoSensePodSecurityPolicies >]
@@ -123,11 +127,19 @@
 {{ include "srox.autoSensePodSecurityPolicies" (list $) }}
 [<- end >]
 
+{{ include "srox.setInstallMethod" (list $) }}
+
 {{ include "srox.applyDefaults" $ }}
+{{ include "srox.ensureCentralEndpointContainsPort" $ }}
+
+{{ include "srox.getStorageClasses" (list $) }}
+{{ include "srox.getPVCs" (list $) }}
 
 {{/* Expand applicable config values */}}
 {{ $expandables := $.Files.Get "internal/expandables.yaml" | fromYaml }}
 {{ include "srox.expandAll" (list $ $rox $expandables) }}
+
+{{ $_ = include "srox.loadAnnotationTemplates" $ }}
 
 {{/*
     General validation of effective settings.
@@ -179,11 +191,10 @@
 {{ if and (eq $._rox.env.openshift 3) $._rox.admissionControl.listenOnEvents }}
   {{ include "srox.fail" "'admissionControl.listenOnEvents' is set to true, but the chart is being deployed in OpenShift 3.x compatibility mode, which does not work with this feature. Set 'env.openshift' to '4' in order to enable OpenShift 4.x features." }}
 {{ end }}
+
 {{/* Initial image pull secret setup. */}}
 {{ include "srox.mergeInto" (list $._rox.mainImagePullSecrets $._rox.imagePullSecrets) }}
-{{ include "srox.configureImagePullSecrets" (list $ "mainImagePullSecrets" $._rox.mainImagePullSecrets "secured-cluster-services-main" (list "stackrox") $._rox._namespace) }}
 {{ include "srox.mergeInto" (list $._rox.collectorImagePullSecrets $._rox.imagePullSecrets) }}
-{{ include "srox.configureImagePullSecrets" (list $ "collectorImagePullSecrets" $._rox.collectorImagePullSecrets "secured-cluster-services-collector" (list "stackrox" "collector-stackrox") $._rox._namespace) }}
 
 {{/* Additional CAs. */}}
 {{ $additionalCAList := list }}
@@ -230,11 +241,28 @@
 {{/* Image settings */}}
 {{ include "srox.configureImage" (list $ ._rox.image.main) }}
 {{ include "srox.configureImage" (list $ ._rox.image.collector) }}
-[< if (not .KubectlOutput) ->]
+[<- if not .KubectlOutput >]
 {{ include "srox.configureImage" (list $ ._rox.image.scanner) }}
+{{ include "srox.configureImage" (list $ ._rox.image.scannerV4) }}
 [<- end >]
 
 {{ include "srox.initGlobalPrefix" (list $) }}
+
+{{/*
+The following block checks for the validity of the provided init bundle. (`helm install ... -f <init-bundle.yaml>`)
+1. Throw an error if no init bundle was provided
+2. Throw an error if the wrong init-bundle format was provided (user wrongly passed an operator-formatted init-bundle to helm). We detect the presence of an operator init bundle by checking for the Kubernetes secret annotation "init-bundle.stackrox.io/name", that suggests a user has wrongly used `helm install ... -f <operator-init-bundle.yaml>.`
+3. Warn if the user specified both init bundles, e.g. `helm install ... -f <helm-init-bundle.yaml> -f <operator-init-bundle.yaml>`
+*/}}
+{{ $operatorInitBundlePresent := hasKey (._rox.metadata).annotations "init-bundle.stackrox.io/name" }}
+{{ $helmInitBundleNotPresent := empty ._rox.ca._cert }}
+{{- if and $operatorInitBundlePresent $helmInitBundleNotPresent }}
+    {{ include "srox.fail" (list . "It seems an init bundle in the operator format has been provided. Note that this bundle format is ignored by the Helm chart. Make sure to provide an init bundle for Helm chart installation.") }}
+{{- else if and (not $helmInitBundleNotPresent) $operatorInitBundlePresent }}
+    {{ include "srox.warn" (list . "It seems an init bundle in the operator format has been provided. Note that this bundle format is ignored by the Helm chart.") }}
+{{- else if $helmInitBundleNotPresent }}
+    {{ include "srox.fail" "A CA certificate must be specified" }}
+{{- end }}
 
 {{/* ManagedBy related settings */}}
 {{/* The field `helmManaged` defaults to true, therefore `managedBy` will only be changed to `MANAGER_TYPE_MANUAL` here
@@ -243,27 +271,23 @@
   {{ $_ = set $._rox "managedBy" "MANAGER_TYPE_MANUAL" }}
 {{- end }}
 
+{{ include "srox.setSecuredClusterCertRefresh" (list $) }}
+
 [< if (not .KubectlOutput) ->]
+
+{{ $imagePullSecretNames := list }}
+
+{{ if eq ._rox.scanner.disable false }}
 {{/*
    Local scanner setup.
   */}}
-
-{{/* Disable scanner always in kubectl outputs */}}
-[< if .KubectlOutput ->]
-  {{ $_ := set $._rox.scanner "disable" true }}
-[< end >]
-
-{{ if eq ._rox.scanner.disable false }}
   {{ $centralDeployment := dict }}
   {{ include "srox.safeLookup" (list $ $centralDeployment "apps/v1" "Deployment" $.Release.Namespace "central") }}
   {{ if $centralDeployment.result }}
     {{ include "srox.note" (list $ "Detected central running in the same namespace. Not deploying scanner from this chart and configuring sensor to use existing scanner instance, if any.") }}
-    {{ $_ := set $._rox.sensor.localImageScanning "enabled" "true" }}
     {{ $_ := set $._rox.scanner "disable" true }}
   {{ end }}
-{{ end }}
 
-{{ if eq ._rox.scanner.disable false }}
   {{ if ne ._rox.scanner.mode "slim" }}
     {{ include "srox.fail" (print "Only scanner slim mode is allowed in Secured Cluster. To solve this, set to slim mode: scanner.mode=slim.") }}
   {{ end }}
@@ -272,16 +296,62 @@
   {{ $_ := set $._rox.scanner "slimImage" ._rox.image.scanner }}
   {{ $_ := set $._rox.scanner "slimDBImage" ._rox.image.scannerDb }}
   {{ include "srox.scannerInit" (list $ $._rox.scanner) }}
-  {{ include "srox.configureImagePullSecrets" (list $ "imagePullSecrets" $._rox.imagePullSecrets "secured-cluster-services-main" (list "stackrox" "stackrox-scanner") $.Release.Namespace) }}
+
+  {{ $imagePullSecretNames = append $imagePullSecretNames "stackrox-scanner" }}
 {{ end }}
-[<- end >]
 
 {{/*
-    Post-processing steps.
-   */}}
+   Local Scanner v4 Indexer setup.
+  */}}
 
-{{ include "srox.configureImagePullSecretsForDockerRegistry" (list $ ._rox.mainImagePullSecrets) }}
-{{ include "srox.configureImagePullSecretsForDockerRegistry" (list $ ._rox.collectorImagePullSecrets) }}
+{{ $scannerV4Cfg := $._rox.scannerV4 }}
+
+[</*
+
+This can be activated again when Scanner V4 becomes the default scanner:
+
+To establish a smooth and automated activation of Scanner v4 in situations where Scanner v2 is
+already activated, we let `scanner.disable: false` have the implicit side-effect of
+`scannerV4.disable: false` if the latter has not been explicitly set.
+
+{{- if eq $.Chart.Name "stackrox-secured-cluster-services" -}}
+  {{- if kindIs "invalid" $scannerV4Cfg.disable -}}
+    {{- $_ = set $scannerV4Cfg "disable" $._rox.scanner.disable -}}
+  {{- end -}}
+{{- end -}}
+
+*/>]
+
+{{/* Disable scanner v4 always in kubectl outputs */}}
+
+{{/* Copy secured-cluster-style image configuration to what the Scanner V4 configuration machinery expects. */}}
+{{ $_ := set $._rox.scannerV4 "image" $._rox.image.scannerV4 }}
+{{ $_ := set $._rox.scannerV4.db "image" $._rox.image.scannerV4DB }}
+
+{{ include "srox.scannerV4Init" (list $ $scannerV4Cfg) }}
+{{ if ._rox.scannerV4._dbEnabled }}
+  {{ include "srox.scannerV4Volume" $ }}
+{{ end }}
+
+{{ if ._rox.scannerV4._indexerEnabled }}
+  {{ $imagePullSecretNames = append $imagePullSecretNames "stackrox-scanner-v4" }}
+{{ end }}
+
+{{ if not (empty $imagePullSecretNames) }}
+  {{ $imagePullSecretNames = append $imagePullSecretNames "stackrox" }}
+  {{/* Note: This must happen late, as we rely on "srox.configureImage" to collect the
+       set of all referenced images first. */}}
+  {{ include "srox.configureImagePullSecrets" (list $ "imagePullSecrets" $._rox.imagePullSecrets "secured-cluster-services-main" $imagePullSecretNames $.Release.Namespace) }}
+{{ end }}
+
+[<- end >]
+
+{{/* Setup Image Pull Secrets.
+
+     Note: This must happen late, as we rely on "srox.configureImage" to collect the
+     set of all referenced images first. */}}
+{{ include "srox.configureImagePullSecrets" (list $ "mainImagePullSecrets" $._rox.mainImagePullSecrets "secured-cluster-services-main" (list "stackrox") $._rox._namespace) }}
+{{ include "srox.configureImagePullSecrets" (list $ "collectorImagePullSecrets" $._rox.collectorImagePullSecrets "secured-cluster-services-collector" (list "stackrox" "collector-stackrox") $._rox._namespace) }}
 
 {{ end }}
 

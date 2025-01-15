@@ -1,16 +1,17 @@
 package clairv4
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 
-	gogotypes "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/quay/claircore"
 	"github.com/stackrox/rox/generated/storage"
 	imageutils "github.com/stackrox/rox/pkg/images/utils"
+	"github.com/stackrox/rox/pkg/protocompat"
 	registrytypes "github.com/stackrox/rox/pkg/registries/types"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/utils"
@@ -21,7 +22,7 @@ var vulnNamePattern = regexp.MustCompile(`((CVE|ALAS|DSA)-\d{4}-\d+)|((RHSA|RHBA
 // manifest returns a ClairCore image manifest for the given image.
 func manifest(registry registrytypes.Registry, image *storage.Image) (*claircore.Manifest, error) {
 	// Ensure this exists before bothering to continue.
-	cfg := registry.Config()
+	cfg := registry.Config(context.Background())
 	if cfg == nil {
 		return nil, errors.Errorf("registry configuration does not exist for registry %s", registry.Name())
 	}
@@ -86,7 +87,7 @@ func fetchLayerURIAndHeader(client *http.Client, url, repository, digest string)
 // imageScan converts the given report to an image scan.
 func imageScan(report *claircore.VulnerabilityReport) *storage.ImageScan {
 	scan := &storage.ImageScan{
-		ScanTime:        gogotypes.TimestampNow(),
+		ScanTime:        protocompat.TimestampNow(),
 		Components:      components(report),
 		OperatingSystem: os(report),
 	}
@@ -126,18 +127,16 @@ func vulnerabilities(vulnerabilities map[string]*claircore.Vulnerability, ids []
 			continue
 		}
 
-		var publishedTime *gogotypes.Timestamp
-		if !ccVuln.Issued.IsZero() {
-			// Ignore the error, as publishedTime will just be `nil` if the given time is invalid.
-			publishedTime, _ = gogotypes.TimestampProto(ccVuln.Issued)
-		}
 		vuln := &storage.EmbeddedVulnerability{
 			Cve:               vulnName(ccVuln.Name),
 			Summary:           ccVuln.Description,
 			Link:              link(ccVuln.Links),
-			PublishedOn:       publishedTime,
 			VulnerabilityType: storage.EmbeddedVulnerability_IMAGE_VULNERABILITY,
 			Severity:          normalizedSeverity(ccVuln.NormalizedSeverity),
+		}
+		if !ccVuln.Issued.IsZero() {
+			// Ignore the error, as publishedTime will just be `nil` if the given time is invalid.
+			vuln.PublishedOn, _ = protocompat.ConvertTimeToTimestampOrError(ccVuln.Issued)
 		}
 
 		if ccVuln.FixedInVersion != "" {

@@ -3,8 +3,8 @@ package admissioncontroller
 import (
 	"compress/gzip"
 	"context"
+	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
@@ -15,6 +15,7 @@ import (
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/sensor/common"
 	"github.com/stackrox/rox/sensor/common/admissioncontroller"
+	"github.com/stackrox/rox/sensor/common/message"
 	v1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,7 +71,7 @@ func (p *configMapPersister) ProcessMessage(_ *central.MsgToSensor) error {
 	return nil
 }
 
-func (p *configMapPersister) ResponsesC() <-chan *central.MsgFromSensor {
+func (p *configMapPersister) ResponsesC() <-chan *message.ExpiringMessage {
 	return nil
 }
 
@@ -130,7 +131,7 @@ func settingsToConfigMap(settings *sensor.AdmissionControlSettings) (*v1.ConfigM
 		return nil, nil
 	}
 
-	configBytes, err := proto.Marshal(clusterConfig)
+	configBytes, err := clusterConfig.MarshalVT()
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +140,7 @@ func settingsToConfigMap(settings *sensor.AdmissionControlSettings) (*v1.ConfigM
 		return nil, err
 	}
 
-	deployTimePoliciesBytes, err := proto.Marshal(enforcedDeployTimePolicies)
+	deployTimePoliciesBytes, err := enforcedDeployTimePolicies.MarshalVT()
 	if err != nil {
 		return nil, errors.Wrap(err, "encoding deploy-time policies")
 	}
@@ -148,7 +149,7 @@ func settingsToConfigMap(settings *sensor.AdmissionControlSettings) (*v1.ConfigM
 		return nil, errors.Wrap(err, "compressing deploy-time policies")
 	}
 
-	runTimePoliciesBytes, err := proto.Marshal(runtimePolicies)
+	runTimePoliciesBytes, err := runtimePolicies.MarshalVT()
 	if err != nil {
 		return nil, errors.Wrap(err, "encoding run-time policies")
 	}
@@ -169,7 +170,7 @@ func settingsToConfigMap(settings *sensor.AdmissionControlSettings) (*v1.ConfigM
 			},
 		},
 		Data: map[string]string{
-			admissioncontrol.LastUpdateTimeDataKey:  settings.GetTimestamp().String(),
+			admissioncontrol.LastUpdateTimeDataKey:  settings.GetTimestamp().AsTime().Format(time.RFC3339Nano),
 			admissioncontrol.CacheVersionDataKey:    settings.GetCacheVersion(),
 			admissioncontrol.CentralEndpointDataKey: settings.GetCentralEndpoint(),
 			admissioncontrol.ClusterIDDataKey:       settings.GetClusterId(),

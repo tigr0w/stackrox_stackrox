@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	_ "embed"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/golang/mock/gomock"
+	"github.com/pkg/errors"
 	clusterMocks "github.com/stackrox/rox/central/cluster/datastore/mocks"
 	lifecycleMocks "github.com/stackrox/rox/central/detection/lifecycle/mocks"
 	"github.com/stackrox/rox/central/policy/datastore/mocks"
@@ -15,11 +17,14 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/booleanpolicy/fieldnames"
 	"github.com/stackrox/rox/pkg/booleanpolicy/policyversion"
-	detectionMocks "github.com/stackrox/rox/pkg/detection/mocks"
+	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/fixtures"
 	mitreMocks "github.com/stackrox/rox/pkg/mitre/datastore/mocks"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/status"
 )
 
@@ -36,20 +41,11 @@ func TestPolicyService(t *testing.T) {
 	suite.Run(t, new(PolicyServiceTestSuite))
 }
 
-type testDeploymentMatcher struct {
-	*detectionMocks.MockPolicySet
-}
-
-func (t *testDeploymentMatcher) RemoveNotifier(_ string) error {
-	return nil
-}
-
 type PolicyServiceTestSuite struct {
 	suite.Suite
 	policies              *mocks.MockDataStore
 	clusters              *clusterMocks.MockDataStore
 	mitreVectorStore      *mitreMocks.MockAttackReadOnlyDataStore
-	mockBuildTimePolicies *detectionMocks.MockPolicySet
 	mockLifecycleManager  *lifecycleMocks.MockManager
 	mockConnectionManager *connectionMocks.MockManager
 	tested                Service
@@ -65,7 +61,6 @@ func (s *PolicyServiceTestSuite) SetupTest() {
 
 	s.clusters = clusterMocks.NewMockDataStore(s.mockCtrl)
 
-	s.mockBuildTimePolicies = detectionMocks.NewMockPolicySet(s.mockCtrl)
 	s.mockLifecycleManager = lifecycleMocks.NewMockManager(s.mockCtrl)
 	s.mockConnectionManager = connectionMocks.NewMockManager(s.mockCtrl)
 	s.mitreVectorStore = mitreMocks.NewMockAttackReadOnlyDataStore(s.mockCtrl)
@@ -78,7 +73,6 @@ func (s *PolicyServiceTestSuite) SetupTest() {
 		nil,
 		s.mitreVectorStore,
 		nil,
-		&testDeploymentMatcher{s.mockBuildTimePolicies},
 		s.mockLifecycleManager,
 		nil,
 		nil,
@@ -90,22 +84,22 @@ func (s *PolicyServiceTestSuite) TearDownTest() {
 	s.mockCtrl.Finish()
 }
 
-func (s *PolicyServiceTestSuite) compareErrorsToExpected(expectedErrors []*v1.ExportPolicyError, apiError error) {
+func (s *PolicyServiceTestSuite) compareErrorsToExpected(expectedErrors []*v1.PolicyOperationError, apiError error) {
 	apiStatus, ok := status.FromError(apiError)
 	s.Require().True(ok)
 	details := apiStatus.Details()
 	s.Len(details, 1)
-	exportErrors, ok := details[0].(*v1.ExportPoliciesErrorList)
+	exportErrors, ok := details[0].(*v1.PolicyOperationErrorList)
 	s.Require().True(ok)
 	// actual errors == expected errors ignoring order
 	s.Len(exportErrors.GetErrors(), len(expectedErrors))
 	for _, expected := range expectedErrors {
-		s.Contains(exportErrors.GetErrors(), expected)
+		protoassert.SliceContains(s.T(), exportErrors.GetErrors(), expected)
 	}
 }
 
-func makeError(errorID, errorString string) *v1.ExportPolicyError {
-	return &v1.ExportPolicyError{
+func makeError(errorID, errorString string) *v1.PolicyOperationError {
+	return &v1.PolicyOperationError{
 		PolicyId: errorID,
 		Error: &v1.PolicyError{
 			Error: errorString,
@@ -115,7 +109,7 @@ func makeError(errorID, errorString string) *v1.ExportPolicyError {
 
 func (s *PolicyServiceTestSuite) TestExportInvalidIDFails() {
 	ctx := context.Background()
-	mockErrors := []*v1.ExportPolicyError{
+	mockErrors := []*v1.PolicyOperationError{
 		makeError(mockRequestOneID.PolicyIds[0], "not found"),
 	}
 	s.policies.EXPECT().GetPolicies(ctx, mockRequestOneID.PolicyIds).Return(make([]*storage.Policy, 0), []int{0}, nil)
@@ -135,7 +129,7 @@ func (s *PolicyServiceTestSuite) TestExportValidIDSucceeds() {
 	s.NoError(err)
 	s.NotNil(resp)
 	s.Len(resp.GetPolicies(), 1)
-	s.Equal(mockPolicy, resp.Policies[0])
+	protoassert.Equal(s.T(), mockPolicy, resp.Policies[0])
 }
 
 func (s *PolicyServiceTestSuite) TestExportMixedSuccessAndMissing() {
@@ -143,7 +137,7 @@ func (s *PolicyServiceTestSuite) TestExportMixedSuccessAndMissing() {
 	mockPolicy := &storage.Policy{
 		Id: mockRequestTwoIDs.PolicyIds[0],
 	}
-	mockErrors := []*v1.ExportPolicyError{
+	mockErrors := []*v1.PolicyOperationError{
 		makeError(mockRequestTwoIDs.PolicyIds[1], "not found"),
 	}
 	s.policies.EXPECT().GetPolicies(ctx, mockRequestTwoIDs.PolicyIds).Return([]*storage.Policy{mockPolicy}, []int{1}, nil)
@@ -155,7 +149,7 @@ func (s *PolicyServiceTestSuite) TestExportMixedSuccessAndMissing() {
 
 func (s *PolicyServiceTestSuite) TestExportMultipleFailures() {
 	ctx := context.Background()
-	mockErrors := []*v1.ExportPolicyError{
+	mockErrors := []*v1.PolicyOperationError{
 		makeError(mockRequestTwoIDs.PolicyIds[0], "not found"),
 		makeError(mockRequestTwoIDs.PolicyIds[1], "not found"),
 	}
@@ -181,13 +175,13 @@ func (s *PolicyServiceTestSuite) TestExportedPolicyHasNoSortFields() {
 	s.NoError(err)
 	s.NotNil(resp)
 	s.Len(resp.GetPolicies(), 1)
-	s.Equal(expectedPolicy, resp.Policies[0])
+	protoassert.Equal(s.T(), expectedPolicy, resp.Policies[0])
 }
 
 func (s *PolicyServiceTestSuite) TestPoliciesHaveNoUnexpectedSORTFields() {
 	expectedSORTFields := set.NewStringSet("SORTLifecycleStage", "SORTEnforcement", "SORTName")
-	var policy storage.Policy
-	policyType := reflect.TypeOf(policy)
+	var policy *storage.Policy
+	policyType := reflect.TypeOf(policy).Elem()
 	numFields := policyType.NumField()
 	for i := 0; i < numFields; i++ {
 		fieldName := policyType.Field(i).Name
@@ -234,6 +228,86 @@ func (s *PolicyServiceTestSuite) TestDryRunRuntime() {
 	resp, err := s.tested.DryRunPolicy(ctx, runtimePolicy)
 	s.Nil(err)
 	s.Nil(resp.GetAlerts())
+}
+
+func (s *PolicyServiceTestSuite) TestListPoliciesHandlesQueryAndPagination() {
+	ctx := context.Background()
+	basePolicy := fixtures.GetPolicy()
+	policies := make([]*storage.Policy, 4)
+	for i := 0; i < 4; i++ {
+		p := basePolicy.CloneVT()
+		p.Id = fmt.Sprintf("policy-%d", i)
+		policies = append(policies, p)
+	}
+	listPolicies := convertPoliciesToListPolicies(policies)
+	policyDisabledBaseQuery := &v1.Query_BaseQuery{
+		BaseQuery: &v1.BaseQuery{
+			Query: &v1.BaseQuery_MatchFieldQuery{
+				MatchFieldQuery: &v1.MatchFieldQuery{Field: search.Disabled.String(), Value: "false"},
+			},
+		},
+	}
+
+	cases := []struct {
+		name          string
+		request       *v1.RawQuery
+		expectedQuery *v1.Query
+	}{
+		{
+			name:          "Empty query, get all policies",
+			request:       &v1.RawQuery{},
+			expectedQuery: &v1.Query{Pagination: &v1.QueryPagination{Limit: maxPoliciesReturned, Offset: 0}},
+		},
+		{
+			name:          "Empty query, paginate",
+			request:       &v1.RawQuery{Pagination: &v1.Pagination{Limit: 2}},
+			expectedQuery: &v1.Query{Pagination: &v1.QueryPagination{Limit: 2, Offset: 0}},
+		},
+		{
+			name:          "Empty query, paginate and offset",
+			request:       &v1.RawQuery{Pagination: &v1.Pagination{Limit: 20, Offset: 4}},
+			expectedQuery: &v1.Query{Pagination: &v1.QueryPagination{Limit: 20, Offset: 4}},
+		},
+		{
+			name:    "Non-empty query gets parsed properly",
+			request: &v1.RawQuery{Query: search.NewQueryBuilder().AddBools(search.Disabled, false).Query()},
+			expectedQuery: &v1.Query{
+				Query:      policyDisabledBaseQuery,
+				Pagination: &v1.QueryPagination{Limit: maxPoliciesReturned, Offset: 0},
+			},
+		},
+		{
+			name: "Non-empty query gets parsed properly, paginate",
+			request: &v1.RawQuery{
+				Query:      search.NewQueryBuilder().AddBools(search.Disabled, false).Query(),
+				Pagination: &v1.Pagination{Limit: 2},
+			},
+			expectedQuery: &v1.Query{
+				Query:      policyDisabledBaseQuery,
+				Pagination: &v1.QueryPagination{Limit: 2, Offset: 0},
+			},
+		},
+		{
+			name: "Non-empty query gets parsed properly, limit pagination to max and offset",
+			request: &v1.RawQuery{
+				Query:      search.NewQueryBuilder().AddBools(search.Disabled, false).Query(),
+				Pagination: &v1.Pagination{Limit: 2000, Offset: 50},
+			},
+			expectedQuery: &v1.Query{
+				Query:      policyDisabledBaseQuery,
+				Pagination: &v1.QueryPagination{Limit: 1000, Offset: 50},
+			},
+		},
+	}
+	for _, c := range cases {
+		s.T().Run(c.name, func(t *testing.T) {
+			s.policies.EXPECT().SearchRawPolicies(ctx, c.expectedQuery).Return(policies, nil).Times(1)
+			resp, err := s.tested.ListPolicies(ctx, c.request)
+			s.NoError(err)
+			s.NotNil(resp)
+			protoassert.SlicesEqual(s.T(), listPolicies, resp.Policies)
+		})
+	}
 }
 
 func (s *PolicyServiceTestSuite) TestImportPolicy() {
@@ -285,7 +359,6 @@ func (s *PolicyServiceTestSuite) TestImportPolicy() {
 	}
 
 	s.policies.EXPECT().ImportPolicies(ctx, []*storage.Policy{importedPolicy}, false).Return(mockImportResp, true, nil)
-	s.mockBuildTimePolicies.EXPECT().RemovePolicy(importedPolicy.GetId())
 	s.mockLifecycleManager.EXPECT().UpsertPolicy(importedPolicy).Return(nil)
 	s.policies.EXPECT().GetAllPolicies(gomock.Any()).Return(nil, nil)
 	s.mockConnectionManager.EXPECT().PreparePoliciesAndBroadcast(gomock.Any())
@@ -297,7 +370,7 @@ func (s *PolicyServiceTestSuite) TestImportPolicy() {
 	s.Require().Len(resp.GetResponses(), 1)
 	policyResp := resp.GetResponses()[0]
 	resultPolicy := policyResp.GetPolicy()
-	s.Equal(importedPolicy.GetPolicySections(), resultPolicy.GetPolicySections())
+	protoassert.SlicesEqual(s.T(), importedPolicy.GetPolicySections(), resultPolicy.GetPolicySections())
 }
 
 func (s *PolicyServiceTestSuite) testScopes(query string, mockClusters []*storage.Cluster, expectedScopes ...*storage.Scope) {
@@ -311,7 +384,7 @@ func (s *PolicyServiceTestSuite) testScopes(query string, mockClusters []*storag
 	s.Empty(response.GetAlteredSearchTerms())
 	s.False(response.GetHasNestedFields())
 	s.NotNil(response.GetPolicy())
-	s.ElementsMatch(expectedScopes, response.GetPolicy().GetScope())
+	protoassert.ElementsMatch(s.T(), expectedScopes, response.GetPolicy().GetScope())
 }
 
 func (s *PolicyServiceTestSuite) testMalformedScope(query string) {
@@ -348,7 +421,7 @@ func (s *PolicyServiceTestSuite) testPolicyGroups(query string, expectedPolicyGr
 	s.NotNil(response.GetPolicy())
 	s.Require().Len(response.GetPolicy().GetPolicySections(), 1)
 	policyGroups := response.GetPolicy().GetPolicySections()[0].GetPolicyGroups()
-	s.ElementsMatch(expectedPolicyGroups, policyGroups)
+	protoassert.ElementsMatch(s.T(), expectedPolicyGroups, policyGroups)
 
 	// These tests do not explicitly expect scopes so we should ensure that there are not scopes
 	s.Nil(response.GetPolicy().GetScope())
@@ -693,7 +766,7 @@ func (s *PolicyServiceTestSuite) TestUnconvertableFields() {
 	s.NotNil(response.GetPolicy())
 	s.Require().Len(response.GetPolicy().GetPolicySections(), 1)
 	policyGroups := response.GetPolicy().GetPolicySections()[0].GetPolicyGroups()
-	s.ElementsMatch(expectedPolicyGroup, policyGroups)
+	protoassert.ElementsMatch(s.T(), expectedPolicyGroup, policyGroups)
 }
 
 func (s *PolicyServiceTestSuite) TestNoConvertableFields() {
@@ -747,7 +820,7 @@ func (s *PolicyServiceTestSuite) TestMakePolicyWithCombinations() {
 	s.False(response.GetHasNestedFields())
 	s.Empty(response.GetAlteredSearchTerms())
 	s.Len(response.GetPolicy().GetPolicySections(), 1)
-	s.ElementsMatch(expectedPolicyGroups, response.GetPolicy().GetPolicySections()[0].GetPolicyGroups())
+	protoassert.ElementsMatch(s.T(), expectedPolicyGroups, response.GetPolicy().GetPolicySections()[0].GetPolicyGroups())
 }
 
 func (s *PolicyServiceTestSuite) TestEnvironmentXLifecycle() {
@@ -770,7 +843,7 @@ func (s *PolicyServiceTestSuite) TestEnvironmentXLifecycle() {
 	s.NoError(err)
 	s.False(response.GetHasNestedFields())
 	s.Empty(response.GetAlteredSearchTerms())
-	s.ElementsMatch(expectedPolicyGroup, response.GetPolicy().GetPolicySections()[0].GetPolicyGroups())
+	protoassert.ElementsMatch(s.T(), expectedPolicyGroup, response.GetPolicy().GetPolicySections()[0].GetPolicyGroups())
 	expectedLifecycleStages := []storage.LifecycleStage{storage.LifecycleStage_DEPLOY}
 	s.ElementsMatch(expectedLifecycleStages, response.GetPolicy().GetLifecycleStages())
 }
@@ -802,7 +875,7 @@ func (s *PolicyServiceTestSuite) TestMitreVectors() {
 		Id: "policy1",
 	})
 	s.NoError(err)
-	s.ElementsMatch([]*storage.MitreAttackVector{
+	protoassert.ElementsMatch(s.T(), []*storage.MitreAttackVector{
 		getFakeVector("tactic1", "tech1"),
 		getFakeVector("tactic2", "tech2"),
 	}, response.GetVectors())
@@ -826,4 +899,58 @@ func getFakeVector(tactic string, techniques ...string) *storage.MitreAttackVect
 	}
 
 	return resp
+}
+
+func (s *PolicyServiceTestSuite) TestDeletingDefaultPolicyIsBlocked() {
+	ctx := context.Background()
+
+	// arrange
+	mockPolicy := &storage.Policy{
+		Id:        mockRequestOneID.PolicyIds[0],
+		IsDefault: true,
+	}
+	s.policies.EXPECT().GetPolicy(ctx, mockPolicy.Id).Return(mockPolicy, true, nil)
+	expectedErr := errors.Wrap(errox.InvalidArgs, "A default policy cannot be deleted. (You can disable a default policy, but not delete it.)")
+
+	// act
+	fakeResourceByIDRequest := &v1.ResourceByID{Id: mockPolicy.Id}
+	resp, err := s.tested.DeletePolicy(ctx, fakeResourceByIDRequest)
+
+	// assert
+	s.Require().Error(err, expectedErr)
+	s.Require().Nil(resp)
+}
+
+func (s *PolicyServiceTestSuite) TestDeletingNonExistentPolicyDoesNothing() {
+	ctx := context.Background()
+
+	// arrange
+	mockPolicyID := mockRequestOneID.PolicyIds[0] // used only for the ID
+	s.policies.EXPECT().GetPolicy(ctx, mockPolicyID).Return(nil, false, nil)
+
+	// act
+	fakeResourceByIDRequest := &v1.ResourceByID{Id: mockPolicyID}
+	resp, err := s.tested.DeletePolicy(ctx, fakeResourceByIDRequest)
+
+	// assert
+	s.NoError(err)
+	s.Empty(resp)
+}
+
+func (s *PolicyServiceTestSuite) TestDeletingPolicyErrOnDbError() {
+	ctx := context.Background()
+
+	// arrange
+	mockPolicyID := mockRequestOneID.PolicyIds[0] // used only for the ID
+	dbErr := errors.New("the deebee has failed you")
+	s.policies.EXPECT().GetPolicy(ctx, mockPolicyID).Return(nil, true, dbErr)
+	expectedErr := errors.Wrap(dbErr, "DB error while trying to delete policy")
+
+	// act
+	fakeResourceByIDRequest := &v1.ResourceByID{Id: mockPolicyID}
+	resp, err := s.tested.DeletePolicy(ctx, fakeResourceByIDRequest)
+
+	// assert
+	s.Require().Error(err, expectedErr)
+	s.Require().Nil(resp)
 }

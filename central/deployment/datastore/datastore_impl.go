@@ -5,44 +5,43 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/stackrox/rox/central/deployment/cache"
 	deploymentSearch "github.com/stackrox/rox/central/deployment/datastore/internal/search"
-	deploymentIndex "github.com/stackrox/rox/central/deployment/index"
-	deploymentStore "github.com/stackrox/rox/central/deployment/store"
+	deploymentStore "github.com/stackrox/rox/central/deployment/datastore/internal/store"
 	"github.com/stackrox/rox/central/globaldb"
 	imageDS "github.com/stackrox/rox/central/image/datastore"
 	"github.com/stackrox/rox/central/metrics"
 	nfDS "github.com/stackrox/rox/central/networkgraph/flow/datastore"
+	platformmatcher "github.com/stackrox/rox/central/platform/matcher"
 	pwDS "github.com/stackrox/rox/central/processbaseline/datastore"
 	"github.com/stackrox/rox/central/ranking"
 	riskDS "github.com/stackrox/rox/central/risk/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errorhelpers"
-	"github.com/stackrox/rox/pkg/expiringcache"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/images/types"
+	"github.com/stackrox/rox/pkg/kubernetes"
 	"github.com/stackrox/rox/pkg/process/filter"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 )
 
 var (
 	deploymentsSAC = sac.ForResource(resources.Deployment)
-	extensionSAC   = sac.ForResource(resources.DeploymentExtension)
 )
 
 type datastoreImpl struct {
 	deploymentStore    deploymentStore.Store
-	deploymentIndexer  deploymentIndex.Indexer
 	deploymentSearcher deploymentSearch.Searcher
 
 	images                 imageDS.DataStore
 	networkFlows           nfDS.ClusterDataStore
 	baselines              pwDS.DataStore
 	risks                  riskDS.DataStore
-	deletedDeploymentCache expiringcache.Cache
+	deletedDeploymentCache cache.DeletedDeployments
 	processFilter          filter.Filter
 
 	keyedMutex *concurrency.KeyedMutex
@@ -50,13 +49,24 @@ type datastoreImpl struct {
 	clusterRanker    *ranking.Ranker
 	nsRanker         *ranking.Ranker
 	deploymentRanker *ranking.Ranker
+	platformMatcher  platformmatcher.PlatformMatcher
 }
 
-func newDatastoreImpl(storage deploymentStore.Store, indexer deploymentIndex.Indexer, searcher deploymentSearch.Searcher, images imageDS.DataStore, baselines pwDS.DataStore, networkFlows nfDS.ClusterDataStore, risks riskDS.DataStore, deletedDeploymentCache expiringcache.Cache, processFilter filter.Filter, clusterRanker *ranking.Ranker, nsRanker *ranking.Ranker, deploymentRanker *ranking.Ranker) *datastoreImpl {
-
-	ds := &datastoreImpl{
+func newDatastoreImpl(
+	storage deploymentStore.Store,
+	searcher deploymentSearch.Searcher,
+	images imageDS.DataStore,
+	baselines pwDS.DataStore,
+	networkFlows nfDS.ClusterDataStore,
+	risks riskDS.DataStore,
+	deletedDeploymentCache cache.DeletedDeployments,
+	processFilter filter.Filter,
+	clusterRanker *ranking.Ranker,
+	nsRanker *ranking.Ranker,
+	deploymentRanker *ranking.Ranker,
+	platformMatcher platformmatcher.PlatformMatcher) *datastoreImpl {
+	return &datastoreImpl{
 		deploymentStore:        storage,
-		deploymentIndexer:      indexer,
 		deploymentSearcher:     searcher,
 		images:                 images,
 		baselines:              baselines,
@@ -69,8 +79,8 @@ func newDatastoreImpl(storage deploymentStore.Store, indexer deploymentIndex.Ind
 		clusterRanker:    clusterRanker,
 		nsRanker:         nsRanker,
 		deploymentRanker: deploymentRanker,
+		platformMatcher:  platformMatcher,
 	}
-	return ds
 }
 
 func (ds *datastoreImpl) initializeRanker() {
@@ -106,14 +116,22 @@ func (ds *datastoreImpl) initializeRanker() {
 		nsScores[deployment.GetNamespaceId()] += riskScore
 	}
 
-	// update namespace risk scores
-	for id, score := range nsScores {
-		ds.nsRanker.Add(id, score)
+	if ds.nsRanker != nil {
+		// update namespace risk scores
+		for id, score := range nsScores {
+			ds.nsRanker.Add(id, score)
+		}
+	} else {
+		log.Warn("Not updating namespace risk scores, no ranker found")
 	}
 
-	// update cluster risk scores
-	for id, score := range clusterScores {
-		ds.clusterRanker.Add(id, score)
+	if ds.clusterRanker != nil {
+		// update cluster risk scores
+		for id, score := range clusterScores {
+			ds.clusterRanker.Add(id, score)
+		}
+	} else {
+		log.Warn("Not updating cluster risk scores, no ranker found")
 	}
 }
 
@@ -203,23 +221,71 @@ func (ds *datastoreImpl) GetDeployments(ctx context.Context, ids []string) ([]*s
 
 // CountDeployments
 func (ds *datastoreImpl) CountDeployments(ctx context.Context) (int, error) {
-	if ok, err := deploymentsSAC.ReadAllowed(ctx); err != nil {
+	if _, err := deploymentsSAC.ReadAllowed(ctx); err != nil {
 		return 0, err
-	} else if ok {
-		return ds.deploymentStore.Count(ctx)
 	}
-
 	return ds.Count(ctx, pkgSearch.EmptyQuery())
 }
 
-// UpsertDeployment inserts a deployment into deploymentStore and into the deploymentIndexer
+func (ds *datastoreImpl) WalkByQuery(ctx context.Context, query *v1.Query, fn func(deployment *storage.Deployment) error) error {
+	wrappedFn := func(deployment *storage.Deployment) error {
+		ds.updateDeploymentPriority(deployment)
+		return fn(deployment)
+	}
+	return ds.deploymentStore.WalkByQuery(ctx, query, wrappedFn)
+}
+
+// UpsertDeployment inserts a deployment into deploymentStore
 func (ds *datastoreImpl) UpsertDeployment(ctx context.Context, deployment *storage.Deployment) error {
 	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Deployment", "UpsertDeployment")
 
 	return ds.upsertDeployment(ctx, deployment)
 }
 
-// upsertDeployment inserts a deployment into deploymentStore and into the deploymentIndexer
+func allImagesAreSpecifiedByDigest(d *storage.Deployment) bool {
+	for _, c := range d.GetContainers() {
+		if c.GetImage().GetId() == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (ds *datastoreImpl) mergeCronJobs(ctx context.Context, deployment *storage.Deployment) error {
+	if deployment.GetType() != kubernetes.CronJob {
+		return nil
+	}
+	if allImagesAreSpecifiedByDigest(deployment) {
+		return nil
+	}
+	oldDeployment, exists, err := ds.deploymentStore.Get(ctx, deployment.GetId())
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	// Major changes to spec, just upsert
+	if len(oldDeployment.GetContainers()) != len(deployment.GetContainers()) {
+		return nil
+	}
+	for i, container := range deployment.GetContainers() {
+		if container.GetImage().GetId() != "" {
+			continue
+		}
+		oldContainer := oldDeployment.Containers[i]
+		if oldContainer.GetImage().GetId() == "" {
+			continue
+		}
+		if container.GetImage().GetName().GetFullName() != oldContainer.GetImage().GetName().GetFullName() {
+			continue
+		}
+		container.Image.Id = oldContainer.GetImage().GetId()
+	}
+	return nil
+}
+
+// upsertDeployment inserts a deployment into deploymentStore
 func (ds *datastoreImpl) upsertDeployment(ctx context.Context, deployment *storage.Deployment) error {
 	if ok, err := deploymentsSAC.WriteAllowed(ctx); err != nil {
 		return err
@@ -230,21 +296,27 @@ func (ds *datastoreImpl) upsertDeployment(ctx context.Context, deployment *stora
 	// Update deployment with latest risk score
 	deployment.RiskScore = ds.deploymentRanker.GetScoreForID(deployment.GetId())
 
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		if err := ds.deploymentStore.Upsert(ctx, deployment); err != nil {
-			return errors.Wrapf(err, "inserting deployment '%s' to store", deployment.GetId())
-		}
-		return nil
+	// Deployments that run intermittently and do not have images that are referenced by digest
+	// should maintain the digest of the last used image
+	if err := ds.mergeCronJobs(ctx, deployment); err != nil {
+		return errors.Wrapf(err, "error merging deployment %s", deployment.GetId())
 	}
-	return ds.keyedMutex.DoStatusWithLock(deployment.GetId(), func() error {
-		if err := ds.deploymentStore.Upsert(ctx, deployment); err != nil {
-			return errors.Wrapf(err, "inserting deployment '%s' to store", deployment.GetId())
+
+	if features.PlatformComponents.Enabled() {
+		match, err := ds.platformMatcher.MatchDeployment(deployment)
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+		deployment.PlatformComponent = match
+	}
+
+	if err := ds.deploymentStore.Upsert(ctx, deployment); err != nil {
+		return errors.Wrapf(err, "inserting deployment '%s' to store", deployment.GetId())
+	}
+	return nil
 }
 
-// RemoveDeployment removes an alert from the deploymentStore and the deploymentIndexer
+// RemoveDeployment removes an alert from the deploymentStore
 func (ds *datastoreImpl) RemoveDeployment(ctx context.Context, clusterID, id string) error {
 	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Deployment", "RemoveDeployment")
 
@@ -256,10 +328,10 @@ func (ds *datastoreImpl) RemoveDeployment(ctx context.Context, clusterID, id str
 	// Dedupe the removed deployments. This can happen because Pods have many completion states
 	// and we may receive multiple Remove calls
 	if ds.deletedDeploymentCache != nil {
-		if ds.deletedDeploymentCache.Get(id) != nil {
+		if ds.deletedDeploymentCache.Contains(id) {
 			return nil
 		}
-		ds.deletedDeploymentCache.Add(id, true)
+		ds.deletedDeploymentCache.Add(id)
 	}
 	// Though the filter is updated upon pod update,
 	// We still want to ensure it is properly cleared when the deployment is deleted.

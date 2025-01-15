@@ -2,24 +2,10 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/logging"
-)
-
-var (
-	log = logging.LoggerForModule()
 )
 
 func init() {
 	// general
-
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		prometheus.MustRegister(
-			boltOperationHistogramVec,
-			rocksDBOperationHistogramVec,
-			dackboxOperationHistogramVec,
-		)
-	}
 
 	prometheus.MustRegister(
 		pipelinePanicCounter,
@@ -27,13 +13,11 @@ func init() {
 		graphQLQueryHistogramVec,
 		indexOperationHistogramVec,
 		sensorEventQueueCounterVec,
-		policyEvaluationHistogram,
 		resourceProcessedCounterVec,
 		totalNetworkFlowsReceivedCounter,
 		totalNetworkEndpointsReceivedCounter,
 		sensorEventDurationHistogramVec,
 		riskProcessingHistogramVec,
-		totalCacheOperationsCounter,
 		datastoreFunctionDurationHistogramVec,
 		functionSegmentDurationHistogramVec,
 		k8sObjectProcessingDuration,
@@ -44,5 +28,16 @@ func init() {
 		totalOrphanedPLOPCounter,
 		processQueueLengthGauge,
 		sensorEventsDeduperCounter,
+		sensorConnectedCounter,
+		grpcMaxMessageSize,
+		grpcSentSize,
+		grpcLastMessageSizeSent,
+		grpcLastMessageSizeReceived,
+		grpcError,
+		deploymentEnhancementRoundTripDuration,
+		reprocessorDurationGauge,
+		signatureVerificationReprocessorDurationGauge,
+		pruningDurationHistogramVec,
+		storeCacheOperationHistogramVec,
 	)
 }

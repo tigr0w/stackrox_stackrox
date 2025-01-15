@@ -10,6 +10,7 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/postgres/mapping"
 )
@@ -47,6 +48,7 @@ var (
 			v1.SearchCategory_NAMESPACES,
 			v1.SearchCategory_CLUSTERS,
 		}...)
+		schema.ScopingResource = resources.Namespace
 		RegisterTable(schema, CreateTableNamespacesStmt)
 		mapping.RegisterCategoryToTable(v1.SearchCategory_NAMESPACES, schema)
 		return schema
@@ -54,14 +56,15 @@ var (
 )
 
 const (
+	// NamespacesTableName specifies the name of the table in postgres.
 	NamespacesTableName = "namespaces"
 )
 
 // Namespaces holds the Gorm model for Postgres table `namespaces`.
 type Namespaces struct {
-	Id          string            `gorm:"column:id;type:uuid;primaryKey"`
+	ID          string            `gorm:"column:id;type:uuid;primaryKey"`
 	Name        string            `gorm:"column:name;type:varchar;index:namespaces_sac_filter,type:btree"`
-	ClusterId   string            `gorm:"column:clusterid;type:uuid;index:namespaces_sac_filter,type:btree"`
+	ClusterID   string            `gorm:"column:clusterid;type:uuid;index:namespaces_sac_filter,type:btree"`
 	ClusterName string            `gorm:"column:clustername;type:varchar"`
 	Labels      map[string]string `gorm:"column:labels;type:jsonb"`
 	Annotations map[string]string `gorm:"column:annotations;type:jsonb"`

@@ -3,42 +3,38 @@ package search
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/imagecomponent/index"
 	"github.com/stackrox/rox/central/imagecomponent/store"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/schema"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	"github.com/stackrox/rox/pkg/search/paginated"
 	"github.com/stackrox/rox/pkg/search/scoped/postgres"
 	"github.com/stackrox/rox/pkg/search/sortfields"
 )
 
 var (
-	sacHelper = sac.ForResource(resources.Image).MustCreatePgSearchHelper()
+	defaultSortOption = &v1.QuerySortOption{
+		Field: search.Component.String(),
+	}
 )
 
-// NewV2 returns a new instance of Searcher for the given storage and indexer.
-func NewV2(storage store.Store, indexer index.Indexer) Searcher {
+// NewV2 returns a new instance of Searcher for the given store.
+func NewV2(storage store.Store) Searcher {
 	return &searcherImplV2{
 		storage:  storage,
-		indexer:  indexer,
-		searcher: formatSearcherV2(indexer),
+		searcher: formatSearcherV2(storage),
 	}
 }
 
-func formatSearcherV2(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher {
-	scopedSearcher := postgres.WithScoping(sacHelper.FilteredSearcher(unsafeSearcher))
+func formatSearcherV2(searcher search.Searcher) search.Searcher {
+	scopedSearcher := postgres.WithScoping(searcher)
 	transformedSortFieldSearcher := sortfields.TransformSortFields(scopedSearcher, schema.ImagesSchema.OptionsMap)
 	return paginated.WithDefaultSortOption(transformedSortFieldSearcher, defaultSortOption)
 }
 
 type searcherImplV2 struct {
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 }
 

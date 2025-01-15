@@ -1,4 +1,4 @@
-name: Start Release
+name: "RELEASE: Start Release"
 on:
   workflow_dispatch:
     inputs:
@@ -8,7 +8,7 @@ on:
         default: 0.0.0
         type: string
       ref:
-        description: Release base ref (for non-patch releases)
+        description: Override release branch starting ref
         required: false
         default: ""
         type: string
@@ -19,7 +19,7 @@ on:
         type: boolean
 
 env:
-  REF: ${{ fromJSON(format('["{0}","{1}"]', inputs.ref, github.event.repository.default_branch))[inputs.ref == ''] }}
+  USER_REF: ${{ inputs.ref }}
   main_branch: ${{github.event.repository.default_branch}}
   script_url: /repos/${{ github.repository }}/contents/.github/workflows/scripts/common.sh?ref=${{ github.ref_name }}
   DRY_RUN: ${{ fromJSON('["true", "false"]')[github.event.inputs.dry-run != 'true'] }}
@@ -31,7 +31,7 @@ run-name: >-
   ${{
     format('Start release {0} from {1}{2}',
       inputs.version,
-      fromJSON(format('["{0}","{1}"]', inputs.ref, github.event.repository.default_branch))[inputs.ref == ''],
+      fromJSON(format('["{0}","{1}"]', inputs.ref, 'the last nightly branching point'))[inputs.ref == ''],
       fromJSON('[" (dry-run)", ""]')[inputs.dry-run != true]
     )
   }}
@@ -40,6 +40,31 @@ run-name: >-
 concurrency: Release automation
 
 jobs:
+  start-sha:
+    name: Find commit for release branch
+    runs-on: ubuntu-latest
+    outputs:
+      start-sha: ${{ fromJSON(format('["{0}","{1}"]', env.USER_REF, steps.find.outputs.merge_base))[env.USER_REF == ''] }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        fetch-depth: 0
+    - name: Print user-provided input
+      run: |
+        if [ "${{ env.USER_REF }}" != '' ]; then
+          echo "User provided the following override for the git-sha: \`${{ env.USER_REF }}\`" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "User did not provide override for the git-sha" >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - name: Find merge-base for ${{ github.event.repository.default_branch }} and 'origin/nightlies'
+      id: find
+      run: |
+        MERGEBASE="$(git merge-base origin/nightlies ${{ github.event.repository.default_branch }})"
+        echo "merge_base=${MERGEBASE}" >> "$GITHUB_OUTPUT"
+        echo "Found the following git-sha as a branching point for the release branch: [\`${MERGEBASE}\`](${{github.server_url}}/${{github.repository}}/commits/${MERGEBASE})" >> "$GITHUB_STEP_SUMMARY"
+
   properties:
     name: Read repository properties
     runs-on: ubuntu-latest
@@ -94,18 +119,18 @@ jobs:
 
   branch:
     name: Prepare release branch
-    needs: [variables]
+    needs: [variables, start-sha]
     runs-on: ubuntu-latest
     steps:
       - name: Check out code (normal release)
         if: needs.variables.outputs.patch == 0
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          ref: ${{ env.REF }}
-          submodules: true
+          ref: ${{ needs.start-sha.outputs.start-sha }}
+          fetch-depth: 0
       - name: Check out code (patch release)
         if: needs.variables.outputs.patch != 0
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.variables.outputs.branch }}
           submodules: true
@@ -124,18 +149,14 @@ jobs:
         run: |
           git config user.name "${{github.event.sender.login}}"
           git config user.email noreply@github.com
-      - name: Switch to ${{needs.variables.outputs.branch}} branch
+      - name: Create and annotate branch ${{needs.variables.outputs.branch}}
         if: steps.check-existing.outputs.branch-exists == 'false'
         run: |
           git switch --create "${{needs.variables.outputs.branch}}"
-          # Tagging the branching point so that the commits on the main branch
-          # be correctly described.
+          git commit --allow-empty --message \
+            "Empty commit to diverge ${{needs.variables.outputs.release}} from ${{env.main_branch}}"
           git tag --annotate --message "Upstream automation" \
-            "${{needs.variables.outputs.release}}.x" HEAD
-
-          # TODO: tag the first commit on the release branch with the current
-          #       release version when main branch versioning is changed to
-          #       'next.version-dev'.
+            "${{needs.variables.outputs.release}}.0-rc.0" HEAD
       - name: Update the changelog
         if: steps.check-existing.outputs.branch-exists == 'false'
         run: |
@@ -145,14 +166,25 @@ jobs:
             git commit --message "Changelog for ${{inputs.version}}"
             echo "\`CHANGELOG.md\` has been updated on the release branch." >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Tag ${{env.main_branch}} for next release
+        if: steps.check-existing.outputs.branch-exists == 'false'
+        run: |
+          # There could be several commits between the starting point of the release branch and the HEAD
+          # on main/master tagged with the next release.  While this leaves those intermediate
+          # commits tagged with the previous release, this is better than changing the build tag for
+          # those commits after all their artifacts have already been built and tested.
+          git switch ${{env.main_branch}}
+          git pull origin --rebase ${{env.main_branch}}
+          git tag --annotate --message "Upstream automation" \
+            "${{needs.variables.outputs.next-minor-release}}.x" HEAD
       - name: Push changes
         if: env.DRY_RUN == 'false' && steps.check-existing.outputs.branch-exists == 'false'
+        env:
+          GH_TOKEN: "${{ secrets.RHACS_BOT_GITHUB_TOKEN }}"
         run: |
+          git switch "${{needs.variables.outputs.branch}}"
+          # This command pushes all new tags, not just the ones on the current branch. Therefore, it will push the tag we put on ${{env.main_branch}}.
           git push --follow-tags --set-upstream origin "${{needs.variables.outputs.branch}}"
-      - name: Push changes
-        if: env.DRY_RUN == 'false' && steps.check-existing.outputs.branch-exists == 'true'
-        run: |
-          git push --follow-tags
 
   ci:
     name: Configure OpenShift CI jobs
@@ -175,14 +207,14 @@ jobs:
       - name: Synchronize fork from openshift/release
         if: env.DRY_RUN == 'false' && steps.check-existing.outputs.branch-exists == 'false'
         env:
-          GH_TOKEN: "${{ secrets.ROBOT_ROX_GITHUB_TOKEN }}"
+          GH_TOKEN: "${{ secrets.RHACS_BOT_GITHUB_TOKEN }}"
         run: |
           gh repo sync stackrox/openshift-release --source openshift/release
       - name: Check out stackrox/openshift-release
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: stackrox/openshift-release
-          token: "${{ secrets.ROBOT_ROX_GITHUB_TOKEN }}"
+          token: "${{ secrets.RHACS_BOT_GITHUB_TOKEN }}"
       - name: Initialize git config and create new branch
         if: steps.check-existing.outputs.branch-exists == 'false'
         run: |
@@ -209,7 +241,7 @@ jobs:
       - name: Push and create PR
         if: env.DRY_RUN == 'false' && steps.check-existing.outputs.branch-exists == 'false'
         env:
-          GH_TOKEN: "${{ secrets.ROBOT_ROX_GITHUB_TOKEN }}"
+          GH_TOKEN: "${{ secrets.RHACS_BOT_GITHUB_TOKEN }}"
         run: |
           git push --set-upstream origin "$BRANCH"
 
@@ -225,28 +257,52 @@ jobs:
 
   patch-changelog:
     name: Patch CHANGELOG.md
-    needs: [variables, branch]
+    needs: [variables, branch, start-sha]
     if: needs.variables.outputs.patch == 0
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          # Working on `inputs.ref` instead of `env.main_branch` may help
-          # to spot changes happened to CHANGELOG.md after `inputs.ref`.
-          ref: ${{ env.REF }}
+          # Working on `start-sha` instead of `env.main_branch` may help
+          # to spot changes happened to CHANGELOG.md after `start-sha`.
+          ref: ${{ needs.start-sha.outputs.start-sha }}
       - name: Initialize mandatory git config
         run: |
           git config user.name "${{github.event.sender.login}}"
           git config user.email noreply@github.com
-      - name: Patch CHANGELOG.md on ${{ env.REF }}
+      - name: Patch CHANGELOG.md on ${{ needs.start-sha.outputs.start-sha }}
+        env:
+          GH_TOKEN: ${{ secrets.RHACS_BOT_GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           gh api -H "$ACCEPT_RAW" "${{env.script_url}}" | bash -s -- \
             patch-changelog \
             "${{needs.variables.outputs.release}}.${{needs.variables.outputs.patch}}" \
-            "$REF" \
+            "${{ needs.start-sha.outputs.start-sha }}" \
             "${{needs.variables.outputs.branch}}"
+
+  patch-scanner-versions:
+    name: Patch Scanner updater configuration
+    needs: [variables, branch]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.main_branch }}
+      - name: Initialize mandatory git config
+        run: |
+          git config user.name "${{github.event.sender.login}}"
+          git config user.email noreply@github.com
+      - name: Patch scanner/updater/version/RELEASE_VERSION for ${{needs.variables.outputs.release}}.${{needs.variables.outputs.patch}}
+        env:
+          GH_TOKEN: ${{ secrets.RHACS_BOT_GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          gh api -H "$ACCEPT_RAW" "${{env.script_url}}" | bash -s -- \
+            patch-scanner-updater-configuration \
+            "${{needs.variables.outputs.release}}.${{needs.variables.outputs.patch}}"
 
   milestone:
     name: Create milestone
@@ -283,12 +339,14 @@ jobs:
     steps:
       - name: Post to Slack (normal release)
         if: needs.variables.outputs.patch == 0
-        uses: slackapi/slack-github-action@v1.23.0
+        uses: slackapi/slack-github-action@v1.27.0
         with:
           channel-id: ${{ needs.properties.outputs.slack-channel }}
           payload: >-
-            { "blocks": [
+            {
+              "text": "Upstream release ${{needs.variables.outputs.named-release-patch}} has been triggered. Consult the tracker for next steps.",
 
+              "blocks": [
             { "type": "section", "text": { "type": "mrkdwn", "text":
             ":${{ fromJSON('["desert", "white_check_mark"]')[github.event.inputs.dry-run != 'true'] }}:
             *Upstream release ${{needs.variables.outputs.named-release-patch}}
@@ -312,12 +370,14 @@ jobs:
             ]}
       - name: Post to Slack (patch release)
         if: needs.variables.outputs.patch != 0
-        uses: slackapi/slack-github-action@v1.23.0
+        uses: slackapi/slack-github-action@v1.27.0
         with:
           channel-id: ${{ needs.properties.outputs.slack-channel }}
           payload: >-
-            { "blocks": [
+            {
+              "text": "Upstream patch release ${{needs.variables.outputs.named-release-patch}} has been triggered. Consult the tracker for next steps.",
 
+              "blocks": [
             { "type": "section", "text": { "type": "mrkdwn", "text":
             ":${{ fromJSON('["desert", "white_check_mark"]')[github.event.inputs.dry-run != 'true'] }}:
             *Upstream patch release ${{needs.variables.outputs.named-release-patch}}

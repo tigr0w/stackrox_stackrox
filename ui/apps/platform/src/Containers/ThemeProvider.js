@@ -1,3 +1,4 @@
+/*
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import PropTypes from 'prop-types';
 import { useMediaQuery } from 'react-responsive';
@@ -30,6 +31,10 @@ const useEffectDarkMode = () => {
             // default to light mode.
             isDarkMode = darkModeValue === 'true';
         }
+
+        // TODO: remove this override for never dark-mode, after we update to use PatternFly themes for dark mode
+        isDarkMode = false;
+
         setThemeState({ isDarkMode, hasThemeMounted: true });
     }, [userPrefersDarkMode]);
 
@@ -50,7 +55,12 @@ const ThemeProvider = ({ children }) => {
 
     const toggle = () => {
         const prevTheme = getTheme(themeState.isDarkMode);
-        const darkModeToggled = !themeState.isDarkMode;
+
+        // TODO: remove this override for never dark-mode, ` && false`
+        //       after we update to use PatternFly themes for dark mode
+
+        const darkModeToggled = !themeState.isDarkMode && false;
+
         localStorage.setItem(DARK_MODE_KEY, JSON.stringify(darkModeToggled));
         document.body.classList.remove(prevTheme);
         setThemeState({ ...themeState, isDarkMode: darkModeToggled });
@@ -76,3 +86,4 @@ ThemeProvider.propTypes = {
 };
 
 export { ThemeProvider, useTheme };
+*/

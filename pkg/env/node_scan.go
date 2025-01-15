@@ -3,9 +3,6 @@ package env
 import "time"
 
 var (
-	// RHCOSNodeScanning enables phase 1 functions of "Full host level vulnerability scanning for RHCOS nodes" (ROX-10818)
-	RHCOSNodeScanning = RegisterBooleanSetting("ROX_RHCOS_NODE_SCANNING", true)
-
 	// NodeScanningEndpoint is used to provide Compliance with the Node Scanner that is used to carry out Node Scans
 	NodeScanningEndpoint = RegisterSetting("ROX_NODE_SCANNING_ENDPOINT", WithDefault("127.0.0.1:8444"))
 
@@ -26,4 +23,8 @@ var (
 
 	// NodeAnalysisDeadline is a time in which node-inventory component should reply to compliance
 	NodeAnalysisDeadline = registerDurationSetting("ROX_NODE_SCANNING_DEADLINE", 30*time.Second)
+
+	// NodeScanningAckDeadlineBase defines a base for calculating time when compliance would resend node-inventory
+	// if no ACK from central arrives.
+	NodeScanningAckDeadlineBase = registerDurationSetting("ROX_NODE_SCANNING_ACK_DEADLINE_BASE", 30*time.Second)
 )

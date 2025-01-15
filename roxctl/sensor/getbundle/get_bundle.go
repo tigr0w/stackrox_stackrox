@@ -25,7 +25,9 @@ Use --slim-collector=false if that is not desired.`
 Use --slim-collector if that is not desired.`
 )
 
-func downloadBundle(outputDir, clusterIDOrName string, timeout time.Duration, createUpgraderSA bool, slimCollectorP *bool, istioVersion string, env environment.Environment) error {
+func downloadBundle(outputDir, clusterIDOrName string, timeout time.Duration,
+	createUpgraderSA bool, slimCollectorP *bool, istioVersion string, env environment.Environment,
+) error {
 	conn, err := env.GRPCConnection()
 	if err != nil {
 		return err
@@ -35,7 +37,7 @@ func downloadBundle(outputDir, clusterIDOrName string, timeout time.Duration, cr
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	clusterID, err := util.ResolveClusterID(clusterIDOrName, timeout, env)
+	clusterID, err := util.ResolveClusterID(clusterIDOrName, timeout, 20*time.Second, env)
 	if err != nil {
 		return errors.Wrapf(err, "error resolving cluster ID for %q", clusterIDOrName)
 	}
@@ -102,12 +104,14 @@ func Command(cliEnvironment environment.Environment) *cobra.Command {
 		},
 	}
 
-	c.PersistentFlags().StringVar(&outputDir, "output-dir", "", "output directory for bundle contents (default: auto-generated directory name inside the current directory)")
-	c.PersistentFlags().BoolVar(&createUpgraderSA, "create-upgrader-sa", true, "whether to create the upgrader service account, with cluster-admin privileges, to facilitate automated sensor upgrades")
+	c.PersistentFlags().StringVar(&outputDir, "output-dir", "", "Output directory for bundle contents (default: auto-generated directory name inside the current directory)")
+	c.PersistentFlags().BoolVar(&createUpgraderSA, "create-upgrader-sa", true, "Whether to create the upgrader service account, with cluster-admin privileges, to facilitate automated sensor upgrades")
 	c.PersistentFlags().StringVar(&istioVersion, "istio-support", "",
 		fmt.Sprintf(
 			"Generate deployment files supporting the given Istio version. Valid versions: %s",
 			strings.Join(istioutils.ListKnownIstioVersions(), ", ")))
+
+	flags.AddTimeoutWithDefault(c, 5*time.Minute)
 
 	autobool.NewFlag(c.PersistentFlags(), &slimCollector, "slim-collector", "Use slim collector in deployment bundle")
 

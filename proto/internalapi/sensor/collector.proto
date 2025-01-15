@@ -1,15 +1,39 @@
 syntax = "proto3";
 
-option go_package = "sensor";
-option cc_enable_arenas = true;
-
 package sensor;
+
+option cc_enable_arenas = true;
+option go_package = "./internalapi/sensor;sensor";
 
 // A request message sent by collector to register with Sensor. Typically the first message in any streams.
 message CollectorRegisterRequest {
-    // The hostname on which collector is running.
-    string hostname    = 1;
+  // The hostname on which collector is running.
+  string hostname = 1;
 
-    // A unique identifier for an instance of collector.
-    string instance_id = 2;
+  // A unique identifier for an instance of collector.
+  string instance_id = 2;
+}
+
+enum ExternalIpsEnabled {
+  DISABLED = 0;
+  ENABLED = 1;
+}
+
+// CollectorConfig controls which type of data is reported by collector
+// and how it is processed by collector. These configurations are used
+// to fine-tune collector's performance on large scale clusters.
+// At this time it only controls if external IPs are aggregated at the
+// cluster level and the maximum number of open connections reported
+// for each container per minute.
+message CollectorConfig {
+  message ExternalIPs {
+    ExternalIpsEnabled enabled = 1;
+  }
+
+  message Networking {
+    ExternalIPs external_ips = 1;
+    int64 max_connections_per_minute = 2;
+  }
+
+  Networking networking = 1;
 }

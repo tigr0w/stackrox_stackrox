@@ -104,7 +104,7 @@ func makeTestCluster(mainImage, collectorImage string) *storage.Cluster {
 		MainImage:           mainImage,
 		CollectorImage:      collectorImage,
 		CentralApiEndpoint:  "central.stackrox:443",
-		CollectionMethod:    storage.CollectionMethod_EBPF,
+		CollectionMethod:    storage.CollectionMethod_CORE_BPF,
 		AdmissionController: false,
 		TolerationsConfig: &storage.TolerationsConfig{
 			Disabled: false,
@@ -327,7 +327,6 @@ func testImageFlavorChartRepoSettings(s *deployerTestSuite, flavor defaults.Imag
 func (s *deployerTestSuite) TestFieldsFromClusterAndRenderOpts() {
 	flavorCases := map[string]defaults.ImageFlavor{
 		"development": defaults.DevelopmentBuildImageFlavor(),
-		"stackrox":    defaults.StackRoxIOReleaseImageFlavor(),
 		"rhacs":       defaults.RHACSReleaseImageFlavor(),
 		"opensource":  defaults.OpenSourceImageFlavor(),
 	}

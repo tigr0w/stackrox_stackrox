@@ -4,37 +4,31 @@ package service
 
 import (
 	"context"
+	"slices"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	deploymentMocks "github.com/stackrox/rox/central/deployment/datastore/mocks"
 	lifecycleMocks "github.com/stackrox/rox/central/detection/lifecycle/mocks"
-	"github.com/stackrox/rox/central/globalindex"
 	"github.com/stackrox/rox/central/processbaseline/datastore"
-	"github.com/stackrox/rox/central/processbaseline/index"
 	baselineSearch "github.com/stackrox/rox/central/processbaseline/search"
-	"github.com/stackrox/rox/central/processbaseline/store"
 	postgresStore "github.com/stackrox/rox/central/processbaseline/store/postgres"
-	rocksdbStore "github.com/stackrox/rox/central/processbaseline/store/rocksdb"
 	resultsMocks "github.com/stackrox/rox/central/processbaselineresults/datastore/mocks"
 	indicatorMocks "github.com/stackrox/rox/central/processindicator/datastore/mocks"
 	"github.com/stackrox/rox/central/reprocessor/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	connectionMocks "github.com/stackrox/rox/central/sensor/service/connection/mocks"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/fixtures/fixtureconsts"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
-	"github.com/stackrox/rox/pkg/rocksdb"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/set"
-	"github.com/stackrox/rox/pkg/sliceutils"
-	"github.com/stackrox/rox/pkg/testutils/rocksdbtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 var (
@@ -94,7 +88,6 @@ type ProcessBaselineServiceTestSuite struct {
 	datastore datastore.DataStore
 	service   Service
 
-	db   *rocksdb.RocksDB
 	pool postgres.DB
 
 	reprocessor        *mocks.MockLoop
@@ -107,32 +100,11 @@ type ProcessBaselineServiceTestSuite struct {
 }
 
 func (suite *ProcessBaselineServiceTestSuite) SetupTest() {
-	var store store.Store
-	var indexer index.Indexer
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		pgtestbase := pgtest.ForT(suite.T())
-		suite.Require().NotNil(pgtestbase)
-		suite.pool = pgtestbase.DB
-		dbStore := postgresStore.New(suite.pool)
-		cache, err := postgresStore.NewWithCache(dbStore)
-		suite.NoError(err)
-		store = cache
-		indexer = postgresStore.NewIndexer(suite.pool)
-	} else {
-		db, err := rocksdb.NewTemp(suite.T().Name() + ".db")
-		suite.Require().NoError(err)
-
-		suite.db = db
-
-		store, err = rocksdbStore.New(db)
-		suite.NoError(err)
-
-		tmpIndex, err := globalindex.TempInitializeIndices("")
-		suite.NoError(err)
-		indexer = index.New(tmpIndex)
-	}
-
-	searcher, err := baselineSearch.New(store, indexer)
+	pgtestbase := pgtest.ForT(suite.T())
+	suite.Require().NotNil(pgtestbase)
+	suite.pool = pgtestbase.DB
+	store := postgresStore.New(suite.pool)
+	searcher, err := baselineSearch.New(store)
 	suite.NoError(err)
 
 	suite.mockCtrl = gomock.NewController(suite.T())
@@ -140,7 +112,7 @@ func (suite *ProcessBaselineServiceTestSuite) SetupTest() {
 	suite.resultDatastore.EXPECT().DeleteBaselineResults(gomock.Any(), gomock.Any()).AnyTimes()
 
 	suite.indicatorMockStore = indicatorMocks.NewMockDataStore(suite.mockCtrl)
-	suite.datastore = datastore.New(store, indexer, searcher, suite.resultDatastore, suite.indicatorMockStore)
+	suite.datastore = datastore.New(store, searcher, suite.resultDatastore, suite.indicatorMockStore)
 	suite.reprocessor = mocks.NewMockLoop(suite.mockCtrl)
 	suite.connectionMgr = connectionMocks.NewMockManager(suite.mockCtrl)
 	suite.deployments = deploymentMocks.NewMockDataStore(suite.mockCtrl)
@@ -150,11 +122,7 @@ func (suite *ProcessBaselineServiceTestSuite) SetupTest() {
 
 func (suite *ProcessBaselineServiceTestSuite) TearDownTest() {
 	suite.mockCtrl.Finish()
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		suite.pool.Close()
-	} else {
-		rocksdbtest.TearDownRocksDB(suite.db)
-	}
+	suite.pool.Close()
 }
 
 func (suite *ProcessBaselineServiceTestSuite) TestGetProcessBaseline() {
@@ -208,7 +176,7 @@ func (suite *ProcessBaselineServiceTestSuite) TestGetProcessBaseline() {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, c.expectedResult, baseline)
+				protoassert.Equal(t, c.expectedResult, baseline)
 			}
 		})
 	}
@@ -225,7 +193,7 @@ func (suite *ProcessBaselineServiceTestSuite) TestGetLoadProcessBaseline() {
 
 	baseline, _ := suite.service.GetProcessBaseline(hasWriteCtx, requestByKey)
 
-	assert.Equal(suite.T(), baseline.GetKey(), knownBaseline.GetKey())
+	protoassert.Equal(suite.T(), baseline.GetKey(), knownBaseline.GetKey())
 }
 
 func (suite *ProcessBaselineServiceTestSuite) TestGetLoadProcessBaselineDeletedDeployment() {
@@ -358,17 +326,17 @@ func (suite *ProcessBaselineServiceTestSuite) TestUpdateProcessBaseline() {
 					assert.False(t, processes.Contains(remove))
 				}
 				for _, stockProcess := range stockProcesses {
-					if sliceutils.Find(c.toRemove, stockProcess) == -1 {
+					if slices.Index(c.toRemove, stockProcess) == -1 {
 						assert.True(t, processes.Contains(stockProcess))
 					}
 				}
 			}
-			assert.ElementsMatch(t, c.expectedSuccessKeys, successKeys)
+			protoassert.ElementsMatch(t, c.expectedSuccessKeys, successKeys)
 			var errorKeys []*storage.ProcessBaselineKey
 			for _, err := range response.Errors {
 				errorKeys = append(errorKeys, err.GetKey())
 			}
-			assert.ElementsMatch(t, c.expectedErrorKeys, errorKeys)
+			protoassert.ElementsMatch(t, c.expectedErrorKeys, errorKeys)
 		})
 	}
 }
@@ -433,10 +401,11 @@ func (suite *ProcessBaselineServiceTestSuite) TestDeleteProcessBaselines() {
 	}
 	resp, err := suite.service.DeleteProcessBaselines(hasWriteCtx, request)
 	suite.NoError(err)
-	suite.Equal(&v1.DeleteProcessBaselinesResponse{
+	protoassert.Equal(suite.T(), &v1.DeleteProcessBaselinesResponse{
 		NumDeleted: 1,
 		DryRun:     true,
 	}, resp)
+
 	requestByKey := &v1.GetProcessBaselineRequest{Key: baselines[0].Key}
 	baseline, _ := suite.service.GetProcessBaseline(hasReadCtx, requestByKey)
 	suite.NotNil(baseline.Elements)
@@ -445,7 +414,7 @@ func (suite *ProcessBaselineServiceTestSuite) TestDeleteProcessBaselines() {
 	request.Confirm = true
 	resp, err = suite.service.DeleteProcessBaselines(hasWriteCtx, request)
 	suite.NoError(err)
-	suite.Equal(&v1.DeleteProcessBaselinesResponse{
+	protoassert.Equal(suite.T(), &v1.DeleteProcessBaselinesResponse{
 		NumDeleted: 1,
 		DryRun:     false,
 	}, resp)
@@ -462,8 +431,9 @@ func (suite *ProcessBaselineServiceTestSuite) TestDeleteProcessBaselines() {
 	}
 	resp, err = suite.service.DeleteProcessBaselines(hasWriteCtx, request)
 	suite.NoError(err)
-	suite.Equal(&v1.DeleteProcessBaselinesResponse{
+	protoassert.Equal(suite.T(), &v1.DeleteProcessBaselinesResponse{
 		NumDeleted: int32(len(baselines)),
 		DryRun:     false,
 	}, resp)
+
 }

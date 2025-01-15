@@ -89,7 +89,7 @@ func (p *providerImpl) StorageView() *storage.AuthProvider {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	result := p.storedInfo.Clone()
+	result := p.storedInfo.CloneVT()
 	if result == nil {
 		result = &storage.AuthProvider{}
 	}
@@ -109,11 +109,8 @@ func (p *providerImpl) BackendFactory() BackendFactory {
 }
 
 func (p *providerImpl) GetOrCreateBackend(ctx context.Context) (Backend, error) {
-	var backend Backend
-	var err error
-	concurrency.WithRLock(&p.mutex, func() {
-		backend = p.backend
-		err = p.backendCreationDone.Err()
+	backend, err := concurrency.WithRLock2(&p.mutex, func() (Backend, error) {
+		return p.backend, p.backendCreationDone.Err()
 	})
 
 	if backend != nil && err == nil {
@@ -127,12 +124,10 @@ func (p *providerImpl) GetOrCreateBackend(ctx context.Context) (Backend, error) 
 				" this is probably because of a recent upgrade or a configuration change")
 	}
 
-	var doneErrSig concurrency.ReadOnlyErrorSignal
-
-	concurrency.WithLock(&p.mutex, func() {
-		doneErrSig = p.backendCreationDone.Snapshot()
+	doneErrSig := concurrency.WithLock1(&p.mutex, func() concurrency.ReadOnlyErrorSignal {
+		doneErrSig := p.backendCreationDone.Snapshot()
 		if time.Since(p.lastBackendCreationAttempt) < backendCreationInterval {
-			return
+			return doneErrSig
 		}
 
 		// Calling reset on the default value of an ErrorSignal returns true
@@ -142,8 +137,9 @@ func (p *providerImpl) GetOrCreateBackend(ctx context.Context) (Backend, error) 
 				p.storedInfo.GetClaimMappings())
 
 			p.lastBackendCreationAttempt = time.Now()
-			doneErrSig = p.backendCreationDone.Snapshot()
+			return p.backendCreationDone.Snapshot()
 		}
+		return doneErrSig
 	})
 
 	select {
@@ -156,8 +152,8 @@ func (p *providerImpl) GetOrCreateBackend(ctx context.Context) (Backend, error) 
 		return nil, err
 	}
 
-	concurrency.WithRLock(&p.mutex, func() {
-		backend = p.backend
+	backend = concurrency.WithRLock1(&p.mutex, func() Backend {
+		return p.backend
 	})
 	if backend == nil {
 		return nil, utils.ShouldErr(errors.New("unexpected: backend was nil"))
@@ -219,10 +215,15 @@ func (p *providerImpl) Validate(ctx context.Context, claims *tokens.Claims) erro
 		return errProviderDisabled
 	}
 
+	if err := validateTokenProviderUpdate(p.StorageView(), claims); err != nil {
+		return errors.Wrap(err, "token issued prior to provider update cannot be used")
+	}
+
 	backend, err := p.GetOrCreateBackend(ctx)
 	if err != nil {
 		return errors.Wrap(err, "provider is unavailable")
 	}
+
 	return backend.Validate(ctx, claims)
 }
 
@@ -263,7 +264,7 @@ func (p *providerImpl) MergeConfigInto(newCfg map[string]string) map[string]stri
 // Does a deep copy of the proto field 'storedInfo' so that it can support nested message fields.
 func cloneWithoutMutex(pr *providerImpl) *providerImpl {
 	return &providerImpl{
-		storedInfo:     pr.storedInfo.Clone(),
+		storedInfo:     pr.storedInfo.CloneVT(),
 		backendFactory: pr.backendFactory,
 		backend:        pr.backend,
 		roleMapper:     pr.roleMapper,
@@ -273,7 +274,7 @@ func cloneWithoutMutex(pr *providerImpl) *providerImpl {
 
 // No need to do a deep copy of the 'storedInfo' field here since the 'from' input was created with a deep copy.
 func copyWithoutMutex(to *providerImpl, from *providerImpl) {
-	to.storedInfo = from.storedInfo.Clone()
+	to.storedInfo = from.storedInfo.CloneVT()
 	to.backendFactory = from.backendFactory
 	to.backend = from.backend
 	to.roleMapper = from.roleMapper

@@ -5,25 +5,23 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
-	"github.com/stackrox/rox/central/alert/datastore/internal/index"
 	"github.com/stackrox/rox/central/alert/datastore/internal/search"
 	"github.com/stackrox/rox/central/alert/datastore/internal/store"
+	alertutils "github.com/stackrox/rox/central/alert/utils"
 	"github.com/stackrox/rox/central/metrics"
-	"github.com/stackrox/rox/central/role/resources"
+	platformmatcher "github.com/stackrox/rox/central/platform/matcher"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/alert/convert"
-	"github.com/stackrox/rox/pkg/batcher"
 	"github.com/stackrox/rox/pkg/concurrency"
-	dackboxConcurrency "github.com/stackrox/rox/pkg/dackbox/concurrency"
-	"github.com/stackrox/rox/pkg/debug"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errorhelpers"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	searchCommon "github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/sync"
 )
@@ -34,18 +32,14 @@ var (
 	alertSAC = sac.ForResource(resources.Alert)
 )
 
-const (
-	alertBatchSize = 1000
-)
-
 // datastoreImpl is a transaction script with methods that provide the domain logic for CRUD uses cases for Alert
 // objects.
 type datastoreImpl struct {
-	storage    store.Store
-	indexer    index.Indexer
-	searcher   search.Searcher
-	keyedMutex *concurrency.KeyedMutex
-	keyFence   dackboxConcurrency.KeyFence
+	storage         store.Store
+	searcher        search.Searcher
+	keyedMutex      *concurrency.KeyedMutex
+	keyFence        concurrency.KeyFence
+	platformMatcher platformmatcher.PlatformMatcher
 }
 
 func (ds *datastoreImpl) Search(ctx context.Context, q *v1.Query) ([]searchCommon.Result, error) {
@@ -100,7 +94,7 @@ func (ds *datastoreImpl) CountAlerts(ctx context.Context) (int, error) {
 	return ds.Count(ctx, activeQuery)
 }
 
-// UpsertAlert inserts an alert into storage and into the indexer
+// UpsertAlert inserts an alert into storage
 func (ds *datastoreImpl) UpsertAlert(ctx context.Context, alert *storage.Alert) error {
 	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Alert", "UpsertAlert")
 
@@ -114,7 +108,7 @@ func (ds *datastoreImpl) UpsertAlert(ctx context.Context, alert *storage.Alert) 
 	return ds.updateAlertNoLock(ctx, alert)
 }
 
-// UpdateAlertBatch updates an alert in storage and in the indexer
+// UpdateAlertBatch updates an alert in storage
 func (ds *datastoreImpl) UpdateAlertBatch(ctx context.Context, alert *storage.Alert, waitGroup *sync.WaitGroup, c chan error) {
 	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Alert", "UpdateAlertBatch")
 
@@ -150,7 +144,7 @@ func (ds *datastoreImpl) UpdateAlertBatch(ctx context.Context, alert *storage.Al
 	}
 }
 
-// UpsertAlerts updates an alert in storage and in the indexer
+// UpsertAlerts updates an alert in storage
 func (ds *datastoreImpl) UpsertAlerts(ctx context.Context, alertBatch []*storage.Alert) error {
 	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Alert", "UpsertAlerts")
 
@@ -172,17 +166,17 @@ func (ds *datastoreImpl) UpsertAlerts(ctx context.Context, alertBatch []*storage
 	return nil
 }
 
-func (ds *datastoreImpl) MarkAlertStaleBatch(ctx context.Context, ids ...string) ([]*storage.Alert, error) {
-	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Alert", "MarkAlertStaleBatch")
+func (ds *datastoreImpl) MarkAlertsResolvedBatch(ctx context.Context, ids ...string) ([]*storage.Alert, error) {
+	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Alert", "MarkAlertsResolvedBatch")
 
-	resolvedAt := types.TimestampNow()
+	resolvedAt := protocompat.TimestampNow()
 	idsAsBytes := make([][]byte, 0, len(ids))
 	for _, id := range ids {
 		idsAsBytes = append(idsAsBytes, []byte(id))
 	}
 
 	var resolvedAlerts []*storage.Alert
-	err := ds.keyFence.DoStatusWithLock(dackboxConcurrency.DiscreteKeySet(idsAsBytes...), func() error {
+	err := ds.keyFence.DoStatusWithLock(concurrency.DiscreteKeySet(idsAsBytes...), func() error {
 		var err error
 		var missing []int
 		// Avoid `ds.GetAlert` since that leads to extra read SAC check in addition to read-write check below.
@@ -223,18 +217,25 @@ func (ds *datastoreImpl) DeleteAlerts(ctx context.Context, ids ...string) error 
 		return sac.ErrResourceAccessDenied
 	}
 
-	errorList := errorhelpers.NewErrorList("deleting alert")
 	if err := ds.storage.DeleteMany(ctx, ids); err != nil {
-		errorList.AddError(err)
+		return errors.Wrap(err, "deleting alert")
 	}
-	if err := ds.indexer.DeleteListAlerts(ids); err != nil {
-		errorList.AddError(err)
-	}
-	if err := ds.storage.AckKeysIndexed(ctx, ids...); err != nil {
-		errorList.AddError(err)
+	return nil
+}
+
+func (ds *datastoreImpl) PruneAlerts(ctx context.Context, ids ...string) error {
+	defer metrics.SetDatastoreFunctionDuration(time.Now(), "Alert", "PruneAlerts")
+
+	if ok, err := alertSAC.WriteAllowed(ctx); err != nil {
+		return err
+	} else if !ok {
+		return sac.ErrResourceAccessDenied
 	}
 
-	return errorList.ToError()
+	if err := ds.storage.PruneMany(ctx, ids); err != nil {
+		return errors.Wrap(err, "pruning alert")
+	}
+	return nil
 }
 
 func sacKeyForAlert(alert *storage.Alert) []sac.ScopeKey {
@@ -264,132 +265,30 @@ func (ds *datastoreImpl) updateAlertNoLock(ctx context.Context, alerts ...*stora
 		return nil
 	}
 
-	if err := ds.storage.UpsertMany(ctx, alerts); err != nil {
-		return err
+	if features.PlatformComponents.Enabled() {
+		for _, alert := range alerts {
+			alert.EntityType = alertutils.GetEntityType(alert)
+			match, err := ds.platformMatcher.MatchAlert(alert)
+			if err != nil {
+				return err
+			}
+			alert.PlatformComponent = match
+		}
 	}
 
-	ids := make([]string, 0, len(alerts))
-	listAlerts := make([]*storage.ListAlert, 0, len(alerts))
-	for _, alert := range alerts {
-		ids = append(ids, alert.GetId())
-		listAlerts = append(listAlerts, fillSortHelperFields(convert.AlertToListAlert(alert)))
-	}
-
-	if err := ds.indexer.AddListAlerts(listAlerts); err != nil {
-		return err
-	}
-	return ds.storage.AckKeysIndexed(ctx, ids...)
+	return ds.storage.UpsertMany(ctx, alerts)
 }
 
 func hasSameScope(o1, o2 sac.NamespaceScopedObject) bool {
 	return o1 != nil && o2 != nil && o1.GetClusterId() == o2.GetClusterId() && o1.GetNamespace() == o2.GetNamespace()
 }
 
-func (ds *datastoreImpl) fullReindex(ctx context.Context) error {
-	log.Info("[STARTUP] Reindexing all alerts")
-
-	alertIDs, err := ds.storage.GetIDs(ctx)
-	if err != nil {
-		return err
-	}
-	log.Infof("[STARTUP] Found %d alerts to index", len(alertIDs))
-	alertBatcher := batcher.New(len(alertIDs), alertBatchSize)
-	for start, end, valid := alertBatcher.Next(); valid; start, end, valid = alertBatcher.Next() {
-		listAlerts, _, err := ds.getListAlerts(ctx, alertIDs[start:end])
-		if err != nil {
-			return err
-		}
-		if err := ds.indexer.AddListAlerts(listAlerts); err != nil {
-			return err
-		}
-		if end%(alertBatchSize*10) == 0 {
-			log.Infof("[STARTUP] Successfully indexed %d/%d alerts", end, len(alertIDs))
-		}
-	}
-	log.Infof("[STARTUP] Successfully indexed %d alerts", len(alertIDs))
-
-	// Clear the keys because we just re-indexed everything
-	keys, err := ds.storage.GetKeysToIndex(ctx)
-	if err != nil {
-		return err
-	}
-	if err := ds.storage.AckKeysIndexed(ctx, keys...); err != nil {
-		return err
-	}
-
-	// Write out that initial indexing is complete
-	if err := ds.indexer.MarkInitialIndexingComplete(); err != nil {
-		return err
-	}
-
-	return nil
+func (ds *datastoreImpl) GetByQuery(ctx context.Context, q *v1.Query) ([]*storage.Alert, error) {
+	return ds.storage.GetByQuery(ctx, q)
 }
 
-func (ds *datastoreImpl) buildIndex(ctx context.Context) error {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil
-	}
-	defer debug.FreeOSMemory()
-
-	needsFullIndexing, err := ds.indexer.NeedsInitialIndexing()
-	if err != nil {
-		return err
-	}
-	if needsFullIndexing {
-		return ds.fullReindex(ctx)
-	}
-
-	log.Info("[STARTUP] Determining if alert db/indexer reconciliation is needed")
-	keysToIndex, err := ds.storage.GetKeysToIndex(ctx)
-	if err != nil {
-		return errors.Wrap(err, "error retrieving keys to index from store")
-	}
-
-	log.Infof("[STARTUP] Found %d Alerts to index", len(keysToIndex))
-
-	defer debug.FreeOSMemory()
-
-	alertBatcher := batcher.New(len(keysToIndex), alertBatchSize)
-	for start, end, valid := alertBatcher.Next(); valid; start, end, valid = alertBatcher.Next() {
-		listAlerts, missingIndices, err := ds.getListAlerts(ctx, keysToIndex[start:end])
-		if err != nil {
-			return err
-		}
-		if err := ds.indexer.AddListAlerts(listAlerts); err != nil {
-			return err
-		}
-
-		if len(missingIndices) > 0 {
-			idsToRemove := make([]string, 0, len(missingIndices))
-			for _, missingIdx := range missingIndices {
-				idsToRemove = append(idsToRemove, keysToIndex[start:end][missingIdx])
-			}
-			if err := ds.indexer.DeleteListAlerts(idsToRemove); err != nil {
-				return err
-			}
-		}
-		// Ack keys so that even if central restarts, we don't need to reindex them again
-		if err := ds.storage.AckKeysIndexed(ctx, keysToIndex[start:end]...); err != nil {
-			return err
-		}
-
-		log.Infof("[STARTUP] Successfully indexed %d/%d alerts", end, len(keysToIndex))
-	}
-
-	log.Info("[STARTUP] Successfully indexed all out of sync alerts")
-	return nil
-}
-
-func (ds *datastoreImpl) getListAlerts(ctx context.Context, ids []string) ([]*storage.ListAlert, []int, error) {
-	alerts, missingIndices, err := ds.storage.GetMany(ctx, ids)
-	if err != nil {
-		return nil, nil, err
-	}
-	listAlerts := make([]*storage.ListAlert, 0, len(ids))
-	for _, alert := range alerts {
-		listAlerts = append(listAlerts, convert.AlertToListAlert(alert))
-	}
-	return listAlerts, missingIndices, nil
+func (ds *datastoreImpl) WalkByQuery(ctx context.Context, q *v1.Query, fn func(alert *storage.Alert) error) error {
+	return ds.storage.WalkByQuery(ctx, q, fn)
 }
 
 func (ds *datastoreImpl) WalkAll(ctx context.Context, fn func(*storage.ListAlert) error) error {
@@ -405,5 +304,5 @@ func (ds *datastoreImpl) WalkAll(ctx context.Context, fn func(*storage.ListAlert
 			return fn(listAlert)
 		})
 	}
-	return pgutils.RetryIfPostgres(walkFn)
+	return pgutils.RetryIfPostgres(ctx, walkFn)
 }

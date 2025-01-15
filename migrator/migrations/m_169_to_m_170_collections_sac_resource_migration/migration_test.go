@@ -12,6 +12,8 @@ import (
 	pghelper "github.com/stackrox/rox/migrator/migrations/postgreshelper"
 	"github.com/stackrox/rox/migrator/types"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -91,7 +93,7 @@ func TestMigration(t *testing.T) {
 }
 
 func (s *psMigrationTestSuite) SetupTest() {
-	s.db = pghelper.ForT(s.T(), true)
+	s.db = pghelper.ForT(s.T(), false)
 	s.store = permissionSetPostgresStore.New(s.db.DB)
 	pgutils.CreateTableFromModel(context.Background(), s.db.GetGormDB(), frozenSchema.CreateTablePermissionSetsStmt)
 }
@@ -101,7 +103,7 @@ func (s *psMigrationTestSuite) TearDownTest() {
 }
 
 func (s *psMigrationTestSuite) TestMigration() {
-	ctx := context.Background()
+	ctx := sac.WithAllAccess(context.Background())
 	var psToUpsert []*storage.PermissionSet
 	psToUpsert = append(psToUpsert, unmigratedPSs...)
 	psToUpsert = append(psToUpsert, alreadyMigratedPSs...)
@@ -126,7 +128,7 @@ func (s *psMigrationTestSuite) TestMigration() {
 	expectedPSsAfterMigration = append(expectedPSsAfterMigration, unmigratedPSsAfterMigration...)
 	expectedPSsAfterMigration = append(expectedPSsAfterMigration, alreadyMigratedPSs...)
 
-	s.ElementsMatch(expectedPSsAfterMigration, allPSsAfterMigration)
+	protoassert.ElementsMatch(s.T(), expectedPSsAfterMigration, allPSsAfterMigration)
 }
 
 func (s *psMigrationTestSuite) TestMigrationOnCleanDB() {

@@ -5,11 +5,11 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/integrationhealth/store"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 )
 
 var (
@@ -113,7 +113,7 @@ func (ds *datastoreImpl) getIntegrationsOfType(ctx context.Context, integrationT
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 	return integrationHealth, nil

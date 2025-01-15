@@ -7,28 +7,19 @@ import (
 	"testing"
 
 	"github.com/stackrox/rox/central/role"
-	"github.com/stackrox/rox/central/role/resources"
-	"github.com/stackrox/rox/central/role/store"
 	PermissionSetPGStore "github.com/stackrox/rox/central/role/store/permissionset/postgres"
-	permissionSetStore "github.com/stackrox/rox/central/role/store/permissionset/rocksdb"
 	postgresRolePGStore "github.com/stackrox/rox/central/role/store/role/postgres"
-	roleStore "github.com/stackrox/rox/central/role/store/role/rocksdb"
 	postgresSimpleAccessScopeStore "github.com/stackrox/rox/central/role/store/simpleaccessscope/postgres"
-	simpleAccessScopeStore "github.com/stackrox/rox/central/role/store/simpleaccessscope/rocksdb"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/bolthelper"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/defaults/accesscontrol"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
-	"github.com/stackrox/rox/pkg/rocksdb"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
-	"github.com/stackrox/rox/pkg/testutils"
-	"github.com/stackrox/rox/pkg/testutils/rocksdbtest"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
-	bolt "go.etcd.io/bbolt"
 )
 
 func TestAllDefaultRolesAreCovered(t *testing.T) {
@@ -81,10 +72,7 @@ type roleDataStoreTestSuite struct {
 	hasWriteCtx            context.Context
 	hasWriteDeclarativeCtx context.Context
 
-	dataStore DataStore
-	boltDB    *bolt.DB
-	rocksie   *rocksdb.RocksDB
-
+	dataStore    DataStore
 	postgresTest *pgtest.TestPostgres
 
 	existingRole                     *storage.Role
@@ -117,28 +105,12 @@ func (s *roleDataStoreTestSuite) mockGroupGetFiltered(_ context.Context, _ func(
 }
 
 func (s *roleDataStoreTestSuite) initDataStore() {
-	var err error
-	var roleStorage store.RoleStore
-	var permissionSetStorage store.PermissionSetStore
-	var accessScopeStorage store.SimpleAccessScopeStore
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.postgresTest = pgtest.ForT(s.T())
-		s.Require().NotNil(s.postgresTest)
-		roleStorage = postgresRolePGStore.New(s.postgresTest.DB)
-		permissionSetStorage = PermissionSetPGStore.New(s.postgresTest.DB)
-		accessScopeStorage = postgresSimpleAccessScopeStore.New(s.postgresTest.DB)
-	} else {
-		s.boltDB, err = bolthelper.NewTemp(s.T().Name() + "-bolt.db")
-		s.Require().NoError(err)
-		s.rocksie = rocksdbtest.RocksDBForT(s.T())
+	s.postgresTest = pgtest.ForT(s.T())
+	s.Require().NotNil(s.postgresTest)
 
-		roleStorage, err = roleStore.New(s.rocksie)
-		s.Require().NoError(err)
-		permissionSetStorage, err = permissionSetStore.New(s.rocksie)
-		s.Require().NoError(err)
-		accessScopeStorage, err = simpleAccessScopeStore.New(s.rocksie)
-		s.Require().NoError(err)
-	}
+	roleStorage := postgresRolePGStore.New(s.postgresTest.DB)
+	permissionSetStorage := PermissionSetPGStore.New(s.postgresTest.DB)
+	accessScopeStorage := postgresSimpleAccessScopeStore.New(s.postgresTest.DB)
 
 	s.dataStore = New(roleStorage, permissionSetStorage, accessScopeStorage, s.mockGroupGetFiltered)
 
@@ -165,12 +137,7 @@ func (s *roleDataStoreTestSuite) initDataStore() {
 }
 
 func (s *roleDataStoreTestSuite) TearDownTest() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.postgresTest.Close()
-	} else {
-		rocksdbtest.TearDownRocksDB(s.rocksie)
-		testutils.TearDownDB(s.boltDB)
-	}
+	s.postgresTest.Close()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -249,7 +216,7 @@ func (s *roleDataStoreTestSuite) TestRoleReadOperations() {
 	role, found, err = s.dataStore.GetRole(s.hasReadCtx, s.existingRole.GetName())
 	s.NoError(err)
 	s.True(found)
-	s.Equal(s.existingRole, role, "with READ access existing object is returned")
+	protoassert.Equal(s.T(), s.existingRole, role, "with READ access existing object is returned")
 
 	roles, err := s.dataStore.GetAllRoles(s.hasReadCtx)
 	s.NoError(err)
@@ -260,7 +227,7 @@ func (s *roleDataStoreTestSuite) TestRoleReadOperations() {
 	})
 	s.NoError(err)
 	s.Len(roles, 1)
-	s.ElementsMatch(roles, []*storage.Role{role})
+	protoassert.ElementsMatch(s.T(), roles, []*storage.Role{role})
 
 	roles, err = s.dataStore.GetRolesFiltered(s.hasReadCtx, func(role *storage.Role) bool {
 		return role.GetName() == "non-existing-role"
@@ -472,7 +439,7 @@ func (s *roleDataStoreTestSuite) TestPermissionSetReadOperations() {
 	permissionSet, found, err = s.dataStore.GetPermissionSet(s.hasReadCtx, s.existingPermissionSet.GetId())
 	s.NoError(err)
 	s.True(found)
-	s.Equal(s.existingPermissionSet, permissionSet, "with READ access existing object is returned")
+	protoassert.Equal(s.T(), s.existingPermissionSet, permissionSet, "with READ access existing object is returned")
 
 	permissionSets, err := s.dataStore.GetAllPermissionSets(s.hasReadCtx)
 	s.NoError(err)
@@ -483,7 +450,7 @@ func (s *roleDataStoreTestSuite) TestPermissionSetReadOperations() {
 	})
 	s.NoError(err)
 	s.Len(permissionSets, 1)
-	s.ElementsMatch(permissionSets, []*storage.PermissionSet{s.existingPermissionSet})
+	protoassert.ElementsMatch(s.T(), permissionSets, []*storage.PermissionSet{s.existingPermissionSet})
 
 	permissionSets, err = s.dataStore.GetPermissionSetsFiltered(s.hasReadCtx, func(permissionSet *storage.PermissionSet) bool {
 		return permissionSet.GetId() == "non-existing permission set"
@@ -494,7 +461,7 @@ func (s *roleDataStoreTestSuite) TestPermissionSetReadOperations() {
 
 func (s *roleDataStoreTestSuite) TestPermissionSetWriteOperations() {
 	goodPermissionSet := getValidPermissionSet("permissionset.new", "new valid permissionset")
-	updatedGoodPermissionSet := goodPermissionSet.Clone()
+	updatedGoodPermissionSet := goodPermissionSet.CloneVT()
 	updatedGoodPermissionSet.ResourceToAccess = map[string]storage.Access{
 		resources.Namespace.String(): storage.Access_READ_WRITE_ACCESS,
 	}
@@ -525,11 +492,7 @@ func (s *roleDataStoreTestSuite) TestPermissionSetWriteOperations() {
 
 	err = s.dataStore.AddPermissionSet(s.hasWriteCtx, mimicPermissionSet)
 	// With postgres the unique constraint catches this.
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		assert.ErrorContains(s.T(), err, "violates unique constraint")
-	} else {
-		s.ErrorIs(err, errox.AlreadyExists, "adding permission set with an existing name yields an error")
-	}
+	assert.ErrorContains(s.T(), err, "violates unique constraint")
 
 	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, goodPermissionSet)
 	s.ErrorIs(err, errox.NotFound, "updating non-existing permission set yields an error")
@@ -554,11 +517,7 @@ func (s *roleDataStoreTestSuite) TestPermissionSetWriteOperations() {
 
 	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, mimicPermissionSet)
 	// With postgres the unique constraint catches this.
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		assert.ErrorContains(s.T(), err, "violates unique constraint")
-	} else {
-		s.ErrorIs(err, errox.AlreadyExists, "introducing a name collision with Update*() yields an error")
-	}
+	assert.ErrorContains(s.T(), err, "violates unique constraint")
 
 	err = s.dataStore.UpdatePermissionSet(s.hasWriteCtx, updatedGoodPermissionSet)
 	s.NoError(err)
@@ -728,7 +687,7 @@ func (s *roleDataStoreTestSuite) TestAccessScopeReadOperations() {
 	scope, found, err = s.dataStore.GetAccessScope(s.hasReadCtx, s.existingScope.GetId())
 	s.NoError(err)
 	s.True(found)
-	s.Equal(s.existingScope, scope, "with READ access existing object is returned")
+	protoassert.Equal(s.T(), s.existingScope, scope, "with READ access existing object is returned")
 
 	exists, err := s.dataStore.AccessScopeExists(s.hasReadCtx, misplacedScope.GetId())
 	s.NoError(err, "not existing scope for AccessScopeExists() should not return error")
@@ -747,7 +706,7 @@ func (s *roleDataStoreTestSuite) TestAccessScopeReadOperations() {
 	})
 	s.NoError(err)
 	s.Len(scopes, 1)
-	s.ElementsMatch(scopes, []*storage.SimpleAccessScope{s.existingScope})
+	protoassert.ElementsMatch(s.T(), scopes, []*storage.SimpleAccessScope{s.existingScope})
 
 	scopes, err = s.dataStore.GetAccessScopesFiltered(s.hasReadCtx, func(accessScope *storage.SimpleAccessScope) bool {
 		return accessScope.GetId() == "non-existing scope"
@@ -758,7 +717,7 @@ func (s *roleDataStoreTestSuite) TestAccessScopeReadOperations() {
 
 func (s *roleDataStoreTestSuite) TestAccessScopeWriteOperations() {
 	goodScope := getValidAccessScope("scope.new", "new valid scope")
-	updatedGoodScope := goodScope.Clone()
+	updatedGoodScope := goodScope.CloneVT()
 	updatedIncludedClusters := []string{"clusterA"}
 	updatedGoodScope.Rules = &storage.SimpleAccessScope_Rules{
 		IncludedClusters: updatedIncludedClusters,
@@ -793,11 +752,7 @@ func (s *roleDataStoreTestSuite) TestAccessScopeWriteOperations() {
 
 	err = s.dataStore.AddAccessScope(s.hasWriteCtx, mimicScope)
 	// With postgres the unique constraint catches this.
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		assert.ErrorContains(s.T(), err, "violates unique constraint")
-	} else {
-		s.ErrorIs(err, errox.AlreadyExists, "adding scope with an existing name yields an error")
-	}
+	assert.ErrorContains(s.T(), err, "violates unique constraint")
 
 	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, goodScope)
 	s.ErrorIs(err, errox.NotFound, "updating non-existing scope yields an error")
@@ -822,11 +777,7 @@ func (s *roleDataStoreTestSuite) TestAccessScopeWriteOperations() {
 
 	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, mimicScope)
 	// With postgres the unique constraint catches this.
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		assert.ErrorContains(s.T(), err, "violates unique constraint")
-	} else {
-		s.ErrorIs(err, errox.AlreadyExists, "introducing a name collision with Update*() yields an error")
-	}
+	assert.ErrorContains(s.T(), err, "violates unique constraint")
 
 	err = s.dataStore.UpdateAccessScope(s.hasWriteCtx, updatedGoodScope)
 	s.NoError(err)
@@ -962,5 +913,5 @@ func (s *roleDataStoreTestSuite) TestGetAndResolveRole() {
 	s.NoError(err)
 	s.Equal(s.existingRole.GetName(), resolvedRole.GetRoleName())
 	s.Equal(s.existingPermissionSet.GetResourceToAccess(), resolvedRole.GetPermissions())
-	s.Equal(s.existingScope, resolvedRole.GetAccessScope())
+	protoassert.Equal(s.T(), s.existingScope, resolvedRole.GetAccessScope())
 }

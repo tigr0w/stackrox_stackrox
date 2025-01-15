@@ -1,3 +1,5 @@
+import static util.Helpers.evaluateWithRetry
+
 import groovy.transform.CompileStatic
 import orchestratormanager.OrchestratorType
 import org.slf4j.Logger
@@ -19,10 +21,12 @@ import io.stackrox.proto.api.v1.PolicyServiceGrpc
 import io.stackrox.proto.api.v1.SearchServiceGrpc
 import io.stackrox.proto.api.v1.SearchServiceOuterClass
 import io.stackrox.proto.api.v1.SearchServiceOuterClass.RawQuery
+import io.stackrox.proto.api.v1.SecretServiceGrpc
 import io.stackrox.proto.storage.AlertOuterClass
 import io.stackrox.proto.storage.DeploymentOuterClass.ContainerImage
 import io.stackrox.proto.storage.DeploymentOuterClass.Deployment
 import io.stackrox.proto.storage.DeploymentOuterClass.ListDeployment
+import io.stackrox.proto.storage.SecretOuterClass.ListSecret
 import io.stackrox.proto.storage.DeploymentOuterClass.Pod
 import io.stackrox.proto.storage.ImageOuterClass
 import io.stackrox.proto.storage.PolicyOuterClass.EnforcementAction
@@ -73,6 +77,10 @@ class Services extends BaseService {
         return DeploymentServiceGrpc.newBlockingStub(getChannel())
     }
 
+    static SecretServiceGrpc.SecretServiceBlockingStub getSecretClient() {
+        return SecretServiceGrpc.newBlockingStub(getChannel())
+    }
+
     static PodServiceGrpc.PodServiceBlockingStub getPodClient() {
         return PodServiceGrpc.newBlockingStub(getChannel())
     }
@@ -115,6 +123,10 @@ class Services extends BaseService {
 
     static List<ListDeployment> getDeployments(RawQuery query = RawQuery.newBuilder().build()) {
         return getDeploymentClient().listDeployments(query).deploymentsList
+    }
+
+    static List<ListSecret> getSecrets(RawQuery query = RawQuery.newBuilder().build()) {
+        return getSecretClient().listSecrets(query).secretsList
     }
 
     static DeploymentServiceOuterClass.GetDeploymentWithRiskResponse getDeploymentWithRisk(String id) {
@@ -217,19 +229,32 @@ class Services extends BaseService {
 
     static checkForNoViolations(String deploymentName, String policyName, int checkSeconds = 5) {
         def violations = getViolationsWithTimeout(deploymentName, policyName, checkSeconds)
-        return violations == null || violations.size() == 0
+        boolean noViolations = (violations == null || violations.size() == 0)
+        if (!noViolations) {
+            LOG.info "Deployment '${deploymentName}' has violation(s): ${violations}"
+        }
+        return noViolations
+    }
+
+    static boolean expectNoViolations(String deploymentName, String policyName, int timeoutSeconds = 60) {
+        int intervalSeconds = 3
+        int retries = (timeoutSeconds / intervalSeconds).intValue()
+        String query = "Deployment:${deploymentName}+Policy:${policyName}"
+
+        Timer t = new Timer(retries, intervalSeconds)
+        while (t.IsValid()) {
+            def violations = AlertService.getViolations(ListAlertsRequest.newBuilder().setQuery(query).build())
+            LOG.info "Deployment '${deploymentName}' has ${violations.size()} violation(s) for '${policyName}'"
+            if (violations.isEmpty()) {
+                return true
+            }
+        }
+        return false
     }
 
     static boolean checkForNoViolationsByDeploymentID(String deploymentID, String policyName, int checkSeconds = 5) {
         def violations = getViolationsByDeploymentID(deploymentID, policyName, false, checkSeconds)
         return violations == null || violations.isEmpty()
-    }
-
-    static scanImage(String image) {
-        return getImageClient().scanImage(
-                ImageServiceOuterClass.ScanImageRequest.newBuilder()
-                        .setImageName(image).build()
-        )
     }
 
     static String getImageIdByName(String imageName) {
@@ -247,20 +272,20 @@ class Services extends BaseService {
 
     static requestBuildImageScan(String registry, String remote, String tag, Boolean sendNotifications = false) {
         LOG.info "Request scan of ${registry}/${remote}:${tag} with sendNotifications=${sendNotifications}"
-        return getDetectionClient().detectBuildTime(
-                BuildDetectionRequest.newBuilder().
-                        setImage(
-                                ContainerImage.newBuilder()
-                                        .setName(ImageOuterClass.ImageName.newBuilder()
-                                                .setRegistry(registry)
-                                                .setRemote(remote)
-                                                .setTag(tag)
-                                                .build()
-                                        )
-                        ).
-                        setSendNotifications(sendNotifications).
-                        build()
-        )
+        def request = BuildDetectionRequest.newBuilder()
+            .setImage(ContainerImage.newBuilder()
+                .setName(ImageOuterClass.ImageName.newBuilder()
+                    .setRegistry(registry)
+                    .setRemote(remote)
+                    .setTag(tag)
+                    .build()
+                )
+            )
+            .setSendNotifications(sendNotifications)
+            .build()
+        return evaluateWithRetry(10, 15) {
+            return getDetectionClient().detectBuildTime(request)
+        }
     }
 
     static updatePolicy(Policy policyDef) {
@@ -414,7 +439,7 @@ class Services extends BaseService {
 
     static boolean waitForSRDeletionByID(String id, String name) {
         // Wait until the deployment disappears from StackRox.
-        Timer t = new Timer(60, 1)
+        Timer t = new Timer(120, 1)
         boolean disappearedFromStackRox = false
         while (t.IsValid()) {
             if (!roxDetectedDeployment(id, name)) {
@@ -425,7 +450,10 @@ class Services extends BaseService {
         return disappearedFromStackRox
     }
 
-    static waitForDeployment(objects.Deployment deployment, int retries = 60, int interval = 2) {
+    // When changing the timeout here, remember there might be other enclosing
+    // timeout that should be in sync. For example,`globalTimeout` which aborts
+    // tests but should be generally avoided.
+    static waitForDeployment(objects.Deployment deployment, int retries = 60, int interval = 5) {
         if (deployment.deploymentUid == null) {
             LOG.info "deploymentID for [${deployment.name}] is null, checking orchestrator directly for deployment ID"
             deployment.deploymentUid = OrchestratorType.orchestrator.getDeploymentId(deployment)

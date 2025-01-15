@@ -4,12 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	storeMocks "github.com/stackrox/rox/central/externalbackups/internal/store/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestExtBkpDataStore(t *testing.T) {
@@ -86,7 +87,7 @@ func (s *extBkpDataStoreTestSuite) TestUpsertExtBkps() {
 	s.storage.EXPECT().GetAll(gomock.Any()).Return(NewFakeListExtBkps(), nil).Times(1)
 
 	bkps, err := s.dataStore.ListBackups(s.hasReadCtx)
-	s.Equal(NewFakeListExtBkps(), bkps)
+	protoassert.SlicesEqual(s.T(), NewFakeListExtBkps(), bkps)
 	s.NoError(err)
 }
 
@@ -103,7 +104,7 @@ func (s *extBkpDataStoreTestSuite) TestAllowsList() {
 
 	result, err := s.dataStore.ListBackups(s.hasReadCtx)
 	s.NoError(err, "expected no error, should return nil without access")
-	s.Equal(NewFakeListExtBkps(), result)
+	protoassert.SlicesEqual(s.T(), NewFakeListExtBkps(), result)
 }
 
 func (s *extBkpDataStoreTestSuite) TestEnforcesGet() {

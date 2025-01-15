@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Select, SelectOption, SelectVariant } from '@patternfly/react-core';
+import { Select, SelectOption } from '@patternfly/react-core/deprecated';
 
 export type CategoryFilter = 'Default categories' | 'Custom categories';
 
@@ -26,8 +26,8 @@ function PolicyCategoriesFilterSelect({
 
     return (
         <Select
-            variant={SelectVariant.checkbox}
-            onToggle={setIsOpen}
+            variant="checkbox"
+            onToggle={(_event, val) => setIsOpen(val)}
             onSelect={onSelect}
             isOpen={isOpen}
             selections={selectedFilters}

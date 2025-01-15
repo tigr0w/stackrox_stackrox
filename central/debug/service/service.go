@@ -1,22 +1,22 @@
 package service
 
 import (
-	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
+	"path/filepath"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gogo/protobuf/types"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
+	concPool "github.com/sourcegraph/conc/pool"
 	"github.com/stackrox/rox/central/cluster/datastore"
 	configDS "github.com/stackrox/rox/central/config/datastore"
 	"github.com/stackrox/rox/central/globaldb"
@@ -25,7 +25,6 @@ import (
 	"github.com/stackrox/rox/central/logimbue/writer"
 	notifierDS "github.com/stackrox/rox/central/notifier/datastore"
 	roleDS "github.com/stackrox/rox/central/role/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	"github.com/stackrox/rox/central/telemetry/gatherers"
 	v1 "github.com/stackrox/rox/generated/api/v1"
@@ -33,6 +32,7 @@ import (
 	"github.com/stackrox/rox/pkg/auth/authproviders"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/buildinfo"
+	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errox"
 	grpcPkg "github.com/stackrox/rox/pkg/grpc"
@@ -44,15 +44,26 @@ import (
 	"github.com/stackrox/rox/pkg/k8sintrospect"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres/pgconfig"
+	"github.com/stackrox/rox/pkg/postgres/stats"
 	"github.com/stackrox/rox/pkg/prometheusutil"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/sac/observe"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/telemetry/data"
 	"github.com/stackrox/rox/pkg/version"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type logsMode int
+
+// telemetryMode specifies how to use sensor/central telemetry to gather diagnostics.
+// 0 - don't collect any telemetry data
+// 1 - collect telemetry data for central only
+// 2 - collect telemetry data from sensors and central
+type telemetryMode int
 
 const (
 	cpuProfileDuration = 30 * time.Second
@@ -61,7 +72,13 @@ const (
 	localLogs
 	fullK8sIntrospectionData
 
+	noTelemetry telemetryMode = iota
+	telemetryCentralOnly
+	telemetryCentralAndSensors
+
 	centralClusterPrefix = "_central-cluster"
+
+	pgStatStatementsMax = 1000
 
 	layout    = "2006-01-02T15:04:05.000Z"
 	logWindow = 20 * time.Minute
@@ -80,6 +97,7 @@ var (
 		},
 		user.With(permissions.Modify(resources.Administration)): {
 			"/v1.DebugService/SetLogLevel",
+			"/v1.DebugService/ResetDBStats",
 		},
 	})
 
@@ -88,6 +106,10 @@ var (
 
 func init() {
 	mainClusterConfig.PathPrefix = centralClusterPrefix
+	// For the main cluster (i.e. the collection for the Central cluster) we explicitly ignore the log file limits.
+	// The limitation is not required since the GRPC message isn't affected by it, and has proven to be unhelpful
+	// in cases where the logs of Central are quite big (e.g. in larger scale environments).
+	mainClusterConfig.IgnoreLogLimits = true
 }
 
 // Service provides the interface to the gRPC service for debugging
@@ -96,6 +118,7 @@ type Service interface {
 	v1.DebugServiceServer
 
 	AuthFuncOverride(ctx context.Context, fullMethodName string) (context.Context, error)
+	InternalDiagnosticsHandler() http.HandlerFunc
 }
 
 // New returns a Service that implements v1.DebugServiceServer
@@ -130,6 +153,30 @@ type serviceImpl struct {
 	roleDataStore        roleDS.DataStore
 	configDataStore      configDS.DataStore
 	notifierDataStore    notifierDS.DataStore
+}
+
+// ResetDBStats resets pg_stat_statements in order to allow new metrics to be accumulated.
+func (s *serviceImpl) ResetDBStats(ctx context.Context, _ *v1.Empty) (*v1.Empty, error) {
+	if pgconfig.IsExternalDatabase() {
+		return nil, status.Error(codes.InvalidArgument, "cannot reset DB stats on an external database")
+	}
+	err := stats.ResetPGStatStatements(ctx, globaldb.GetPostgres())
+	if err != nil {
+		return nil, err
+	}
+	return &v1.Empty{}, nil
+}
+
+// InternalDiagnosticsHandler returns handler to be served on "cluster-internal" port.
+// Cluster-internal port is not exposed via k8s Service and only accessible to callers with k8s/Openshift cluster access.
+// This handler shouldn't be exposed to other callers as it has no authorization and can elevate customer permissions.
+func (s *serviceImpl) InternalDiagnosticsHandler() http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, r *http.Request) {
+		// Adding scope checker as no authorizer is used, ergo no identity in context by default.
+		ctx := sac.WithGlobalAccessScopeChecker(r.Context(),
+			sac.AllowFixedScopes(sac.AccessModeScopeKeys(storage.Access_READ_ACCESS)))
+		s.getDiagnosticDumpWithCentral(responseWriter, r.WithContext(ctx), true)
+	}
 }
 
 // RegisterServiceServer registers this service with the given gRPC Server.
@@ -180,14 +227,15 @@ func (s *serviceImpl) GetLogLevel(_ context.Context, req *v1.GetLogLevelRequest)
 	logging.ForEachModule(forEachModule, req.GetModules())
 
 	if len(unknownModules) > 0 {
-		return nil, errors.Wrapf(errox.InvalidArgs, "Unknown module(s): %s", strings.Join(unknownModules, ", "))
+		return nil, errors.Wrapf(errox.InvalidArgs, "Unknown module(s): %s",
+			strings.Join(unknownModules, ", "))
 	}
 
 	return resp, nil
 }
 
 // SetLogLevel implements v1.DebugServiceServer, and it sets the log level for StackRox services.
-func (s *serviceImpl) SetLogLevel(_ context.Context, req *v1.LogLevelRequest) (*types.Empty, error) {
+func (s *serviceImpl) SetLogLevel(_ context.Context, req *v1.LogLevelRequest) (*protocompat.Empty, error) {
 	levelStr := req.GetLevel()
 	zapLevel, ok := logging.LevelForLabel(levelStr)
 	if !ok {
@@ -197,7 +245,7 @@ func (s *serviceImpl) SetLogLevel(_ context.Context, req *v1.LogLevelRequest) (*
 	// If this is a global request, then set the global level and return
 	if len(req.GetModules()) == 0 {
 		logging.SetGlobalLogLevel(zapLevel)
-		return &types.Empty{}, nil
+		return protocompat.ProtoEmpty(), nil
 	}
 
 	var unknownModules []string
@@ -210,10 +258,11 @@ func (s *serviceImpl) SetLogLevel(_ context.Context, req *v1.LogLevelRequest) (*
 	}, req.GetModules())
 
 	if len(unknownModules) > 0 {
-		return nil, errors.Wrapf(errox.InvalidArgs, "Unknown module(s): %s", strings.Join(unknownModules, ", "))
+		return nil, errors.Wrapf(errox.InvalidArgs, "Unknown module(s): %s",
+			strings.Join(unknownModules, ", "))
 	}
 
-	return &types.Empty{}, nil
+	return protocompat.ProtoEmpty(), nil
 }
 
 func (s *serviceImpl) StreamAuthzTraces(_ *v1.Empty, stream v1.DebugService_StreamAuthzTracesServer) error {
@@ -239,7 +288,8 @@ func (s *serviceImpl) StreamAuthzTraces(_ *v1.Empty, stream v1.DebugService_Stre
 	}
 }
 
-func fetchAndAddJSONToZip(ctx context.Context, zipWriter *zip.Writer, fileName string, fetchData func(ctx context.Context) (interface{}, error)) {
+func fetchAndAddJSONToZip(ctx context.Context, zipWriter *zipWriter, fileName string,
+	fetchData func(ctx context.Context) (interface{}, error)) {
 	jsonObj, errFetchData := fetchData(ctx)
 	if errFetchData != nil {
 		log.Error(errFetchData)
@@ -252,8 +302,10 @@ func fetchAndAddJSONToZip(ctx context.Context, zipWriter *zip.Writer, fileName s
 	}
 }
 
-func addJSONToZip(zipWriter *zip.Writer, fileName string, jsonObj interface{}) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, fileName)
+func addJSONToZip(zipWriter *zipWriter, fileName string, jsonObj interface{}) error {
+	zipWriter.LockWrite()
+	defer zipWriter.UnlockWrite()
+	w, err := zipWriter.writerWithCurrentTimestampNoLock(fileName)
 	if err != nil {
 		return errors.Wrapf(err, "unable to create zip file %q", fileName)
 	}
@@ -264,28 +316,45 @@ func addJSONToZip(zipWriter *zip.Writer, fileName string, jsonObj interface{}) e
 	return jsonEnc.Encode(jsonObj)
 }
 
-func zipPrometheusMetrics(zipWriter *zip.Writer, name string) error {
-	metricsWriter, err := zipWriterWithCurrentTimestamp(zipWriter, name)
+func zipPrometheusMetrics(ctx context.Context, zipWriter *zipWriter, name string) error {
+	// Write to the buffer first instead of directly to the zip writer, this way we hold the lock _only_ for the copy
+	// time.
+	buf := &bytes.Buffer{}
+	if err := prometheusutil.ExportText(ctx, buf); err != nil {
+		return err
+	}
+	zipWriter.LockWrite()
+	defer zipWriter.UnlockWrite()
+	metricsWriter, err := zipWriter.writerWithCurrentTimestampNoLock(name)
 	if err != nil {
 		return err
 	}
-	return prometheusutil.ExportText(metricsWriter)
+	_, err = io.Copy(metricsWriter, buf)
+	return err
 }
 
-func getMemory(zipWriter *zip.Writer) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, "heap.tar.gz")
+func getMemory(zipWriter *zipWriter) error {
+	// Write to the buffer first instead of directly to the zip writer, this way we hold the lock _only_ for the copy
+	// time.
+	buf := &bytes.Buffer{}
+	if err := pprof.WriteHeapProfile(buf); err != nil {
+		return err
+	}
+	zipWriter.LockWrite()
+	defer zipWriter.UnlockWrite()
+	w, err := zipWriter.writerWithCurrentTimestampNoLock("heap.pb.gz")
 	if err != nil {
 		return err
 	}
-	return pprof.WriteHeapProfile(w)
+	_, err = io.Copy(w, buf)
+	return err
 }
 
-func getCPU(ctx context.Context, zipWriter *zip.Writer, duration time.Duration) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, "cpu.tar.gz")
-	if err != nil {
-		return err
-	}
-	if err := pprof.StartCPUProfile(w); err != nil {
+func getCPU(ctx context.Context, zipWriter *zipWriter, duration time.Duration) error {
+	// Write to the buffer first instead of directly to the zip writer, this way we hold the lock _only_ for the copy
+	// time.
+	buf := &bytes.Buffer{}
+	if err := pprof.StartCPUProfile(buf); err != nil {
 		return err
 	}
 	select {
@@ -293,65 +362,64 @@ func getCPU(ctx context.Context, zipWriter *zip.Writer, duration time.Duration) 
 	case <-ctx.Done():
 	}
 	pprof.StopCPUProfile()
-	return nil
-}
+	if concurrency.IsDone(ctx) {
+		return nil
+	}
 
-func getBlock(zipWriter *zip.Writer) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, "block.tar.gz")
+	zipWriter.LockWrite()
+	defer zipWriter.UnlockWrite()
+	w, err := zipWriter.writerWithCurrentTimestampNoLock("cpu.pb.gz")
 	if err != nil {
 		return err
 	}
-	p := pprof.Lookup("block")
-	return p.WriteTo(w, 0)
-}
-
-func getMutex(zipWriter *zip.Writer) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, "mutex.tar.gz")
-	if err != nil {
-		return err
-	}
-	p := pprof.Lookup("mutex")
-	return p.WriteTo(w, 0)
-}
-
-func getGoroutines(zipWriter *zip.Writer) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, "goroutine.txt")
-	if err != nil {
-		return err
-	}
-	p := pprof.Lookup("goroutine")
-	return p.WriteTo(w, 2)
-}
-
-func getLogs(zipWriter *zip.Writer) error {
-	if err := getLogFile(zipWriter, "central.log", logging.LoggingPath); err != nil {
-		return err
-	}
-	return nil
-}
-
-func getLogFile(zipWriter *zip.Writer, targetPath string, sourcePath string) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, targetPath)
-	if err != nil {
-		return err
-	}
-
-	logFile, err := os.Open(sourcePath)
-	if err != nil {
-		return err
-	}
-
-	_, err = io.Copy(w, logFile)
+	_, err = io.Copy(w, buf)
 	return err
 }
 
-func getVersion(ctx context.Context, zipWriter *zip.Writer) error {
+func getMutex(zipWriter *zipWriter) error {
+	// Write to the buffer first instead of directly to the zip writer, this way we hold the lock _only_ for the copy
+	// time.
+	buf := &bytes.Buffer{}
+	p := pprof.Lookup("mutex")
+	if err := p.WriteTo(buf, 0); err != nil {
+		return err
+	}
+
+	zipWriter.LockWrite()
+	defer zipWriter.UnlockWrite()
+	w, err := zipWriter.writerWithCurrentTimestampNoLock("mutex.pb.gz")
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(w, buf)
+	return err
+}
+
+func getGoroutines(zipWriter *zipWriter) error {
+	// Write to the buffer first instead of directly to the zip writer, this way we hold the lock _only_ for the copy
+	// time.
+	buf := &bytes.Buffer{}
+	p := pprof.Lookup("goroutine")
+	if err := p.WriteTo(buf, 2); err != nil {
+		return err
+	}
+	zipWriter.LockWrite()
+	defer zipWriter.UnlockWrite()
+	w, err := zipWriter.writerWithCurrentTimestampNoLock("goroutine.txt")
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(w, buf)
+	return err
+}
+
+func getVersion(ctx context.Context, zipWriter *zipWriter) error {
 	versions := buildVersions(ctx)
 
 	return addJSONToZip(zipWriter, "versions.json", versions)
 }
 
-func writeTelemetryData(zipWriter *zip.Writer, telemetryInfo *data.TelemetryData) error {
+func writeTelemetryData(zipWriter *zipWriter, telemetryInfo *data.TelemetryData) error {
 	if telemetryInfo == nil {
 		return errors.New("no telemetry data provided")
 	}
@@ -374,29 +442,58 @@ type centralDBDiagnosticData struct {
 	DatabaseConnectString string        `json:"DatabaseConnectString,omitempty"`
 }
 
-func getCentralDBData(ctx context.Context, zipWriter *zip.Writer) error {
+func getCentralDBData(ctx context.Context, zipWriter *zipWriter) error {
 	_, dbConfig, err := pgconfig.GetPostgresConfig()
 	if err != nil {
-		log.Warnf("Could not parse postgres config: %v", err)
+		log.Warnw("Could not parse postgres config", logging.Err(err))
 		return err
 	}
 
-	dbDiagnosticData := buildDBDiagnosticData(ctx, dbConfig, globaldb.GetPostgres())
+	db := globaldb.GetPostgres()
+	dbDiagnosticData := buildDBDiagnosticData(ctx, dbConfig, db)
+	if err := addJSONToZip(zipWriter, "central-db.json", dbDiagnosticData); err != nil {
+		return err
+	}
 
-	return addJSONToZip(zipWriter, "central-db.json", dbDiagnosticData)
+	statements := stats.GetPGStatStatements(ctx, db, pgStatStatementsMax)
+	if statements.Error != "" {
+		log.Errorw("error retrieving pg_stat_statements", logging.Err(errors.New(statements.Error)))
+	}
+	if err := addJSONToZip(zipWriter, "central-db-pg-stats.json", statements); err != nil {
+		return err
+	}
+
+	// Get the analyze stats
+	analyzeStats := stats.GetPGAnalyzeStats(ctx, db, pgStatStatementsMax)
+	if analyzeStats.Error != "" {
+		log.Errorw("error retrieving pg_stat_statements", logging.Err(errors.New(analyzeStats.Error)))
+	}
+	if err := addJSONToZip(zipWriter, "central-db-pg-analyze-stats.json", analyzeStats); err != nil {
+		return err
+	}
+
+	// Get the dead tuple stats
+	tuples := stats.GetPGTupleStats(ctx, db, pgStatStatementsMax)
+	if tuples.Error != "" {
+		log.Errorw("error retrieving pg_stat_user_tables", logging.Err(errors.New(tuples.Error)))
+	}
+	return addJSONToZip(zipWriter, "central-db-pg-tuples.json", tuples)
 }
 
-func (s *serviceImpl) getLogImbue(ctx context.Context, zipWriter *zip.Writer) error {
-	w, err := zipWriterWithCurrentTimestamp(zipWriter, "logimbue-data.json")
-	if err != nil {
-		return err
-	}
+func (s *serviceImpl) getLogImbue(ctx context.Context, zipWriter *zipWriter) error {
 	logs, err := s.store.GetAll(ctx)
 	if err != nil {
 		return err
 	}
-	err = writer.WriteLogs(w, logs)
-	return err
+
+	zipWriter.LockWrite()
+	defer zipWriter.UnlockWrite()
+	w, err := zipWriter.writerWithCurrentTimestampNoLock("logimbue-data.json")
+	if err != nil {
+		return err
+	}
+
+	return writer.WriteLogs(w, logs)
 }
 
 func (s *serviceImpl) getAuthProviders(_ context.Context) (interface{}, error) {
@@ -442,7 +539,8 @@ func (s *serviceImpl) getRoles(_ context.Context) (interface{}, error) {
 			Role: role,
 		}
 
-		if resolvedRole, err := s.roleDataStore.GetAndResolveRole(accessRolesCtx, role.Name); err == nil && resolvedRole != nil {
+		if resolvedRole, err := s.roleDataStore.GetAndResolveRole(accessRolesCtx,
+			role.Name); err == nil && resolvedRole != nil {
 			// Get better formatting of permission sets.
 			diagRole.PermissionSet = map[string]string{}
 			for permName, accessRight := range resolvedRole.GetPermissions() {
@@ -475,18 +573,20 @@ func (s *serviceImpl) getConfig(_ context.Context) (interface{}, error) {
 	return s.configDataStore.GetConfig(accessConfigCtx)
 }
 
-// DebugHandler is an HTTP handler that outputs debugging information
+// CustomRoutes returns route-handler pairs to be served on HTTP port.
 func (s *serviceImpl) CustomRoutes() []routes.CustomRoute {
 	customRoutes := []routes.CustomRoute{
 		{
 			Route:         "/debug/dump",
 			Authorizer:    user.With(permissions.View(resources.Administration)),
 			ServerHandler: http.HandlerFunc(s.getDebugDump),
+			Compression:   true,
 		},
 		{
 			Route:         "/api/extensions/diagnostics",
 			Authorizer:    user.With(permissions.View(resources.Administration)),
 			ServerHandler: http.HandlerFunc(s.getDiagnosticDump),
+			Compression:   true,
 		},
 		{
 			Route:         "/debug/versions.json",
@@ -499,122 +599,170 @@ func (s *serviceImpl) CustomRoutes() []routes.CustomRoute {
 }
 
 type debugDumpOptions struct {
-	logs logsMode
-	// telemetryMode specifies how to use sensor/central telemetry to gather diagnostics.
-	// 0 - don't collect any telemetry data
-	// 1 - collect telemetry data for central only
-	// 2 - collect telemetry data from sensors and central
-	telemetryMode     int
-	withCPUProfile    bool
-	withLogImbue      bool
-	withAccessControl bool
-	withNotifiers     bool
-	withCentral       bool
-	clusters          []string
-	since             time.Time
+	logs                   logsMode
+	telemetryMode          telemetryMode
+	withCPUProfile         bool
+	withLogImbue           bool
+	withAccessControl      bool
+	withNotifiers          bool
+	withCentral            bool
+	clusters               []string
+	since                  time.Time
+	withComplianceOperator bool
+	withDBOnly             bool
 }
 
-func (s *serviceImpl) writeZippedDebugDump(ctx context.Context, w http.ResponseWriter, filename string, opts debugDumpOptions) {
+func (s *serviceImpl) writeZippedDebugDump(ctx context.Context, w http.ResponseWriter, filename string,
+	opts debugDumpOptions) {
 	debugDumpCtx, cancel := context.WithTimeout(ctx, debugDumpHardTimeout)
 	defer cancel()
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 
-	zipWriter := zip.NewWriter(w)
+	zipWriter := newZipWriter(w)
+
+	// Defer closing the zip writer since we short-circuit in case of context cancellations.
+	defer func() {
+		if err := zipWriter.Close(); err != nil {
+			log.Errorw("Failed closing the ZIP writer", logging.Err(err))
+		}
+	}()
 
 	if err := getVersion(ctx, zipWriter); err != nil {
+		log.Errorw("Failed getting Central's version", logging.Err(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	diagBundleTasks := concPool.New().WithContext(debugDumpCtx)
 	if opts.withCentral {
-		if err := zipPrometheusMetrics(zipWriter, "metrics-1"); err != nil {
-			log.Error(err)
-		}
-
-		if err := getMemory(zipWriter); err != nil {
-			log.Error(err)
-		}
-
-		if err := getGoroutines(zipWriter); err != nil {
-			log.Error(err)
-		}
-
-		if err := getBlock(zipWriter); err != nil {
-			log.Error(err)
-		}
-
-		if err := getMutex(zipWriter); err != nil {
-			log.Error(err)
-		}
-
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return zipPrometheusMetrics(ctx, zipWriter,
+				"metrics-1")
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return getMemory(zipWriter)
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return getGoroutines(zipWriter)
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return getMutex(zipWriter)
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return getCentralDBData(ctx, zipWriter)
+		})
 		if opts.withCPUProfile {
-			if err := getCPU(debugDumpCtx, zipWriter, cpuProfileDuration); err != nil {
-				log.Error(err)
-			}
-
-			if err := zipPrometheusMetrics(zipWriter, "metrics-2"); err != nil {
-				log.Error(err)
-			}
-		}
-
-		if env.PostgresDatastoreEnabled.BooleanSetting() {
-			if err := getCentralDBData(ctx, zipWriter); err != nil {
-				log.Error(err)
-			}
+			diagBundleTasks.Go(func(ctx context.Context) error {
+				return getCPU(ctx, zipWriter, cpuProfileDuration)
+			})
+			diagBundleTasks.Go(func(ctx context.Context) error {
+				return zipPrometheusMetrics(ctx, zipWriter, "metrics-2")
+			})
 		}
 	}
 
+	if opts.withDBOnly && !opts.withCentral {
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return zipPrometheusMetrics(ctx, zipWriter,
+				"metrics-1")
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return getCentralDBData(ctx, zipWriter)
+		})
+		if opts.withCPUProfile {
+			diagBundleTasks.Go(func(ctx context.Context) error {
+				return getCPU(ctx, zipWriter, cpuProfileDuration)
+			})
+			diagBundleTasks.Go(func(ctx context.Context) error {
+				return zipPrometheusMetrics(ctx, zipWriter, "metrics-2")
+			})
+		}
+	}
+
+	var failureDuringDiagnostics bool
 	if opts.logs == fullK8sIntrospectionData {
-		if err := s.getK8sDiagnostics(debugDumpCtx, zipWriter, opts); err != nil {
-			log.Errorf("could not get K8s diagnostics: %+q", err)
-			opts.logs = localLogs // fallback to local logs
-		}
-		if err := s.pullSensorMetrics(debugDumpCtx, zipWriter, opts); err != nil {
-			log.Errorf("could not get sensor metrics: %+q", err)
-		}
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			// In case we fail to fetch K8S diagnostics, which also includes the collection of logs for Central,
+			// ensure we later on attempt to collect local logs as a safety net to at the very least have the
+			// Central logs contained in the diagnostic bundle.
+			if err := s.getK8sDiagnostics(ctx, zipWriter, opts); err != nil {
+				failureDuringDiagnostics = true
+				return err
+			}
+			return nil
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			if err := s.pullSensorMetrics(ctx, zipWriter, opts); err != nil {
+				return err
+			}
+			return nil
+		})
 	}
-
-	if s.telemetryGatherer != nil && opts.telemetryMode > 0 {
-		telemetryData := s.telemetryGatherer.Gather(debugDumpCtx, opts.telemetryMode >= 2, opts.withCentral)
-		if err := writeTelemetryData(zipWriter, telemetryData); err != nil {
-			log.Error(err)
-		}
+	if s.telemetryGatherer != nil && opts.telemetryMode > noTelemetry {
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			telemetryData := s.telemetryGatherer.Gather(ctx, opts.telemetryMode >= telemetryCentralAndSensors,
+				opts.withCentral)
+			return writeTelemetryData(zipWriter, telemetryData)
+		})
 	}
-
 	if opts.withAccessControl {
-		fetchAndAddJSONToZip(debugDumpCtx, zipWriter, "auth-providers.json", s.getAuthProviders)
-		fetchAndAddJSONToZip(debugDumpCtx, zipWriter, "auth-provider-groups.json", s.getGroups)
-		fetchAndAddJSONToZip(debugDumpCtx, zipWriter, "access-control-roles.json", s.getRoles)
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			fetchAndAddJSONToZip(ctx, zipWriter, "auth-providers.json", s.getAuthProviders)
+			return nil
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			fetchAndAddJSONToZip(ctx, zipWriter, "auth-provider-groups.json", s.getGroups)
+			return nil
+		})
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			fetchAndAddJSONToZip(ctx, zipWriter, "access-control-roles.json", s.getRoles)
+			return nil
+		})
 	}
-
 	if opts.withNotifiers {
-		fetchAndAddJSONToZip(debugDumpCtx, zipWriter, "notifiers.json", s.getNotifiers)
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			fetchAndAddJSONToZip(ctx, zipWriter, "notifiers.json", s.getNotifiers)
+			return nil
+		})
+	}
+	diagBundleTasks.Go(func(ctx context.Context) error {
+		fetchAndAddJSONToZip(ctx, zipWriter, "system-configuration.json", s.getConfig)
+		return nil
+	})
+	if opts.withCentral && opts.withLogImbue {
+		diagBundleTasks.Go(func(ctx context.Context) error {
+			return s.getLogImbue(ctx, zipWriter)
+		})
 	}
 
-	fetchAndAddJSONToZip(debugDumpCtx, zipWriter, "system-configuration.json", s.getConfig)
+	// Wait for the "all the rest" part of the tasks to construct the diagnostic bundle.
+	// This also respects context cancellations and returns any potential errors that occurred.
+	err := diagBundleTasks.Wait()
+	if err != nil {
+		// Short-circuit in case the context has been cancelled.
+		if concurrency.IsDone(debugDumpCtx) {
+			log.Warn("The context for collecting diagnostic bundle data has been cancelled")
+			return
+		}
+		log.Errorw("Failures during gathering diagnostic bundle contents", logging.Err(err))
+	}
+	log.Info("Finished writing data to the diagnostic bundle")
 
 	// Get logs last to also catch logs made during creation of diag bundle.
-	if opts.withCentral && opts.logs == localLogs {
-		if err := getLogs(zipWriter); err != nil {
+	if (opts.withCentral || opts.withDBOnly) && (opts.logs == localLogs || failureDuringDiagnostics) {
+		if err := logging.ForEachRotation(logging.LoggingPath, func(logFileName string) error {
+			return zipWriter.addFile(filepath.Base(logFileName), logFileName)
+		}); err != nil {
 			log.Error(err)
 		}
-	}
-
-	if opts.withCentral && opts.withLogImbue {
-		if err := s.getLogImbue(debugDumpCtx, zipWriter); err != nil {
-			log.Error(err)
-		}
-	}
-
-	if err := zipWriter.Close(); err != nil {
-		log.Error(err)
 	}
 }
 
 func (s *serviceImpl) getVersionsJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		httputil.WriteErrorf(w, http.StatusMethodNotAllowed, "invalid method %q, only GET requests are allowed", r.Method)
+		httputil.WriteErrorf(w, http.StatusMethodNotAllowed, "invalid method %q, only GET requests are allowed",
+			r.Method)
 		return
 	}
 
@@ -622,7 +770,8 @@ func (s *serviceImpl) getVersionsJSON(w http.ResponseWriter, r *http.Request) {
 
 	versionsJSON, err := json.Marshal(&versions)
 	if err != nil {
-		httputil.WriteErrorf(w, http.StatusInternalServerError, "could not marshal version info to JSON: %v", err)
+		httputil.WriteErrorf(w, http.StatusInternalServerError, "could not marshal version info to JSON: %v",
+			err)
 		return
 	}
 
@@ -637,12 +786,12 @@ func (s *serviceImpl) getVersionsJSON(w http.ResponseWriter, r *http.Request) {
 func (s *serviceImpl) getDebugDump(w http.ResponseWriter, r *http.Request) {
 	opts := debugDumpOptions{
 		logs:              localLogs,
+		telemetryMode:     noTelemetry,
 		withCPUProfile:    true,
 		withLogImbue:      true,
 		withAccessControl: true,
 		withNotifiers:     true,
 		withCentral:       env.EnableCentralDiagnostics.BooleanSetting(),
-		telemetryMode:     0,
 	}
 
 	query := r.URL.Query()
@@ -663,7 +812,8 @@ func (s *serviceImpl) getDebugDump(w http.ResponseWriter, r *http.Request) {
 	telemetryModeStr := query.Get("telemetry")
 	if telemetryModeStr != "" {
 		var err error
-		opts.telemetryMode, err = strconv.Atoi(telemetryModeStr)
+		telemetryModeInt, err := strconv.Atoi(telemetryModeStr)
+		opts.telemetryMode = telemetryMode(telemetryModeInt)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, "invalid telemetry mode value: %q\n", telemetryModeStr)
@@ -678,15 +828,19 @@ func (s *serviceImpl) getDebugDump(w http.ResponseWriter, r *http.Request) {
 // getDiagnosticDump aims to provide a snapshot of some state information for
 // triaging. The size and download times of this dump shall stay reasonable.
 func (s *serviceImpl) getDiagnosticDump(w http.ResponseWriter, r *http.Request) {
+	s.getDiagnosticDumpWithCentral(w, r, env.EnableCentralDiagnostics.BooleanSetting())
+}
+
+func (s *serviceImpl) getDiagnosticDumpWithCentral(w http.ResponseWriter, r *http.Request, withCentral bool) {
 	filename := time.Now().Format("stackrox_diagnostic_2006_01_02_15_04_05.zip")
 
 	opts := debugDumpOptions{
 		logs:              fullK8sIntrospectionData,
-		telemetryMode:     2,
+		telemetryMode:     telemetryCentralAndSensors,
 		withCPUProfile:    false,
 		withLogImbue:      true,
 		withAccessControl: true,
-		withCentral:       env.EnableCentralDiagnostics.BooleanSetting(),
+		withCentral:       withCentral,
 		withNotifiers:     true,
 	}
 
@@ -696,6 +850,7 @@ func (s *serviceImpl) getDiagnosticDump(w http.ResponseWriter, r *http.Request) 
 		fmt.Fprint(w, err.Error())
 		return
 	}
+	log.Infof("Started writing diagnostic bundle %q with options: %+v", filename, opts)
 
 	s.writeZippedDebugDump(r.Context(), w, filename, opts)
 }
@@ -712,12 +867,29 @@ func getOptionalQueryParams(opts *debugDumpOptions, u *url.URL) error {
 	if timeSince != "" {
 		t, err := time.Parse(layout, timeSince)
 		if err != nil {
-			return errors.Wrapf(err, "invalid timestamp value: %q\n", t)
+			log.Error(err)
+			return errors.Errorf("invalid time since value: %q\n", url.QueryEscape(timeSince))
 		}
 		opts.since = t
 	} else {
 		opts.since = time.Now().Add(-logWindow)
 	}
+
+	if values.Get("compliance-operator") == "true" {
+		opts.withComplianceOperator = true
+	}
+
+	if values.Get("database-only") == "true" {
+		opts.logs = localLogs
+		opts.telemetryMode = noTelemetry
+		opts.withCPUProfile = false
+		opts.withLogImbue = false
+		opts.withAccessControl = false
+		opts.withCentral = false
+		opts.withNotifiers = false
+		opts.withDBOnly = true
+	}
+
 	return nil
 }
 
@@ -727,10 +899,8 @@ func buildVersions(ctx context.Context) version.Versions {
 		versions = version.GetAllVersionsUnified()
 	}
 	// Add the database version if Postgres
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		versions.Database = "PostgresDB"
-		versions.DatabaseServerVersion = globaldb.GetPostgresVersion(ctx, globaldb.GetPostgres())
-	}
+	versions.Database = "PostgresDB"
+	versions.DatabaseServerVersion = globaldb.GetPostgresVersion(ctx, globaldb.GetPostgres())
 
 	return versions
 }

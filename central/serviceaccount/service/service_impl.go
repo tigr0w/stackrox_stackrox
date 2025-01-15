@@ -3,14 +3,13 @@ package service
 import (
 	"context"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	deploymentStore "github.com/stackrox/rox/central/deployment/datastore"
 	namespaceStore "github.com/stackrox/rox/central/namespace/datastore"
 	roleDatastore "github.com/stackrox/rox/central/rbac/k8srole/datastore"
 	bindingDatastore "github.com/stackrox/rox/central/rbac/k8srolebinding/datastore"
 	"github.com/stackrox/rox/central/rbac/utils"
-	"github.com/stackrox/rox/central/role/resources"
 	saDatastore "github.com/stackrox/rox/central/serviceaccount/datastore"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
@@ -20,6 +19,7 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/k8srbac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"google.golang.org/grpc"
 )

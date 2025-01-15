@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ComplianceDomainsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE compliance_domains CASCADE")
 	s.T().Log("compliance_domains", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ComplianceDomainsStoreSuite) TestStore() {
 	foundComplianceDomain, exists, err = store.Get(ctx, complianceDomain.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(complianceDomain, foundComplianceDomain)
+	protoassert.Equal(s.T(), complianceDomain, foundComplianceDomain)
 
-	complianceDomainCount, err := store.Count(ctx)
+	complianceDomainCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, complianceDomainCount)
-	complianceDomainCount, err = store.Count(withNoAccessCtx)
+	complianceDomainCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(complianceDomainCount)
 
@@ -75,11 +78,6 @@ func (s *ComplianceDomainsStoreSuite) TestStore() {
 	s.True(complianceDomainExists)
 	s.NoError(store.Upsert(ctx, complianceDomain))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, complianceDomain), sac.ErrResourceAccessDenied)
-
-	foundComplianceDomain, exists, err = store.Get(ctx, complianceDomain.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(complianceDomain, foundComplianceDomain)
 
 	s.NoError(store.Delete(ctx, complianceDomain.GetId()))
 	foundComplianceDomain, exists, err = store.Get(ctx, complianceDomain.GetId())
@@ -99,13 +97,13 @@ func (s *ComplianceDomainsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, complianceDomains))
 
-	complianceDomainCount, err = store.Count(ctx)
+	complianceDomainCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, complianceDomainCount)
 
 	s.NoError(store.DeleteMany(ctx, complianceDomainIDs))
 
-	complianceDomainCount, err = store.Count(ctx)
+	complianceDomainCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, complianceDomainCount)
 }

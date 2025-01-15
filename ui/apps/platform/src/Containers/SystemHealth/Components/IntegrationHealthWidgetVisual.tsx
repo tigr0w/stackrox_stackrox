@@ -4,7 +4,6 @@ import {
     Card,
     CardBody,
     CardHeader,
-    CardHeaderMain,
     CardTitle,
     Flex,
     FlexItem,
@@ -35,37 +34,44 @@ const IntegrationHealthWidget = ({
     const icon = isFetchingInitialRequest
         ? SpinnerIcon
         : errorMessageFetching
-        ? ErrorIcon
-        : healthIconMap[integrations.length === 0 ? 'success' : 'danger'];
+          ? ErrorIcon
+          : healthIconMap[integrations.length === 0 ? 'success' : 'danger'];
     /* eslint-enable no-nested-ternary */
     const hasCount = !isFetchingInitialRequest && !errorMessageFetching;
 
     return (
         <Card isFullHeight isCompact>
             <CardHeader>
-                <CardHeaderMain>
-                    <Flex alignItems={{ default: 'alignItemsCenter' }}>
-                        <FlexItem>{icon}</FlexItem>
-                        <FlexItem>
-                            <CardTitle component="h2">{integrationText}</CardTitle>
-                        </FlexItem>
-                        {hasCount && (
+                {
+                    <>
+                        <Flex alignItems={{ default: 'alignItemsCenter' }}>
+                            <FlexItem>{icon}</FlexItem>
                             <FlexItem>
-                                {integrations.length === 0
-                                    ? 'no errors'
-                                    : `${integrations.length} ${pluralize(
-                                          'error',
-                                          integrations.length
-                                      )}`}
+                                <CardTitle component="h2">{integrationText}</CardTitle>
                             </FlexItem>
-                        )}
-                    </Flex>
-                </CardHeaderMain>
+                            {hasCount && (
+                                <FlexItem>
+                                    {integrations.length === 0
+                                        ? 'no errors'
+                                        : `${integrations.length} ${pluralize(
+                                              'error',
+                                              integrations.length
+                                          )}`}
+                                </FlexItem>
+                            )}
+                        </Flex>
+                    </>
+                }
             </CardHeader>
             {(errorMessageFetching || integrations.length !== 0) && (
                 <CardBody>
                     {errorMessageFetching ? (
-                        <Alert isInline variant="warning" title={errorMessageFetching} />
+                        <Alert
+                            isInline
+                            variant="warning"
+                            title={errorMessageFetching}
+                            component="p"
+                        />
                     ) : (
                         <IntegrationsHealth integrations={integrations} />
                     )}

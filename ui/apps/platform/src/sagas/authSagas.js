@@ -63,7 +63,7 @@ function* evaluateUserAccess() {
             const result = yield call(AuthService.getAuthStatus);
             // call didn't fail, meaning that the token is fine (should we check the returned result?)
             yield put(actions.login(result));
-        } catch (e) {
+        } catch {
             // call failed, assuming that the token is invalid
             yield put(actions.logout());
         }
@@ -191,13 +191,14 @@ function* handleTestLoginAuthResponse(location, type, result) {
         let user = {};
         try {
             user = JSON.parse(Base64.decode(result.user)); // built-in atob not URL or UTF safe
-        } catch (error) {
+        } catch {
             // not base64 encoded
             user = result?.user;
         }
         parsedResult.userID = user.userId || null;
         parsedResult.userAttributes = user.userAttributes || null;
         parsedResult.roles = user.userInfo?.roles || [];
+        parsedResult.idpToken = user.idpToken || null;
     }
 
     // save the test response for the results page to display

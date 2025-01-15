@@ -4,16 +4,14 @@ package expiration
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/types"
 	apiTokenDataStore "github.com/stackrox/rox/central/apitoken/datastore"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
-	"github.com/stackrox/rox/pkg/protoconv"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
@@ -35,9 +33,6 @@ type apiTokenExpirationNotifierTestSuite struct {
 }
 
 func (s *apiTokenExpirationNotifierTestSuite) SetupSuite() {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.T().Skip("Notification of expired API tokens is only supported in Postgres mode.")
-	}
 	s.ctx = sac.WithAllAccess(context.Background())
 }
 
@@ -51,31 +46,25 @@ func (s *apiTokenExpirationNotifierTestSuite) TearDownTest() {
 	s.testpostgres.Teardown(s.T())
 }
 
-func truncateToMicroSeconds(timestamp *types.Timestamp) *types.Timestamp {
-	outputTs := timestamp.Clone()
-	outputTs.Nanos = 1000 * (outputTs.Nanos / 1000)
-	return outputTs
-}
-
 func generateToken(now *time.Time,
 	expiration *time.Time,
 	revoked bool) *storage.TokenMetadata {
-	var protoNow *types.Timestamp
-	var protoExpiration *types.Timestamp
+	var truncatedNow *time.Time
+	var truncatedExpiration *time.Time
 	if now != nil {
-		protoNow = protoconv.ConvertTimeToTimestamp(*now)
-		protoNow = truncateToMicroSeconds(protoNow)
+		rawTruncatedNow := now.Truncate(time.Microsecond)
+		truncatedNow = &rawTruncatedNow
 	}
 	if expiration != nil {
-		protoExpiration = protoconv.ConvertTimeToTimestamp(*expiration)
-		protoExpiration = truncateToMicroSeconds(protoExpiration)
+		rawTruncatedExpiration := expiration.Truncate(time.Microsecond)
+		truncatedExpiration = &rawTruncatedExpiration
 	}
 	return &storage.TokenMetadata{
 		Id:         uuid.NewV4().String(),
 		Name:       "Generated Test Token",
 		Roles:      []string{"Admin"},
-		IssuedAt:   protoNow,
-		Expiration: protoExpiration,
+		IssuedAt:   protocompat.ConvertTimeToTimestampOrNil(truncatedNow),
+		Expiration: protocompat.ConvertTimeToTimestampOrNil(truncatedExpiration),
 		Revoked:    revoked,
 	}
 }
@@ -91,7 +80,7 @@ func (s *apiTokenExpirationNotifierTestSuite) TestSelectTokenAboutToExpire() {
 	s.NoError(err)
 	expectedResult := token
 	expectedResults := []*storage.TokenMetadata{expectedResult}
-	s.ElementsMatch(expectedResults, fetchedTokens)
+	protoassert.ElementsMatch(s.T(), expectedResults, fetchedTokens)
 }
 
 func (s *apiTokenExpirationNotifierTestSuite) TestDontSelectTokenNotAboutToExpire() {
@@ -103,8 +92,7 @@ func (s *apiTokenExpirationNotifierTestSuite) TestDontSelectTokenNotAboutToExpir
 
 	fetchedTokens, err := s.notifier.listItemsToNotify(now, expiresUntil)
 	s.NoError(err)
-	expectedResults := []*storage.TokenMetadata{}
-	s.ElementsMatch(expectedResults, fetchedTokens)
+	s.Empty(fetchedTokens)
 }
 
 func (s *apiTokenExpirationNotifierTestSuite) TestDontSelectRevokedToken() {
@@ -116,8 +104,7 @@ func (s *apiTokenExpirationNotifierTestSuite) TestDontSelectRevokedToken() {
 
 	fetchedTokens, err := s.notifier.listItemsToNotify(now, expiresUntil)
 	s.NoError(err)
-	expectedResults := []*storage.TokenMetadata{}
-	s.ElementsMatch(expectedResults, fetchedTokens)
+	s.Empty(fetchedTokens)
 }
 
 func (s *apiTokenExpirationNotifierTestSuite) TestDontSelectExpiredToken() {
@@ -129,8 +116,7 @@ func (s *apiTokenExpirationNotifierTestSuite) TestDontSelectExpiredToken() {
 
 	fetchedTokens, err := s.notifier.listItemsToNotify(now, expiresUntil)
 	s.NoError(err)
-	expectedResults := []*storage.TokenMetadata{}
-	s.ElementsMatch(expectedResults, fetchedTokens)
+	s.Empty(fetchedTokens)
 }
 
 func (s *apiTokenExpirationNotifierTestSuite) TestLogGeneration() {
@@ -142,17 +128,17 @@ func (s *apiTokenExpirationNotifierTestSuite) TestLogGeneration() {
 	expiration1 := now.Add(2*time.Hour - 10*time.Minute)
 	token1 := generateToken(&generated1, &expiration1, false)
 	log1 := generateExpiringTokenLog(token1, now, sliceDuration, sliceName)
-	s.Equal(fmt.Sprintf("API Token %s (ID %s) will expire in less than 2 hours.", token1.GetName(), token1.GetId()), log1)
+	s.Equal("API Token will expire in less than 2 hours", log1)
 
 	generated2 := now.Add(-(4*time.Hour + 10*time.Minute))
 	expiration2 := now.Add(1*time.Hour - 10*time.Minute)
 	token2 := generateToken(&generated2, &expiration2, false)
-	log2 := generateExpiringTokenLog(token1, now, sliceDuration, sliceName)
-	s.Equal(fmt.Sprintf("API Token %s (ID %s) will expire in less than 1 hour.", token2.GetName(), token2.GetId()), log2)
+	log2 := generateExpiringTokenLog(token2, now, sliceDuration, sliceName)
+	s.Equal("API Token will expire in less than 1 hour", log2)
 
 	generated3 := now.Add(-2 * time.Hour)
 	expiration3 := now.Add(3 * time.Hour)
 	token3 := generateToken(&generated3, &expiration3, false)
-	log3 := generateExpiringTokenLog(token1, now, sliceDuration, sliceName)
-	s.Equal(fmt.Sprintf("API Token %s (ID %s) will expire in less than 3 hours.", token3.GetName(), token3.GetId()), log3)
+	log3 := generateExpiringTokenLog(token3, now, sliceDuration, sliceName)
+	s.Equal("API Token will expire in less than 3 hours", log3)
 }

@@ -5,24 +5,35 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
+	administrationEventHandler "github.com/stackrox/rox/central/administration/events/handler"
+	administrationEventService "github.com/stackrox/rox/central/administration/events/service"
+	administrationUsageCSV "github.com/stackrox/rox/central/administration/usage/csv"
+	administrationUsageDataStore "github.com/stackrox/rox/central/administration/usage/datastore/securedunits"
+	administrationUsageInjector "github.com/stackrox/rox/central/administration/usage/injector"
+	administrationUsageService "github.com/stackrox/rox/central/administration/usage/service"
 	alertDatastore "github.com/stackrox/rox/central/alert/datastore"
 	alertService "github.com/stackrox/rox/central/alert/service"
 	apiTokenExpiration "github.com/stackrox/rox/central/apitoken/expiration"
 	apiTokenService "github.com/stackrox/rox/central/apitoken/service"
 	"github.com/stackrox/rox/central/audit"
+	authDS "github.com/stackrox/rox/central/auth/datastore"
 	authService "github.com/stackrox/rox/central/auth/service"
 	"github.com/stackrox/rox/central/auth/userpass"
-	authProviderDS "github.com/stackrox/rox/central/authprovider/datastore"
+	authProviderRegistry "github.com/stackrox/rox/central/authprovider/registry"
 	authProviderSvc "github.com/stackrox/rox/central/authprovider/service"
 	authProviderTelemetry "github.com/stackrox/rox/central/authprovider/telemetry"
 	centralHealthService "github.com/stackrox/rox/central/centralhealth/service"
 	"github.com/stackrox/rox/central/certgen"
+	certHandler "github.com/stackrox/rox/central/certs/handlers"
 	"github.com/stackrox/rox/central/cli"
+	"github.com/stackrox/rox/central/cloudproviders/gcp"
+	cloudSourcesDS "github.com/stackrox/rox/central/cloudsources/datastore"
+	cloudSourcesManager "github.com/stackrox/rox/central/cloudsources/manager"
+	cloudSourcesService "github.com/stackrox/rox/central/cloudsources/service"
 	clusterDataStore "github.com/stackrox/rox/central/cluster/datastore"
 	clusterService "github.com/stackrox/rox/central/cluster/service"
 	"github.com/stackrox/rox/central/clusterinit/backend"
@@ -33,6 +44,15 @@ import (
 	complianceHandlers "github.com/stackrox/rox/central/compliance/handlers"
 	complianceManagerService "github.com/stackrox/rox/central/compliance/manager/service"
 	complianceService "github.com/stackrox/rox/central/compliance/service"
+	v2ComplianceBenchmark "github.com/stackrox/rox/central/complianceoperator/v2/benchmarks/datastore"
+	v2ComplianceResults "github.com/stackrox/rox/central/complianceoperator/v2/checkresults/service"
+	v2ComplianceStats "github.com/stackrox/rox/central/complianceoperator/v2/checkresults/stats/service"
+	v2ComplianceMgr "github.com/stackrox/rox/central/complianceoperator/v2/compliancemanager"
+	complianceOperatorIntegrationService "github.com/stackrox/rox/central/complianceoperator/v2/integration/service"
+	v2ComplianceProfiles "github.com/stackrox/rox/central/complianceoperator/v2/profiles/service"
+	complianceReportManager "github.com/stackrox/rox/central/complianceoperator/v2/report/manager"
+	v2ComplianceRules "github.com/stackrox/rox/central/complianceoperator/v2/rules/service"
+	complianceScanSettings "github.com/stackrox/rox/central/complianceoperator/v2/scanconfigurations/service"
 	configDS "github.com/stackrox/rox/central/config/datastore"
 	configService "github.com/stackrox/rox/central/config/service"
 	credentialExpiryService "github.com/stackrox/rox/central/credentialexpiry/service"
@@ -44,7 +64,6 @@ import (
 	imageCVEService "github.com/stackrox/rox/central/cve/image/service"
 	nodeCveCsv "github.com/stackrox/rox/central/cve/node/csv"
 	nodeCVEService "github.com/stackrox/rox/central/cve/node/service"
-	cveService "github.com/stackrox/rox/central/cve/service"
 	"github.com/stackrox/rox/central/cve/suppress"
 	debugService "github.com/stackrox/rox/central/debug/service"
 	"github.com/stackrox/rox/central/declarativeconfig"
@@ -55,9 +74,11 @@ import (
 	deploymentService "github.com/stackrox/rox/central/deployment/service"
 	detectionService "github.com/stackrox/rox/central/detection/service"
 	developmentService "github.com/stackrox/rox/central/development/service"
+	discoveredClustersService "github.com/stackrox/rox/central/discoveredclusters/service"
 	"github.com/stackrox/rox/central/docs"
 	"github.com/stackrox/rox/central/endpoints"
 	"github.com/stackrox/rox/central/enrichment"
+	externalbackupsDS "github.com/stackrox/rox/central/externalbackups/datastore"
 	_ "github.com/stackrox/rox/central/externalbackups/plugins/all" // Import all of the external backup plugins
 	backupService "github.com/stackrox/rox/central/externalbackups/service"
 	featureFlagService "github.com/stackrox/rox/central/featureflags/service"
@@ -69,18 +90,22 @@ import (
 	groupDataStore "github.com/stackrox/rox/central/group/datastore"
 	groupService "github.com/stackrox/rox/central/group/service"
 	"github.com/stackrox/rox/central/grpc/metrics"
+	grpcPreferences "github.com/stackrox/rox/central/grpcpreference/service"
 	"github.com/stackrox/rox/central/helmcharts"
 	imageDatastore "github.com/stackrox/rox/central/image/datastore"
 	imageService "github.com/stackrox/rox/central/image/service"
+	"github.com/stackrox/rox/central/imageintegration"
 	iiDatastore "github.com/stackrox/rox/central/imageintegration/datastore"
+	imageintegrationsDS "github.com/stackrox/rox/central/imageintegration/datastore"
 	iiService "github.com/stackrox/rox/central/imageintegration/service"
 	iiStore "github.com/stackrox/rox/central/imageintegration/store"
+	installationStore "github.com/stackrox/rox/central/installation/store"
 	integrationHealthService "github.com/stackrox/rox/central/integrationhealth/service"
+	"github.com/stackrox/rox/central/internal"
 	"github.com/stackrox/rox/central/jwt"
-	licenseService "github.com/stackrox/rox/central/license/service"
 	logimbueHandler "github.com/stackrox/rox/central/logimbue/handler"
-	logimbueStore "github.com/stackrox/rox/central/logimbue/store"
 	metadataService "github.com/stackrox/rox/central/metadata/service"
+	"github.com/stackrox/rox/central/metrics/telemetry"
 	mitreService "github.com/stackrox/rox/central/mitre/service"
 	namespaceService "github.com/stackrox/rox/central/namespace/service"
 	networkBaselineDataStore "github.com/stackrox/rox/central/networkbaseline/datastore"
@@ -94,10 +119,11 @@ import (
 	"github.com/stackrox/rox/central/notifier/processor"
 	notifierService "github.com/stackrox/rox/central/notifier/service"
 	_ "github.com/stackrox/rox/central/notifiers/all" // These imports are required to register things from the respective packages.
-	"github.com/stackrox/rox/central/option"
 	pingService "github.com/stackrox/rox/central/ping/service"
+	platformReprocessor "github.com/stackrox/rox/central/platform/reprocessor"
 	podService "github.com/stackrox/rox/central/pod/service"
 	policyDataStore "github.com/stackrox/rox/central/policy/datastore"
+	policyHandler "github.com/stackrox/rox/central/policy/handlers"
 	policyService "github.com/stackrox/rox/central/policy/service"
 	policyCategoryService "github.com/stackrox/rox/central/policycategory/service"
 	probeUploadService "github.com/stackrox/rox/central/probeupload/service"
@@ -107,16 +133,14 @@ import (
 	processListeningOnPorts "github.com/stackrox/rox/central/processlisteningonport/service"
 	"github.com/stackrox/rox/central/pruning"
 	rbacService "github.com/stackrox/rox/central/rbac/service"
-	reportConfigurationService "github.com/stackrox/rox/central/reportconfigurations/service"
-	reportConfigurationServiceV2 "github.com/stackrox/rox/central/reportconfigurations/service/v2"
-	vulnReportScheduleManager "github.com/stackrox/rox/central/reports/manager"
-	reportService "github.com/stackrox/rox/central/reports/service"
+	vulnReportV2Scheduler "github.com/stackrox/rox/central/reports/scheduler/v2"
+	reportServiceV2 "github.com/stackrox/rox/central/reports/service/v2"
+	v2Service "github.com/stackrox/rox/central/reports/service/v2"
 	"github.com/stackrox/rox/central/reprocessor"
 	collectionService "github.com/stackrox/rox/central/resourcecollection/service"
 	"github.com/stackrox/rox/central/risk/handlers/timeline"
 	roleDataStore "github.com/stackrox/rox/central/role/datastore"
-	"github.com/stackrox/rox/central/role/mapper"
-	"github.com/stackrox/rox/central/role/resources"
+	"github.com/stackrox/rox/central/role/sachelper"
 	roleService "github.com/stackrox/rox/central/role/service"
 	centralSAC "github.com/stackrox/rox/central/sac"
 	"github.com/stackrox/rox/central/scanner"
@@ -137,16 +161,18 @@ import (
 	summaryService "github.com/stackrox/rox/central/summary/service"
 	"github.com/stackrox/rox/central/systeminfo/listener"
 	"github.com/stackrox/rox/central/telemetry/centralclient"
-	"github.com/stackrox/rox/central/telemetry/gatherers"
 	telemetryService "github.com/stackrox/rox/central/telemetry/service"
 	"github.com/stackrox/rox/central/tlsconfig"
+	"github.com/stackrox/rox/central/trace"
 	"github.com/stackrox/rox/central/ui"
 	userService "github.com/stackrox/rox/central/user/service"
 	"github.com/stackrox/rox/central/version"
 	vStore "github.com/stackrox/rox/central/version/store"
 	versionUtils "github.com/stackrox/rox/central/version/utils"
-	vulnRequestManager "github.com/stackrox/rox/central/vulnerabilityrequest/manager/requestmgr"
-	vulnRequestService "github.com/stackrox/rox/central/vulnerabilityrequest/service"
+	vulnMgmtService "github.com/stackrox/rox/central/vulnmgmt/service"
+	vulnRequestManager "github.com/stackrox/rox/central/vulnmgmt/vulnerabilityrequest/manager/requestmgr"
+	vulnRequestService "github.com/stackrox/rox/central/vulnmgmt/vulnerabilityrequest/service"
+	vulnRequestServiceV2 "github.com/stackrox/rox/central/vulnmgmt/vulnerabilityrequest/service/v2"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/authproviders"
 	"github.com/stackrox/rox/pkg/auth/authproviders/iap"
@@ -163,6 +189,7 @@ import (
 	"github.com/stackrox/rox/pkg/devmode"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/features"
+	featuresTelemetry "github.com/stackrox/rox/pkg/features/telemetry"
 	pkgGRPC "github.com/stackrox/rox/pkg/grpc"
 	"github.com/stackrox/rox/pkg/grpc/authn"
 	"github.com/stackrox/rox/pkg/grpc/authn/service"
@@ -171,14 +198,16 @@ import (
 	authnUserpki "github.com/stackrox/rox/pkg/grpc/authn/userpki"
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/allow"
+	"github.com/stackrox/rox/pkg/grpc/authz/idcheck"
 	"github.com/stackrox/rox/pkg/grpc/authz/or"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/grpc/errors"
+	"github.com/stackrox/rox/pkg/grpc/ratelimit"
 	"github.com/stackrox/rox/pkg/grpc/routes"
-	"github.com/stackrox/rox/pkg/httputil"
 	"github.com/stackrox/rox/pkg/httputil/proxy"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/memlimit"
 	pkgMetrics "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/migrations"
 	"github.com/stackrox/rox/pkg/osutils"
@@ -187,6 +216,7 @@ import (
 	"github.com/stackrox/rox/pkg/premain"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/sac/observe"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
 	pkgVersion "github.com/stackrox/rox/pkg/version"
@@ -211,10 +241,6 @@ var (
 )
 
 const (
-	ssoURLPathPrefix = "/sso/"
-	//#nosec G101 -- This is a false positive
-	tokenRedirectURLPath = "/auth/response/generic"
-
 	grpcServerWatchdogTimeout = 20 * time.Second
 
 	maxServiceCertTokenLeeway = 1 * time.Minute
@@ -227,6 +253,8 @@ func init() {
 	if !proxy.UseWithDefaultTransport() {
 		log.Warn("Failed to use proxy transport with default HTTP transport. Some proxy features may not work.")
 	}
+
+	memlimit.SetMemoryLimit()
 }
 
 func runSafeMode() {
@@ -241,6 +269,8 @@ func runSafeMode() {
 }
 
 func main() {
+	defer utils.IgnoreError(log.InnerLogger.Sync)
+
 	premain.StartMain()
 
 	conf := config.GetConfig()
@@ -260,21 +290,10 @@ func main() {
 	devmode.StartOnDevBuilds("central")
 
 	log.Infof("Running StackRox Version: %s", pkgVersion.GetMainVersion())
-	log.Warn("The following permission resources have been replaced:\n" +
-		"	Access replaces AuthProvider, Group, Licenses, and User\n" +
-		"	Administration replaces AllComments, Config, DebugLogs, NetworkGraphConfig, ProbeUpload, ScannerBundle, ScannerDefinitions, SensorUpgradeConfig, and ServiceIdentity\n" +
-		"	Cluster also covers ClusterCVE\n" +
-		"	Compliance replaces ComplianceRuns\n" +
-		"	DeploymentExtension replaces Indicator, NetworkBaseline, ProcessWhitelist, and Risk\n" +
-		"	Integration replaces APIToken, BackupPlugins, ImageIntegration, Notifier, and SignatureIntegration\n" +
-		"	Image now also covers ImageComponent\n" +
-		"The following permission resources will be replaced in the upcoming versions:\n" +
-		"	Access will replace Role\n" +
-		"	WorkflowAdministration will replace Policy and VulnerabilityReports.")
 	ensureDB(ctx)
 
-	// Need to remove the backup clone and set the current version
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
+	if !pgconfig.IsExternalDatabase() {
+		// Need to remove the backup clone and set the current version
 		sourceMap, config, err := pgconfig.GetPostgresConfig()
 		if err != nil {
 			log.Errorf("Unable to get Postgres DB config: %v", err)
@@ -284,34 +303,53 @@ func main() {
 		if err != nil {
 			log.Errorf("Failed to remove backup DB: %v", err)
 		}
-		versionUtils.SetCurrentVersionPostgres(globaldb.GetPostgres())
-	} else {
-		// Update last associated software version on DBs.
-		migrations.SetCurrent(option.CentralOptions.DBPathBase)
 	}
+	versionUtils.SetCurrentVersionPostgres(globaldb.GetPostgres())
 
-	// Now that we verified that the DB can be loaded, remove the .backup directory
-	if err := migrations.SafeRemoveDBWithSymbolicLink(filepath.Join(migrations.DBMountPath(), migrations.GetBackupClone())); err != nil {
-		log.Fatalf("Failed to remove backup DB: %v", err)
-	}
-
+	features.LogFeatureFlags()
+	// Register telemetry prometheus metrics.
+	telemetry.Singleton().Start()
 	// Start the prometheus metrics server
-	pkgMetrics.NewDefaultHTTPServer(pkgMetrics.CentralSubsystem).RunForever()
+	pkgMetrics.NewServer(pkgMetrics.CentralSubsystem, pkgMetrics.NewTLSConfigurerFromEnv()).RunForever()
 	pkgMetrics.GatherThrottleMetricsForever(pkgMetrics.CentralSubsystem.String())
+
+	if env.ManagedCentral.BooleanSetting() {
+		clusterInternalServer := internal.NewHTTPServer(metrics.HTTPSingleton())
+		clusterInternalServer.AddRoutes(clusterInternalRoutes())
+		clusterInternalServer.RunForever()
+	}
 
 	go startGRPCServer()
 
 	waitForTerminationSignal()
 }
 
-func ensureDB(ctx context.Context) {
-	var versionStore vStore.Store
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		versionStore = vStore.NewPostgres(globaldb.InitializePostgres(ctx))
-	} else {
-		versionStore = vStore.New(globaldb.GetGlobalDB(), globaldb.GetRocksDB())
+// clusterInternalRoutes returns list of route-handler pairs to be served on "cluster-internal" port.
+// Cluster-internal port is not exposed to the internet and thus requires no authorization.
+// There are 3 ways to access cluster-internal port:
+// * kubectl port-forward to central pod
+// * kubectl exec into central pod
+// * modifying central service definition
+func clusterInternalRoutes() []*internal.Route {
+	result := make([]*internal.Route, 0)
+	debugRoutes := debugRoutes()
+	for _, r := range debugRoutes {
+		result = append(result, &internal.Route{
+			Route:         r.Route,
+			ServerHandler: r.ServerHandler,
+			Compression:   r.Compression,
+		})
 	}
+	result = append(result, &internal.Route{
+		Route:         "/diagnostics",
+		ServerHandler: debugService.Singleton().InternalDiagnosticsHandler(),
+		Compression:   true,
+	})
+	return result
+}
 
+func ensureDB(ctx context.Context) {
+	versionStore := vStore.NewPostgres(globaldb.InitializePostgres(ctx))
 	err := version.Ensure(versionStore)
 	if err != nil {
 		log.Panicf("DB version check failed. You may need to run migrations: %v", err)
@@ -324,53 +362,52 @@ func startServices() {
 	pruning.Singleton().Start()
 	gatherer.Singleton().Start()
 	vulnRequestManager.Singleton().Start()
+	apiTokenExpiration.Singleton().Start()
+	administrationUsageInjector.Singleton().Start()
+	gcp.Singleton().Start()
+	administrationEventHandler.Singleton().Start()
 
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		apiTokenExpiration.Singleton().Start()
+	if features.PlatformComponents.Enabled() {
+		platformReprocessor.Singleton().Start()
 	}
 
 	go registerDelayedIntegrations(iiStore.DelayedIntegrations)
 }
 
-func servicesToRegister(registry authproviders.Registry, authzTraceSink observe.AuthzTraceSink) []pkgGRPC.APIService {
+func servicesToRegister() []pkgGRPC.APIService {
 	// PLEASE KEEP THE FOLLOWING LIST SORTED.
 	servicesToRegister := []pkgGRPC.APIService{
+		administrationEventService.Singleton(),
+		administrationUsageService.Singleton(),
 		alertService.Singleton(),
 		apiTokenService.Singleton(),
-		authService.New(),
-		authProviderSvc.New(registry, groupDataStore.Singleton()),
+		authProviderSvc.New(authProviderRegistry.Singleton(), groupDataStore.Singleton()),
+		authService.Singleton(),
 		backupRestoreService.Singleton(),
-		backupService.Singleton(),
 		centralHealthService.Singleton(),
 		certgen.ServiceSingleton(),
+		cloudSourcesService.Singleton(),
+		clusterCVEService.Singleton(),
 		clusterInitService.Singleton(),
 		clusterService.Singleton(),
+		collectionService.Singleton(),
 		complianceManagerService.Singleton(),
 		complianceService.Singleton(),
 		configService.Singleton(),
 		credentialExpiryService.Singleton(),
-		debugService.New(
-			clusterDataStore.Singleton(),
-			connection.ManagerSingleton(),
-			gatherers.Singleton(),
-			logimbueStore.Singleton(),
-			authzTraceSink,
-			registry,
-			groupDataStore.Singleton(),
-			roleDataStore.Singleton(),
-			configDS.Singleton(),
-			notifierDS.Singleton(),
-		),
+		debugService.Singleton(),
 		declarativeConfigHealthService.Singleton(),
 		delegatedRegistryConfigService.Singleton(),
 		deploymentService.Singleton(),
 		detectionService.Singleton(),
+		discoveredClustersService.Singleton(),
 		featureFlagService.Singleton(),
 		groupService.Singleton(),
+		grpcPreferences.Singleton(),
 		helmcharts.NewService(),
-		imageService.Singleton(),
 		iiService.Singleton(),
-		licenseService.New(),
+		imageCVEService.Singleton(),
+		imageService.Singleton(),
 		integrationHealthService.Singleton(),
 		metadataService.New(),
 		mitreService.Singleton(),
@@ -378,45 +415,56 @@ func servicesToRegister(registry authproviders.Registry, authzTraceSink observe.
 		networkBaselineService.Singleton(),
 		networkFlowService.Singleton(),
 		networkPolicyService.Singleton(),
+		nodeCVEService.Singleton(),
 		nodeService.Singleton(),
 		notifierService.Singleton(),
 		pingService.Singleton(),
 		podService.Singleton(),
+		policyCategoryService.Singleton(),
 		policyService.Singleton(),
 		probeUploadService.Singleton(),
-		processIndicatorService.Singleton(),
 		processBaselineService.Singleton(),
+		processIndicatorService.Singleton(),
+		processListeningOnPorts.Singleton(),
 		rbacService.Singleton(),
-		reportConfigurationService.Singleton(),
-		reportService.Singleton(),
 		roleService.Singleton(),
 		searchService.Singleton(),
 		secretService.Singleton(),
-		sensorService.New(connection.ManagerSingleton(), all.Singleton(), clusterDataStore.Singleton()),
+		sensorService.New(connection.ManagerSingleton(), all.Singleton(), clusterDataStore.Singleton(), installationStore.Singleton()),
 		sensorUpgradeControlService.Singleton(),
 		sensorUpgradeService.Singleton(),
 		serviceAccountService.Singleton(),
-		signatureIntegrationService.Singleton(),
 		siService.Singleton(),
+		signatureIntegrationService.Singleton(),
 		summaryService.Singleton(),
 		telemetryService.Singleton(),
 		userService.Singleton(),
+		vulnMgmtService.Singleton(),
+		// TODO: [ROX-20245] Make the "/v1/cve/requests" APIs unavailable.
+		// This cannot be now because the frontend is not ready with the feature flag checks.
 		vulnRequestService.Singleton(),
 	}
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		servicesToRegister = append(servicesToRegister, clusterCVEService.Singleton())
-		servicesToRegister = append(servicesToRegister, imageCVEService.Singleton())
-		servicesToRegister = append(servicesToRegister, nodeCVEService.Singleton())
-		servicesToRegister = append(servicesToRegister, collectionService.Singleton())
-		servicesToRegister = append(servicesToRegister, policyCategoryService.Singleton())
-		servicesToRegister = append(servicesToRegister, processListeningOnPorts.Singleton())
-	} else {
-		servicesToRegister = append(servicesToRegister, cveService.Singleton())
+
+	// The scheduled backup service is not applicable when using an external database
+	if !env.ManagedCentral.BooleanSetting() && !pgconfig.IsExternalDatabase() {
+		servicesToRegister = append(servicesToRegister, backupService.Singleton())
 	}
 
-	if features.VulnMgmtReportingEnhancements.Enabled() {
-		// TODO Remove (deprecated) v1 report configuration service when Reporting enhancements are enabled by default.
-		servicesToRegister = append(servicesToRegister, reportConfigurationServiceV2.Singleton())
+	servicesToRegister = append(servicesToRegister, reportServiceV2.Singleton())
+
+	if features.ComplianceEnhancements.Enabled() {
+		servicesToRegister = append(servicesToRegister, complianceOperatorIntegrationService.Singleton())
+		servicesToRegister = append(servicesToRegister, complianceScanSettings.Singleton())
+		servicesToRegister = append(servicesToRegister, v2ComplianceResults.Singleton())
+		servicesToRegister = append(servicesToRegister, v2ComplianceStats.Singleton())
+		servicesToRegister = append(servicesToRegister, v2ComplianceProfiles.Singleton())
+		servicesToRegister = append(servicesToRegister, v2ComplianceRules.Singleton())
+		// TODO: this is only done to initialize the table. Once we have a service we can move this there
+		v2ComplianceBenchmark.Singleton()
+	}
+
+	if features.UnifiedCVEDeferral.Enabled() {
+		servicesToRegister = append(servicesToRegister, vulnRequestServiceV2.Singleton())
 	}
 
 	autoTriggerUpgrades := sensorUpgradeService.Singleton().AutoUpgradeSetting()
@@ -427,6 +475,8 @@ func servicesToRegister(registry authproviders.Registry, authzTraceSink observe.
 		processBaselineDataStore.Singleton(),
 		networkBaselineDataStore.Singleton(),
 		delegatedRegistryConfigDataStore.Singleton(),
+		iiDatastore.Singleton(),
+		v2ComplianceMgr.Singleton(),
 		autoTriggerUpgrades,
 	); err != nil {
 		log.Panicf("Couldn't start sensor connection manager: %v", err)
@@ -442,7 +492,7 @@ func servicesToRegister(registry authproviders.Registry, authzTraceSink observe.
 	return servicesToRegister
 }
 
-func watchdog(signal *concurrency.Signal, timeout time.Duration) {
+func watchdog(signal concurrency.Waitable, timeout time.Duration) {
 	if !concurrency.WaitWithTimeout(signal, timeout) {
 		log.Errorf("API server failed to start within %v!", timeout)
 		log.Error("This usually means something is *very* wrong. Terminating ...")
@@ -450,6 +500,16 @@ func watchdog(signal *concurrency.Signal, timeout time.Duration) {
 			panic(err)
 		}
 	}
+}
+
+// Returns rate limiter for gRPC/HTTP/Stream requests made to central.
+func newRateLimiter() ratelimit.RateLimiter {
+	apiRequestLimitPerSec := env.CentralRateLimitPerSecond.IntegerSetting()
+	if apiRequestLimitPerSec < 0 {
+		log.Panicf("Negative number is not allowed for API request rate limit. Check env variable: %q", env.CentralRateLimitPerSecond.EnvVar())
+	}
+
+	return ratelimit.NewRateLimiter(apiRequestLimitPerSec, env.CentralRateLimitThrottleDuration.DurationSetting())
 }
 
 func startGRPCServer() {
@@ -460,13 +520,7 @@ func startGRPCServer() {
 			sac.ResourceScopeKeys(resources.Access)))
 
 	// Create the registry of applied auth providers.
-	registry, err := authproviders.NewStoreBackedRegistry(
-		ssoURLPathPrefix, tokenRedirectURLPath,
-		authProviderDS.Singleton(), jwt.IssuerFactorySingleton(),
-		mapper.FactorySingleton())
-	if err != nil {
-		log.Panicf("Could not create auth provider registry: %v", err)
-	}
+	registry := authProviderRegistry.Singleton()
 
 	// env.EnableOpenShiftAuth signals the desire but does not guarantee Central
 	// is configured correctly to talk to the OpenShift's OAuth server. If this
@@ -492,8 +546,10 @@ func startGRPCServer() {
 	basicAuthProvider := userpass.RegisterAuthProviderOrPanic(authProviderRegisteringCtx, basicAuthMgr, registry)
 
 	if env.DeclarativeConfiguration.BooleanSetting() {
-		declarativeconfig.ManagerSingleton(registry).ReconcileDeclarativeConfigurations()
+		declarativeconfig.ManagerSingleton().ReconcileDeclarativeConfigurations()
 	}
+
+	cloudSourcesManager.Singleton().Start()
 
 	clusterInitBackend := backend.Singleton()
 	serviceMTLSExtractor, err := service.NewExtractorWithCertValidation(clusterInitBackend)
@@ -524,6 +580,7 @@ func startGRPCServer() {
 		IdentityExtractors: idExtractors,
 		AuthProviders:      registry,
 		Auditor:            audit.New(processor.Singleton()),
+		RateLimiter:        newRateLimiter(),
 		GRPCMetrics:        metrics.GRPCSingleton(),
 		HTTPMetrics:        metrics.HTTPSingleton(),
 		Endpoints:          endpointCfgs,
@@ -541,7 +598,7 @@ func startGRPCServer() {
 	}
 
 	// This adds an on-demand global tracing for the built-in authorization.
-	authzTraceSink := observe.NewAuthzTraceSink()
+	authzTraceSink := trace.AuthzTraceSinkSingleton()
 	config.UnaryInterceptors = append(config.UnaryInterceptors,
 		observe.AuthzTraceInterceptor(authzTraceSink),
 	)
@@ -552,13 +609,8 @@ func startGRPCServer() {
 		centralSAC.GetEnricher().GetPreAuthContextEnricher(authzTraceSink),
 	)
 
-	telemetryCtx := sac.WithGlobalAccessScopeChecker(context.Background(),
-		sac.AllowFixedScopes(
-			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
-			sac.ResourceScopeKeys(resources.Administration)))
-
-	if cds, err := configDS.Singleton().GetConfig(telemetryCtx); err == nil || cds == nil {
-		if t := cds.GetPublicConfig().GetTelemetry(); t == nil || t.GetEnabled() {
+	if cds, err := configDS.Singleton().GetPublicConfig(); err == nil || cds == nil {
+		if t := cds.GetTelemetry(); t == nil || t.GetEnabled() {
 			if cfg := centralclient.Enable(); cfg.Enabled() {
 				centralclient.RegisterCentralClient(&config, basicAuthProvider.ID())
 				gs := cfg.Gatherer()
@@ -566,13 +618,19 @@ func startGRPCServer() {
 				gs.AddGatherer(signatureIntegrationDS.Gather)
 				gs.AddGatherer(roleDataStore.Gather)
 				gs.AddGatherer(clusterDataStore.Gather)
-				gs.AddGatherer(declarativeconfig.ManagerSingleton(registry).Gather())
+				gs.AddGatherer(declarativeconfig.ManagerSingleton().Gather())
+				gs.AddGatherer(notifierDS.Gather)
+				gs.AddGatherer(externalbackupsDS.Gather)
+				gs.AddGatherer(imageintegrationsDS.Gather)
+				gs.AddGatherer(cloudSourcesDS.Gather(cloudSourcesDS.Singleton()))
+				gs.AddGatherer(authDS.Gather)
+				gs.AddGatherer(featuresTelemetry.Gather)
 			}
 		}
 	}
 
 	server := pkgGRPC.NewAPI(config)
-	server.Register(servicesToRegister(registry, authzTraceSink)...)
+	server.Register(servicesToRegister()...)
 
 	startServices()
 	startedSig := server.Start()
@@ -637,7 +695,7 @@ func customRoutes() (customRoutes []routes.CustomRoute) {
 		uiRoute(),
 		{
 			Route:         "/api/extensions/clusters/zip",
-			Authorizer:    or.SensorOrAuthorizer(user.With(permissions.View(resources.Cluster), permissions.View(resources.Administration))),
+			Authorizer:    or.SensorOr(user.With(permissions.View(resources.Cluster), permissions.View(resources.Administration))),
 			ServerHandler: clustersZip.Handler(clusterDataStore.Singleton(), siStore.Singleton()),
 			Compression:   false,
 		},
@@ -649,19 +707,25 @@ func customRoutes() (customRoutes []routes.CustomRoute) {
 		},
 		{
 			Route:         "/api/cli/download/",
-			Authorizer:    user.With(),
+			Authorizer:    user.Authenticated(),
 			ServerHandler: cli.Handler(),
 			Compression:   true,
 		},
 		{
 			Route:         "/api/docs/swagger",
-			Authorizer:    user.With(permissions.View(resources.Integration)),
+			Authorizer:    user.Authenticated(),
 			ServerHandler: docs.Swagger(),
 			Compression:   true,
 		},
 		{
+			Route:         "/api/docs/v2/swagger",
+			Authorizer:    user.Authenticated(),
+			ServerHandler: docs.SwaggerV2(),
+			Compression:   true,
+		},
+		{
 			Route:         "/api/graphql",
-			Authorizer:    user.With(), // graphql enforces permissions internally
+			Authorizer:    user.Authenticated(), // graphql enforces permissions internally
 			ServerHandler: graphqlHandler.Handler(),
 			Compression:   true,
 		},
@@ -681,6 +745,12 @@ func customRoutes() (customRoutes []routes.CustomRoute) {
 			Route:         "/api/vm/export/csv",
 			Authorizer:    user.With(permissions.View(resources.Image), permissions.View(resources.Deployment), permissions.View(resources.Node)),
 			ServerHandler: csv.CVECSVHandler(),
+			Compression:   true,
+		},
+		{
+			Route:         "/api/v1/images/sbom",
+			Authorizer:    user.With(permissions.Modify(permissions.WithLegacyAuthForSAC(resources.Image, true))),
+			ServerHandler: imageService.SBOMHandler(imageintegration.Set(), enrichment.ImageEnricherSingleton(), sachelper.NewClusterSacHelper(clusterDataStore.Singleton())),
 			Compression:   true,
 		},
 		{
@@ -715,78 +785,70 @@ func customRoutes() (customRoutes []routes.CustomRoute) {
 		},
 		{
 			Route:         "/api/logimbue",
-			Authorizer:    user.With(),
+			Authorizer:    user.Authenticated(),
 			ServerHandler: logimbueHandler.Singleton(),
 			Compression:   false,
 			EnableAudit:   true,
 		},
-	}
-
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		customRoutes = append(customRoutes, routes.CustomRoute{
+		{
 			Route:      "/db/backup",
 			Authorizer: dbAuthz.DBReadAccessAuthorizer(),
-			ServerHandler: notImplementedOnManagedServices(
-				globaldbHandlers.BackupDB(nil, nil, globaldb.GetPostgres(), listener.Singleton(), false),
+			ServerHandler: routes.NotImplementedWithExternalDatabase(
+				globaldbHandlers.BackupDB(globaldb.GetPostgres(), listener.Singleton(), false),
 			),
 			Compression: true,
-		})
-		customRoutes = append(customRoutes, routes.CustomRoute{
+		},
+		{
 			Route:      "/api/extensions/backup",
 			Authorizer: user.WithRole(accesscontrol.Admin),
-			ServerHandler: notImplementedOnManagedServices(
-				globaldbHandlers.BackupDB(nil, nil, globaldb.GetPostgres(), listener.Singleton(), true),
+			ServerHandler: routes.NotImplementedWithExternalDatabase(
+				globaldbHandlers.BackupDB(globaldb.GetPostgres(), listener.Singleton(), true),
 			),
 			Compression: true,
-		})
-		customRoutes = append(customRoutes, routes.CustomRoute{
+		},
+		{
 			Route:         "/api/export/csv/node/cve",
 			Authorizer:    user.With(permissions.View(resources.Node)),
 			ServerHandler: nodeCveCsv.NodeCVECSVHandler(),
 			Compression:   true,
-		})
-		customRoutes = append(customRoutes, routes.CustomRoute{
+		},
+		{
 			Route:         "/api/export/csv/image/cve",
 			Authorizer:    user.With(permissions.View(resources.Image), permissions.View(resources.Deployment)),
 			ServerHandler: imageCveCsv.ImageCVECSVHandler(),
 			Compression:   true,
-		})
-		customRoutes = append(customRoutes, routes.CustomRoute{
+		},
+		{
 			Route:         "/api/export/csv/cluster/cve",
 			Authorizer:    user.With(permissions.View(resources.Cluster)),
 			ServerHandler: clusterCveCsv.ClusterCVECSVHandler(),
 			Compression:   true,
-		})
-	} else {
-		customRoutes = append(customRoutes, routes.CustomRoute{
-			Route:         "/db/backup",
-			Authorizer:    dbAuthz.DBReadAccessAuthorizer(),
-			ServerHandler: notImplementedOnManagedServices(globaldbHandlers.BackupDB(globaldb.GetGlobalDB(), globaldb.GetRocksDB(), nil, listener.Singleton(), false)),
+		},
+		{
+			Route:         "/api/policy/custom-resource/save-as-zip",
+			Authorizer:    user.With(permissions.View(resources.WorkflowAdministration)),
+			ServerHandler: policyHandler.Handler(policyDataStore.Singleton(), notifierDS.Singleton()),
+			Compression:   false,
+		},
+		{
+			Route:         "/api/extensions/clusters/helm-config.yaml",
+			Authorizer:    or.SensorOr(user.With(permissions.View(resources.Cluster))),
+			ServerHandler: clustersHelmConfig.Handler(clusterDataStore.Singleton()),
 			Compression:   true,
-		})
-		customRoutes = append(customRoutes, routes.CustomRoute{
-			Route:         "/api/extensions/backup",
-			Authorizer:    user.WithRole(accesscontrol.Admin),
-			ServerHandler: notImplementedOnManagedServices(globaldbHandlers.BackupDB(globaldb.GetGlobalDB(), globaldb.GetRocksDB(), nil, listener.Singleton(), true)),
+		},
+		{
+			Route:         "/api/administration/usage/secured-units/csv",
+			Authorizer:    user.With(permissions.View(resources.Administration)),
+			ServerHandler: administrationUsageCSV.CSVHandler(administrationUsageDataStore.Singleton()),
 			Compression:   true,
-		})
-
-		// v1 style restore endpoint, not supported for Postgres
-		customRoutes = append(customRoutes, routes.CustomRoute{
-			Route:         "/db/restore",
-			Authorizer:    dbAuthz.DBWriteAccessAuthorizer(),
-			ServerHandler: globaldbHandlers.RestoreDB(globaldb.GetGlobalDB(), globaldb.GetRocksDB()),
-			EnableAudit:   true,
-		})
+		},
+		{
+			Route:         "/api/extensions/certs/backup",
+			Authorizer:    user.With(permissions.View(resources.Administration)),
+			ServerHandler: certHandler.BackupCerts(listener.Singleton()),
+			Compression:   true,
+		},
 	}
-
-	customRoutes = append(customRoutes, routes.CustomRoute{
-		Route:         "/api/extensions/clusters/helm-config.yaml",
-		Authorizer:    or.SensorOrAuthorizer(user.With(permissions.View(resources.Cluster))),
-		ServerHandler: clustersHelmConfig.Handler(clusterDataStore.Singleton()),
-		Compression:   true,
-	})
-
 	scannerDefinitionsRoute := "/api/extensions/scannerdefinitions"
 	// Only grant compression to well-known content types. It should capture files
 	// worthy of compression in definition's bundle. Ignore all other types (e.g.,
@@ -801,9 +863,12 @@ func customRoutes() (customRoutes []routes.CustomRoute) {
 		routes.CustomRoute{
 			Route: scannerDefinitionsRoute,
 			Authorizer: perrpc.FromMap(map[authz.Authorizer][]string{
-				or.SensorOrAuthorizer(
-					or.ScannerOr(
-						user.With(permissions.View(resources.Administration)))): {
+				or.Or(
+					idcheck.SensorsOnly(),
+					idcheck.ScannerOnly(),
+					or.ScannerV4(),
+					user.With(permissions.View(resources.Administration)),
+				): {
 					routes.RPCNameForHTTP(scannerDefinitionsRoute, http.MethodGet),
 				},
 				user.With(permissions.Modify(resources.Administration)): {
@@ -815,14 +880,26 @@ func customRoutes() (customRoutes []routes.CustomRoute) {
 		},
 	)
 
-	customRoutes = append(customRoutes, debugRoutes()...)
-	return
-}
+	// Append report custom routes
+	customRoutes = append(customRoutes, routes.CustomRoute{
+		Route:         "/api/reports/jobs/download",
+		Authorizer:    user.With(permissions.Modify(resources.WorkflowAdministration)),
+		ServerHandler: v2Service.NewDownloadHandler(),
+		Compression:   true,
+	})
 
-func notImplementedOnManagedServices(fn http.Handler) http.Handler {
-	return utils.IfThenElse[http.Handler](
-		env.ManagedCentral.BooleanSetting(), httputil.NotImplementedHandler("api is not supported in a managed central environment."),
-		fn)
+	if features.ComplianceEnhancements.Enabled() && features.ComplianceReporting.Enabled() && features.ScanScheduleReportJobs.Enabled() {
+		customRoutes = append(customRoutes, routes.CustomRoute{
+			Route:         "/v2/compliance/scan/configurations/reports/download",
+			Authorizer:    user.With(permissions.Modify(resources.Compliance)),
+			ServerHandler: complianceScanSettings.NewDownloadHandler(),
+			Compression:   true,
+		})
+	}
+
+	debugRoutes := utils.IfThenElse(env.ManagedCentral.BooleanSetting(), []routes.CustomRoute{}, debugRoutes())
+	customRoutes = append(customRoutes, debugRoutes...)
+	return
 }
 
 func debugRoutes() []routes.CustomRoute {
@@ -857,15 +934,29 @@ func waitForTerminationSignal() {
 	stoppables := []stoppableWithName{
 		{reprocessor.Singleton(), "reprocessor loop"},
 		{suppress.Singleton(), "cve unsuppress loop"},
-		{pruning.Singleton(), "gargage collector"},
+		{pruning.Singleton(), "garbage collector"},
 		{gatherer.Singleton(), "network graph default external sources gatherer"},
-		{vulnReportScheduleManager.Singleton(), "vuln reports schedule manager"},
 		{vulnRequestManager.Singleton(), "vuln deferral requests expiry loop"},
 		{centralclient.InstanceConfig().Gatherer(), "telemetry gatherer"},
 		{centralclient.InstanceConfig().Telemeter(), "telemetry client"},
+		{administrationUsageInjector.Singleton(), "administration usage injector"},
+		{apiTokenExpiration.Singleton(), "api token expiration notifier"},
+		{gcp.Singleton(), "GCP cloud credentials manager"},
+		{cloudSourcesManager.Singleton(), "cloud sources manager"},
+		{administrationEventHandler.Singleton(), "administration events handler"},
 	}
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		stoppables = append(stoppables, stoppableWithName{obj: apiTokenExpiration.Singleton(), name: "api token expiration notifier"})
+
+	stoppables = append(stoppables,
+		stoppableWithName{vulnReportV2Scheduler.Singleton(), "vuln reports v2 scheduler"})
+
+	if features.ComplianceReporting.Enabled() {
+		stoppables = append(stoppables,
+			stoppableWithName{complianceReportManager.Singleton(), "compliance reports manager"})
+	}
+
+	if features.PlatformComponents.Enabled() {
+		stoppables = append(stoppables,
+			stoppableWithName{platformReprocessor.Singleton(), "platform components reprocessor"})
 	}
 
 	var wg sync.WaitGroup

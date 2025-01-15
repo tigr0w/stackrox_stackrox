@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
+	"time"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/node/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
@@ -15,6 +15,7 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"google.golang.org/grpc"
 )
@@ -24,6 +25,7 @@ var (
 		user.With(permissions.View(resources.Node)): {
 			"/v1.NodeService/GetNode",
 			"/v1.NodeService/ListNodes",
+			"/v1.NodeService/ExportNodes",
 		},
 	})
 )
@@ -79,4 +81,23 @@ func (s *nodeServiceImpl) GetNode(ctx context.Context, req *v1.GetNodeRequest) (
 		return nil, errors.Wrapf(errox.NotFound, "node %q in cluster %q does not exist", req.GetNodeId(), req.GetClusterId())
 	}
 	return node, nil
+}
+
+func (s *nodeServiceImpl) ExportNodes(req *v1.ExportNodeRequest, srv v1.NodeService_ExportNodesServer) error {
+	parsedQuery, err := search.ParseQuery(req.GetQuery(), search.MatchAllIfEmpty())
+	if err != nil {
+		return errors.Wrap(errox.InvalidArgs, err.Error())
+	}
+	ctx := srv.Context()
+	if timeout := req.GetTimeout(); timeout != 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(srv.Context(), time.Duration(timeout)*time.Second)
+		defer cancel()
+	}
+	return s.nodeDatastore.WalkByQuery(ctx, parsedQuery, func(node *storage.Node) error {
+		if err := srv.Send(&v1.ExportNodeResponse{Node: node}); err != nil {
+			return err
+		}
+		return nil
+	})
 }

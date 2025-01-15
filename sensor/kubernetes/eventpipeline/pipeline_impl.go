@@ -1,14 +1,18 @@
 package eventpipeline
 
 import (
+	"context"
+	"sync/atomic"
+
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/sensor/common"
 	"github.com/stackrox/rox/sensor/common/detector"
+	"github.com/stackrox/rox/sensor/common/message"
 	"github.com/stackrox/rox/sensor/common/reprocessor"
 	"github.com/stackrox/rox/sensor/common/store/resolver"
 	"github.com/stackrox/rox/sensor/kubernetes/eventpipeline/component"
@@ -21,12 +25,18 @@ var (
 type eventPipeline struct {
 	output      component.OutputQueue
 	resolver    component.Resolver
-	listener    component.PipelineComponent
+	listener    component.ContextListener
 	detector    detector.Detector
 	reprocessor reprocessor.Handler
 
-	eventsC chan *central.MsgFromSensor
-	stopSig concurrency.Signal
+	offlineMode *atomic.Bool
+
+	eventsC chan *message.ExpiringMessage
+	stopper concurrency.Stopper
+
+	contextMtx    sync.Mutex
+	context       context.Context
+	cancelContext context.CancelFunc
 }
 
 // Capabilities implements common.SensorComponent
@@ -54,8 +64,28 @@ func (p *eventPipeline) ProcessMessage(msg *central.MsgToSensor) error {
 }
 
 // ResponsesC implements common.SensorComponent
-func (p *eventPipeline) ResponsesC() <-chan *central.MsgFromSensor {
+func (p *eventPipeline) ResponsesC() <-chan *message.ExpiringMessage {
 	return p.eventsC
+}
+
+func (p *eventPipeline) stopCurrentContext() {
+	p.contextMtx.Lock()
+	defer p.contextMtx.Unlock()
+	if p.cancelContext != nil {
+		p.cancelContext()
+	}
+}
+
+func (p *eventPipeline) getCurrentContext() context.Context {
+	p.contextMtx.Lock()
+	defer p.contextMtx.Unlock()
+	return p.context
+}
+
+func (p *eventPipeline) createNewContext() {
+	p.contextMtx.Lock()
+	defer p.contextMtx.Unlock()
+	p.context, p.cancelContext = context.WithCancel(context.Background())
 }
 
 // Start implements common.SensorComponent
@@ -66,13 +96,7 @@ func (p *eventPipeline) Start() error {
 		return err
 	}
 
-	if env.ResyncDisabled.BooleanSetting() {
-		if err := p.resolver.Start(); err != nil {
-			return err
-		}
-	}
-
-	if err := p.listener.Start(); err != nil {
+	if err := p.resolver.Start(); err != nil {
 		return err
 	}
 
@@ -82,24 +106,50 @@ func (p *eventPipeline) Start() error {
 
 // Stop implements common.SensorComponent
 func (p *eventPipeline) Stop(_ error) {
-	defer close(p.eventsC)
+	if !p.stopper.Client().Stopped().IsDone() {
+		defer func() {
+			_ = p.stopper.Client().Stopped().Wait()
+		}()
+	}
 	// The order is important here, we need to stop the components
 	// that send messages to other components first
 	p.listener.Stop(nil)
-	if env.ResyncDisabled.BooleanSetting() {
-		p.resolver.Stop(nil)
-	}
+	p.resolver.Stop(nil)
 	p.output.Stop(nil)
-	p.stopSig.Signal()
+	p.stopper.Client().Stop()
 }
 
-func (p *eventPipeline) Notify(common.SensorComponentEvent) {}
+func (p *eventPipeline) Notify(e common.SensorComponentEvent) {
+	log.Info(common.LogSensorComponentEvent(e, "Event Pipeline"))
+	switch e {
+	case common.SensorComponentEventCentralReachable:
+		// Start listening to events if not yet listening
+		if p.offlineMode.CompareAndSwap(true, false) {
+			log.Info("Connection established: Starting Kubernetes listener")
+			// Stopping the listener here will allow Sensor to maintain the stores populated while offline.
+			// This is needed to capture runtime events in offline mode.
+			p.listener.Stop(nil)
+			// TODO(ROX-18613): use contextProvider to provide context for listener
+			p.createNewContext()
+			if err := p.listener.StartWithContext(p.context); err != nil {
+				log.Fatalf("Failed to start listener component. Sensor cannot run without listening to Kubernetes events: %s", err)
+			}
+		}
+	case common.SensorComponentEventOfflineMode:
+		// Cancel the current context of the listeners.
+		if p.offlineMode.CompareAndSwap(false, true) {
+			p.stopCurrentContext()
+		}
+	}
+}
 
 // forwardMessages from listener component to responses channel
 func (p *eventPipeline) forwardMessages() {
+	defer close(p.eventsC)
+	defer p.stopper.Flow().ReportStopped()
 	for {
 		select {
-		case <-p.stopSig.Done():
+		case <-p.stopper.Flow().StopRequested():
 			return
 		case msg, more := <-p.output.ResponsesC():
 			if !more {
@@ -113,7 +163,7 @@ func (p *eventPipeline) forwardMessages() {
 
 func (p *eventPipeline) processPolicySync(sync *central.PolicySync) error {
 	log.Debug("PolicySync message received from central")
-	return p.detector.ProcessPolicySync(sync)
+	return p.detector.ProcessPolicySync(p.getCurrentContext(), sync)
 }
 
 func (p *eventPipeline) processReassessPolicies() error {
@@ -121,13 +171,12 @@ func (p *eventPipeline) processReassessPolicies() error {
 	if err := p.detector.ProcessReassessPolicies(); err != nil {
 		return err
 	}
-	if env.ResyncDisabled.BooleanSetting() {
-		message := component.NewEvent()
-		// TODO(ROX-14310): Add WithSkipResolving to the DeploymentReference (Revert: https://github.com/stackrox/stackrox/pull/5551)
-		message.AddDeploymentReference(resolver.ResolveAllDeployments(),
-			component.WithForceDetection())
-		p.resolver.Send(message)
-	}
+	msg := component.NewEvent()
+	// TODO(ROX-14310): Add WithSkipResolving to the DeploymentResolution (Revert: https://github.com/stackrox/stackrox/pull/5551)
+	msg.AddDeploymentReference(resolver.ResolveAllDeployments(),
+		component.WithForceDetection())
+	msg.Context = p.getCurrentContext()
+	p.resolver.Send(msg)
 	return nil
 }
 
@@ -136,13 +185,12 @@ func (p *eventPipeline) processReprocessDeployments() error {
 	if err := p.detector.ProcessReprocessDeployments(); err != nil {
 		return err
 	}
-	if env.ResyncDisabled.BooleanSetting() {
-		message := component.NewEvent()
-		// TODO(ROX-14310): Add WithSkipResolving to the DeploymentReference (Revert: https://github.com/stackrox/stackrox/pull/5551)
-		message.AddDeploymentReference(resolver.ResolveAllDeployments(),
-			component.WithForceDetection())
-		p.resolver.Send(message)
-	}
+	msg := component.NewEvent()
+	// TODO(ROX-14310): Add WithSkipResolving to the DeploymentResolution (Revert: https://github.com/stackrox/stackrox/pull/5551)
+	msg.AddDeploymentReference(resolver.ResolveAllDeployments(),
+		component.WithForceDetection())
+	msg.Context = p.getCurrentContext()
+	p.resolver.Send(msg)
 	return nil
 }
 
@@ -151,13 +199,12 @@ func (p *eventPipeline) processUpdatedImage(image *storage.Image) error {
 	if err := p.detector.ProcessUpdatedImage(image); err != nil {
 		return err
 	}
-	if env.ResyncDisabled.BooleanSetting() {
-		message := component.NewEvent()
-		message.AddDeploymentReference(resolver.ResolveDeploymentsByImages(image),
-			component.WithForceDetection(),
-			component.WithSkipResolving())
-		p.resolver.Send(message)
-	}
+	msg := component.NewEvent()
+	msg.AddDeploymentReference(resolver.ResolveDeploymentsByImages(image),
+		component.WithForceDetection(),
+		component.WithSkipResolving())
+	msg.Context = p.getCurrentContext()
+	p.resolver.Send(msg)
 	return nil
 }
 
@@ -166,13 +213,12 @@ func (p *eventPipeline) processReprocessDeployment(req *central.ReprocessDeploym
 	if err := p.reprocessor.ProcessReprocessDeployments(req); err != nil {
 		return err
 	}
-	if env.ResyncDisabled.BooleanSetting() {
-		message := component.NewEvent()
-		message.AddDeploymentReference(resolver.ResolveDeploymentIds(req.GetDeploymentIds()...),
-			component.WithForceDetection(),
-			component.WithSkipResolving())
-		p.resolver.Send(message)
-	}
+	msg := component.NewEvent()
+	msg.AddDeploymentReference(resolver.ResolveDeploymentIds(req.GetDeploymentIds()...),
+		component.WithForceDetection(),
+		component.WithSkipResolving())
+	msg.Context = p.getCurrentContext()
+	p.resolver.Send(msg)
 	return nil
 }
 
@@ -181,21 +227,20 @@ func (p *eventPipeline) processInvalidateImageCache(req *central.InvalidateImage
 	if err := p.reprocessor.ProcessInvalidateImageCache(req); err != nil {
 		return err
 	}
-	if env.ResyncDisabled.BooleanSetting() {
-		keys := make([]*storage.Image, len(req.GetImageKeys()))
-		for i, image := range req.GetImageKeys() {
-			keys[i] = &storage.Image{
-				Id: image.GetImageId(),
-				Name: &storage.ImageName{
-					FullName: image.GetImageFullName(),
-				},
-			}
+	keys := make([]*storage.Image, len(req.GetImageKeys()))
+	for i, image := range req.GetImageKeys() {
+		keys[i] = &storage.Image{
+			Id: image.GetImageId(),
+			Name: &storage.ImageName{
+				FullName: image.GetImageFullName(),
+			},
 		}
-		message := component.NewEvent()
-		message.AddDeploymentReference(resolver.ResolveDeploymentsByImages(keys...),
-			component.WithForceDetection(),
-			component.WithSkipResolving())
-		p.resolver.Send(message)
 	}
+	msg := component.NewEvent()
+	msg.AddDeploymentReference(resolver.ResolveDeploymentsByImages(keys...),
+		component.WithForceDetection(),
+		component.WithSkipResolving())
+	msg.Context = p.getCurrentContext()
+	p.resolver.Send(msg)
 	return nil
 }

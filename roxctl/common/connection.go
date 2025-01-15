@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/retry"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/clientconn"
 	"github.com/stackrox/rox/pkg/errox"
@@ -18,10 +18,21 @@ import (
 	"github.com/stackrox/rox/roxctl/common/logger"
 	http1DowngradeClient "golang.stackrox.io/grpc-http1/client"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
+// GRPCOption encodes behavior of a gRPC connection.
+type GRPCOption func(*grpcConfig)
+
+// WithRetryTimeout sets a retry timeout for the gRPC connection.
+func WithRetryTimeout(timeout time.Duration) GRPCOption {
+	return func(config *grpcConfig) {
+		config.retryTimeout = timeout
+	}
+}
+
 // GetGRPCConnection gets a grpc connection to Central with the correct auth
-func GetGRPCConnection(am auth.Method, logger logger.Logger) (*grpc.ClientConn, error) {
+func GetGRPCConnection(am auth.Method, logger logger.Logger, connectionOpts ...GRPCOption) (*grpc.ClientConn, error) {
 	endpoint, serverName, usePlaintext, err := ConnectNames()
 	if err != nil {
 		return nil, errors.Wrap(err, "could not get endpoint for gRPC connection")
@@ -30,21 +41,27 @@ func GetGRPCConnection(am auth.Method, logger logger.Logger) (*grpc.ClientConn, 
 	if err != nil {
 		return nil, errors.Wrapf(err, "obtaining auth information for %s", endpoint)
 	}
-	opts, err := getOpts(logger)
+	clientOpts, err := getClientOpts(logger)
 	if err != nil {
 		return nil, err
 	}
-	opts.PerRPCCreds = perRPCCreds
+	clientOpts.PerRPCCreds = perRPCCreds
 
-	return createGRPCConn(grpcConfig{
+	config := grpcConfig{
 		usePlaintext:  usePlaintext,
 		insecure:      flags.UseInsecure(),
-		opts:          opts,
+		opts:          clientOpts,
 		serverName:    serverName,
 		useDirectGRPC: flags.UseDirectGRPC(),
 		forceHTTP1:    flags.ForceHTTP1(),
 		endpoint:      endpoint,
-	})
+	}
+
+	for _, opt := range connectionOpts {
+		opt(&config)
+	}
+
+	return createGRPCConn(config)
 }
 
 type grpcConfig struct {
@@ -55,18 +72,41 @@ type grpcConfig struct {
 	useDirectGRPC bool
 	forceHTTP1    bool
 	endpoint      string
+	retryTimeout  time.Duration
+}
+
+func makeCtxWithCommandHeader(ctx context.Context) context.Context {
+	md := metadata.New(nil)
+	setCustomHeaders(md.Set)
+	return metadata.NewOutgoingContext(ctx, md)
+}
+
+// addCommandHeaderUnaryInterceptor adds the roxctl command header to all unary requests.
+func addCommandHeaderUnaryInterceptor(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return invoker(makeCtxWithCommandHeader(ctx), method, req, reply, cc, opts...)
+}
+
+// addCommandHeaderUnaryInterceptor adds the roxctl command header to all stream requests.
+func addCommandHeaderStreamInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return streamer(makeCtxWithCommandHeader(ctx), desc, cc, method, opts...)
 }
 
 func createGRPCConn(c grpcConfig) (*grpc.ClientConn, error) {
 	const initialBackoffDuration = 100 * time.Millisecond
 	retryOpts := []grpc_retry.CallOption{
 		grpc_retry.WithBackoff(grpc_retry.BackoffExponential(initialBackoffDuration)),
-		grpc_retry.WithMax(3),
+		// First retry after 100ms, last retry after 51.2s.
+		grpc_retry.WithMax(10),
+		grpc_retry.WithPerRetryTimeout(c.retryTimeout),
 	}
 
 	grpcDialOpts := []grpc.DialOption{
-		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor(retryOpts...)),
-		grpc.WithUnaryInterceptor(grpc_retry.UnaryClientInterceptor(retryOpts...)),
+		grpc.WithChainStreamInterceptor(
+			addCommandHeaderStreamInterceptor,
+			grpc_retry.StreamClientInterceptor(retryOpts...)),
+		grpc.WithChainUnaryInterceptor(
+			addCommandHeaderUnaryInterceptor,
+			grpc_retry.UnaryClientInterceptor(retryOpts...)),
 	}
 
 	if c.usePlaintext {
@@ -80,6 +120,8 @@ func createGRPCConn(c grpcConfig) (*grpc.ClientConn, error) {
 		if c.serverName != "" && net.ParseIP(c.serverName) == nil {
 			grpcDialOpts = append(grpcDialOpts, grpc.WithAuthority(c.serverName))
 		}
+	} else if c.opts.TLS.DialContext != nil {
+		grpcDialOpts = append(grpcDialOpts, grpc.WithContextDialer(c.opts.TLS.DialContext))
 	}
 
 	if !c.useDirectGRPC {
@@ -102,7 +144,7 @@ func createGRPCConn(c grpcConfig) (*grpc.ClientConn, error) {
 	return connection, errors.WithStack(err)
 }
 
-func getOpts(logger logger.Logger) (clientconn.Options, error) {
+func getClientOpts(logger logger.Logger) (clientconn.Options, error) {
 	tlsOpts, err := tlsConfigOptsForCentral(logger)
 	if err != nil {
 		return clientconn.Options{}, err

@@ -43,6 +43,12 @@ export type CentralServicesCapabilities = {
     // Ability to present health of declarative config resources (e.g. auth providers, roles, access scopes, permission
     // sets, notifiers) to the user.
     centralCanDisplayDeclarativeConfigHealth: CentralServicesCapabilityStatus;
+
+    // Ability to trigger generation of new certificates
+    centralCanUpdateCert: CentralServicesCapabilityStatus;
+
+    // Ability to use integration of type acscsEmail
+    centralCanUseAcscsEmailIntegration: CentralServicesCapabilityStatus;
 };
 
 export type CentralCapabilitiesFlags = keyof CentralServicesCapabilities;

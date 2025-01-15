@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# Compatibility test installation of ACS using MAIN_IMAGE_TAG for central SENSOR_CHART_VERSION for secured cluster
+# Compatibility test installation of ACS using separate version arguments for
+# central and secured cluster.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 # shellcheck source=../../scripts/ci/gcp.sh
@@ -21,13 +22,32 @@ source "$ROOT/qa-tests-backend/scripts/lib.sh"
 set -euo pipefail
 
 compatibility_test() {
-    require_environment "SENSOR_CHART_VERSION"
+    if [[ "$#" -ne 2 ]]; then
+        die "missing args. usage: compatibility_test <central_version> <sensor_version>"
+    fi
+
+    local central_version="$1"
+    local sensor_version="$2"
+
     require_environment "ORCHESTRATOR_FLAVOR"
     require_environment "KUBECONFIG"
 
-    info "Starting test (sensor compatibility test ${SENSOR_CHART_VERSION})"
+    short_central_tag="$(shorten_tag "${central_version}")"
+    short_sensor_tag="$(shorten_tag "${sensor_version}")"
+
+    _compatibility_test "${central_version}" "${sensor_version}" "${short_central_tag}" "${short_sensor_tag}"
+}
+
+_compatibility_test() {
+    info "Starting test (compatibility test Central version - ${central_version}, Sensor version - ${sensor_version})"
+
+    local central_version="$1"
+    local sensor_version="$2"
+    local short_central_tag="$3"
+    local short_sensor_tag="$4"
 
     export_test_environment
+    ci_export CENTRAL_PERSISTENCE_NONE "true"
 
     if [[ "${SKIP_DEPLOY:-false}" = "false" ]]; then
         if [[ "${CI:-false}" = "true" ]]; then
@@ -41,7 +61,7 @@ compatibility_test() {
         remove_existing_stackrox_resources
         setup_default_TLS_certs
 
-        deploy_stackrox_with_custom_sensor "${SENSOR_CHART_VERSION}"
+        deploy_stackrox_with_custom_central_and_sensor_versions "${central_version}" "${sensor_version}"
         echo "Stackrox deployed"
         kubectl -n stackrox get deploy,ds -o wide
 
@@ -49,6 +69,9 @@ compatibility_test() {
         deploy_webhook_server
         get_ECR_docker_pull_password
     fi
+
+    rm -f FAIL
+    remove_qa_test_results
 
     info "Running compatibility tests"
 
@@ -60,19 +83,43 @@ compatibility_test() {
 
     make -C qa-tests-backend compatibility-test || touch FAIL
 
-    update_junit_prefix_with_sensor_version
+    update_junit_prefix_with_central_and_sensor_version "${short_central_tag}" "${short_sensor_tag}"
 
-    store_qa_test_results "compatibility-test-sensor-${SENSOR_CHART_VERSION}"
-    [[ ! -f FAIL ]] || die "compatibility-test-sensor-${SENSOR_CHART_VERSION}"
+    store_qa_test_results "compatibility-test-central-v${short_central_tag}-sensor-v${short_sensor_tag}"
+    [[ ! -f FAIL ]] || die "compatibility-test-central-v${short_central_tag}-sensor-v${short_sensor_tag}"
 }
 
-update_junit_prefix_with_sensor_version() {
+update_junit_prefix_with_central_and_sensor_version() {
+    local short_central_tag="$1"
+    local short_sensor_tag="$2"
+
     result_folder="${ROOT}/qa-tests-backend/build/test-results/testCOMPATIBILITY"
-    info "Updating all test in $result_folder to have $SENSOR_CHART_VERSION prefix"
+    info "Updating all test in $result_folder to have \"Central-v${short_central_tag}_Sensor-v${short_sensor_tag}_\" prefix"
     for f in "$result_folder"/*.xml; do
-        sed -i "s/testcase name=\"/testcase name=\"[${SENSOR_CHART_VERSION}] /g" "$f"
+        sed -i "s/testcase name=\"/testcase name=\"[Central-v${short_central_tag}_Sensor-v${short_sensor_tag}] /g" "$f"
     done
 }
 
+shorten_tag() {
+    if [[ "$#" -ne 1 ]]; then
+        die "Expected a version tag as parameter in shorten_tag: shorten_tag <tag>"
+    fi
 
-compatibility_test
+    input_tag="$1"
+
+    development_version_regex='([0-9]+\.[0-9]+\.[xX])'
+    with_minor_version_regex='([0-9]+\.[0-9]+)\.[0-9]+'
+
+    if [[ $input_tag =~ $development_version_regex ]]; then
+        echo "${BASH_REMATCH[1]}"
+    elif [[ $input_tag =~ $with_minor_version_regex ]]; then
+        echo "${BASH_REMATCH[1]}.z"
+    else
+        echo "${input_tag}"
+        >&2 echo "Failed to shorten tag ${input_tag} as it did not match any of the following regexes:
+        \"${development_version_regex}\", \"${with_minor_version_regex}\""
+        exit 1
+    fi
+}
+
+compatibility_test "$@"

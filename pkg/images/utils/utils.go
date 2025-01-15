@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/docker/distribution/reference"
+	"github.com/distribution/reference"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/cve"
-	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/stringutils"
 )
@@ -18,8 +17,6 @@ const (
 )
 
 var (
-	log = logging.LoggerForModule()
-
 	// digestPrefixes lists the prefixes for valid, OCI-compliant image digests.
 	// Please see https://github.com/opencontainers/image-spec/blob/main/descriptor.md#registered-algorithms
 	// for more information.
@@ -97,6 +94,27 @@ func NormalizeImageFullNameNoSha(name *storage.ImageName) *storage.ImageName {
 	return name
 }
 
+// NormalizeImageFullName mimics NormalizeImageFullNameNoSha but accepts a digest,
+// allows an empty tag, and does not modify name if it's malformed.
+func NormalizeImageFullName(name *storage.ImageName, digest string) *storage.ImageName {
+	if name.GetTag() == "" && digest == "" {
+		// Input is malformed, do nothing.
+		return name
+	}
+
+	if digest != "" {
+		digest = fmt.Sprintf("@%s", digest)
+	}
+
+	tag := name.GetTag()
+	if tag != "" {
+		tag = fmt.Sprintf(":%s", tag)
+	}
+
+	name.FullName = fmt.Sprintf("%s/%s%s%s", name.GetRegistry(), name.GetRemote(), tag, digest)
+	return name
+}
+
 // GenerateImageFromString generates an image type from a common string format and returns an error if
 // there was an issue parsing it
 func GenerateImageFromString(imageStr string) (*storage.ContainerImage, error) {
@@ -160,6 +178,16 @@ func IsPullable(imageStr string) bool {
 	return err == nil
 }
 
+// RemoveScheme removes the scheme from an image string. For example:
+// "docker-pullable://rest-of-image" becomes "rest-of-image"
+func RemoveScheme(imageStr string) string {
+	_, after, found := strings.Cut(imageStr, "://")
+	if found {
+		return after
+	}
+	return imageStr
+}
+
 // IsValidImageString returns whether the given string can be parsed as a docker image reference
 func IsValidImageString(imageStr string) error {
 	_, err := reference.ParseAnyReference(imageStr)
@@ -203,7 +231,7 @@ func GetFullyQualifiedFullName(holder nameHolder) string {
 
 // StripCVEDescriptions takes in an image and returns a stripped down version without the descriptions of CVEs
 func StripCVEDescriptions(img *storage.Image) *storage.Image {
-	newImage := img.Clone()
+	newImage := img.CloneVT()
 	StripCVEDescriptionsNoClone(newImage)
 	return newImage
 }

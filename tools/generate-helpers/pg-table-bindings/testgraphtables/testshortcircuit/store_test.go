@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *TestShortCircuitsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE test_short_circuits CASCADE")
 	s.T().Log("test_short_circuits", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *TestShortCircuitsStoreSuite) TestStore() {
 	foundTestShortCircuit, exists, err = store.Get(ctx, testShortCircuit.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(testShortCircuit, foundTestShortCircuit)
+	protoassert.Equal(s.T(), testShortCircuit, foundTestShortCircuit)
 
-	testShortCircuitCount, err := store.Count(ctx)
+	testShortCircuitCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, testShortCircuitCount)
-	testShortCircuitCount, err = store.Count(withNoAccessCtx)
+	testShortCircuitCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(testShortCircuitCount)
 
@@ -75,11 +78,6 @@ func (s *TestShortCircuitsStoreSuite) TestStore() {
 	s.True(testShortCircuitExists)
 	s.NoError(store.Upsert(ctx, testShortCircuit))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, testShortCircuit), sac.ErrResourceAccessDenied)
-
-	foundTestShortCircuit, exists, err = store.Get(ctx, testShortCircuit.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(testShortCircuit, foundTestShortCircuit)
 
 	s.NoError(store.Delete(ctx, testShortCircuit.GetId()))
 	foundTestShortCircuit, exists, err = store.Get(ctx, testShortCircuit.GetId())
@@ -99,13 +97,13 @@ func (s *TestShortCircuitsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, testShortCircuits))
 
-	testShortCircuitCount, err = store.Count(ctx)
+	testShortCircuitCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, testShortCircuitCount)
 
 	s.NoError(store.DeleteMany(ctx, testShortCircuitIDs))
 
-	testShortCircuitCount, err = store.Count(ctx)
+	testShortCircuitCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, testShortCircuitCount)
 }

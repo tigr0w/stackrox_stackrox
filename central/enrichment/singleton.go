@@ -2,9 +2,8 @@ package enrichment
 
 import (
 	"context"
-	"time"
 
-	cveDataStore "github.com/stackrox/rox/central/cve/datastore"
+	clusterDataStore "github.com/stackrox/rox/central/cluster/datastore"
 	"github.com/stackrox/rox/central/cve/fetcher"
 	imageCVEDataStore "github.com/stackrox/rox/central/cve/image/datastore"
 	nodeCVEDataStore "github.com/stackrox/rox/central/cve/node/datastore"
@@ -15,13 +14,14 @@ import (
 	"github.com/stackrox/rox/central/imageintegration"
 	imageIntegrationDS "github.com/stackrox/rox/central/imageintegration/datastore"
 	"github.com/stackrox/rox/central/integrationhealth/reporter"
+	namespaceDataStore "github.com/stackrox/rox/central/namespace/datastore"
+	"github.com/stackrox/rox/central/role/sachelper"
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	signatureIntegrationDataStore "github.com/stackrox/rox/central/signatureintegration/datastore"
-	"github.com/stackrox/rox/central/vulnerabilityrequest/suppressor"
+	"github.com/stackrox/rox/central/vulnmgmt/vulnerabilityrequest/suppressor"
 	v1 "github.com/stackrox/rox/generated/api/v1"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/expiringcache"
 	"github.com/stackrox/rox/pkg/features"
+	"github.com/stackrox/rox/pkg/images/cache"
 	imageEnricher "github.com/stackrox/rox/pkg/images/enricher"
 	"github.com/stackrox/rox/pkg/metrics"
 	nodeEnricher "github.com/stackrox/rox/pkg/nodes/enricher"
@@ -38,29 +38,20 @@ var (
 	cf                    fetcher.OrchestratorIstioCVEManager
 	manager               Manager
 	imageIntegrationStore imageIntegrationDS.DataStore
-	metadataCacheOnce     sync.Once
-	metadataCache         expiringcache.Cache
-
-	imageCacheExpiryDuration = 4 * time.Hour
 )
 
 func initialize() {
-	var imageCVESuppressor imageEnricher.CVESuppressor
-	var nodeCVESuppressor nodeEnricher.CVESuppressor
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		imageCVESuppressor = imageCVEDataStore.Singleton()
-		nodeCVESuppressor = nodeCVEDataStore.Singleton()
-	} else {
-		imageCVESuppressor = cveDataStore.Singleton()
-		nodeCVESuppressor = cveDataStore.Singleton()
-	}
+	scanDelegator := delegator.New(
+		delegatedRegistryConfigDS.Singleton(),
+		connection.ManagerSingleton(),
+		scanwaiter.Singleton(),
+		sachelper.NewClusterNamespaceSacHelper(clusterDataStore.Singleton(), namespaceDataStore.Singleton()),
+	)
 
-	scanDelegator := delegator.New(delegatedRegistryConfigDS.Singleton(), connection.ManagerSingleton(), scanwaiter.Singleton())
-
-	ie = imageEnricher.New(imageCVESuppressor, suppressor.Singleton(), imageintegration.Set(),
-		metrics.CentralSubsystem, ImageMetadataCacheSingleton(), datastore.Singleton().GetImage, reporter.Singleton(),
+	ie = imageEnricher.New(imageCVEDataStore.Singleton(), suppressor.Singleton(), imageintegration.Set(),
+		metrics.CentralSubsystem, cache.ImageMetadataCacheSingleton(), datastore.Singleton().GetImage, reporter.Singleton(),
 		signatureIntegrationDataStore.Singleton().GetAllSignatureIntegrations, scanDelegator)
-	ne = nodeEnricher.New(nodeCVESuppressor, metrics.CentralSubsystem)
+	ne = nodeEnricher.New(nodeCVEDataStore.Singleton(), metrics.CentralSubsystem)
 	en = New(datastore.Singleton(), ie)
 	cf = fetcher.SingletonManager()
 	initializeManager()
@@ -72,6 +63,7 @@ func initializeManager() {
 
 	imageIntegrationStore = imageIntegrationDS.Singleton()
 	integrations, err := imageIntegrationStore.GetImageIntegrations(ctx, &v1.GetImageIntegrationsRequest{})
+	log.Debugf("Found %d configured image integrations", len(integrations))
 	if err != nil {
 		log.Errorf("unable to use previous integrations: %s", err)
 		return
@@ -97,14 +89,6 @@ func Singleton() Enricher {
 func ImageEnricherSingleton() imageEnricher.ImageEnricher {
 	once.Do(initialize)
 	return ie
-}
-
-// ImageMetadataCacheSingleton returns the cache for image metadata
-func ImageMetadataCacheSingleton() expiringcache.Cache {
-	metadataCacheOnce.Do(func() {
-		metadataCache = expiringcache.NewExpiringCache(imageCacheExpiryDuration, expiringcache.UpdateExpirationOnGets)
-	})
-	return metadataCache
 }
 
 // NodeEnricherSingleton provides the singleton NodeEnricher to use.

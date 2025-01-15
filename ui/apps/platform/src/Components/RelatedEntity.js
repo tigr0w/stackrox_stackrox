@@ -1,7 +1,6 @@
 import React, { useContext } from 'react';
 import PropTypes from 'prop-types';
-import ReactRouterPropTypes from 'react-router-prop-types';
-import { withRouter } from 'react-router-dom';
+import { useHistory, useLocation, useRouteMatch } from 'react-router-dom';
 
 import Widget from 'Components/Widget';
 import EntityIcon from 'Components/EntityIcon';
@@ -11,17 +10,10 @@ import hexagonal from 'images/side-panel-icons/hexagonal.svg';
 import URLService from 'utils/URLService';
 
 // @TODO We should try to use this component for Compliance as well
-const RelatedEntity = ({
-    match,
-    location,
-    history,
-    name,
-    entityType,
-    entityId,
-    value,
-    link,
-    ...rest
-}) => {
+const RelatedEntity = ({ name, entityType, entityId, value, ...rest }) => {
+    const history = useHistory();
+    const location = useLocation();
+    const match = useRouteMatch();
     const workflowState = useContext(workflowStateContext);
 
     function onClick() {
@@ -52,7 +44,7 @@ const RelatedEntity = ({
         <button
             data-testid="related-entity-value"
             type="button"
-            className="h-full w-full no-underline text-primary-700 hover:bg-primary-100"
+            className="h-full w-full"
             onClick={onClick}
         >
             {content}
@@ -79,9 +71,6 @@ RelatedEntity.propTypes = {
     entityId: PropTypes.string,
     value: PropTypes.string,
     link: PropTypes.string,
-    match: ReactRouterPropTypes.match.isRequired,
-    location: ReactRouterPropTypes.location.isRequired,
-    history: ReactRouterPropTypes.history.isRequired,
 };
 
 RelatedEntity.defaultProps = {
@@ -91,4 +80,4 @@ RelatedEntity.defaultProps = {
     name: null,
 };
 
-export default withRouter(RelatedEntity);
+export default RelatedEntity;

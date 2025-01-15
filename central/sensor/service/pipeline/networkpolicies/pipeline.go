@@ -14,13 +14,17 @@ import (
 	"github.com/stackrox/rox/central/sensor/service/pipeline/reconciliation"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/set"
+	"github.com/stackrox/rox/pkg/stringutils"
 )
 
 var (
 	log = logging.LoggerForModule()
+
+	_ pipeline.Fragment = (*pipelineImpl)(nil)
 )
 
 // Template design pattern. We define control flow here and defer logic to subclasses.
@@ -44,6 +48,10 @@ type pipelineImpl struct {
 	clusters        clusterDataStore.DataStore
 	networkPolicies npDS.DataStore
 	graphEvaluator  graph.Evaluator
+}
+
+func (s *pipelineImpl) Capabilities() []centralsensor.CentralCapability {
+	return nil
 }
 
 func (s *pipelineImpl) Reconcile(ctx context.Context, clusterID string, storeMap *reconciliation.StoreMap) error {
@@ -73,6 +81,9 @@ func (s *pipelineImpl) Run(ctx context.Context, clusterID string, msg *central.M
 	event := msg.GetEvent()
 	networkPolicy := event.GetNetworkPolicy()
 	networkPolicy.ClusterId = clusterID
+
+	// ROX-22002: Remove invalid null characters in annotations
+	stringutils.SanitizeMapValues(networkPolicy.GetAnnotations())
 
 	switch event.GetAction() {
 	case central.ResourceAction_REMOVE_RESOURCE:

@@ -3,28 +3,26 @@ import {
     Card,
     CardHeader,
     CardTitle,
-    CardActions,
     CardBody,
     Divider,
     Button,
-    Select,
-    SelectOption,
     TextInput,
     Flex,
     FlexItem,
     Form,
     FormGroup,
 } from '@patternfly/react-core';
+import { Select, SelectOption } from '@patternfly/react-core/deprecated';
 import { TrashIcon } from '@patternfly/react-icons';
 import { useField } from 'formik';
 
-import { Cluster } from 'types/cluster.proto';
+import { ClusterScopeObject } from 'services/RolesService';
 import { ListDeployment } from 'types/deployment.proto';
 
 type PolicyScopeCardProps = {
     type: 'exclusion' | 'inclusion';
     name: string;
-    clusters: Cluster[];
+    clusters: ClusterScopeObject[];
     deployments?: ListDeployment[];
     onDelete: () => void;
     hasAuditLogEventSource: boolean;
@@ -89,18 +87,27 @@ function PolicyScopeCard({
 
     return (
         <Card>
-            <CardHeader className="pf-u-p-0">
-                <CardTitle className="pf-u-pl-lg">{type} scope</CardTitle>
-                <CardActions hasNoOffset>
-                    <Divider isVertical component="div" />
-                    <Button
-                        variant="plain"
-                        className="pf-u-mr-xs pf-u-px-sm pf-u-py-md"
-                        onClick={onDelete}
-                    >
-                        <TrashIcon />
-                    </Button>
-                </CardActions>
+            <CardHeader
+                actions={{
+                    actions: (
+                        <>
+                            <Divider orientation={{ default: 'vertical' }} component="div" />
+                            <Button
+                                variant="plain"
+                                className="pf-v5-u-mr-xs pf-v5-u-px-sm pf-v5-u-py-md"
+                                onClick={onDelete}
+                                title={`Delete ${type} scope`}
+                            >
+                                <TrashIcon />
+                            </Button>
+                        </>
+                    ),
+                    hasNoOffset: true,
+                    className: undefined,
+                }}
+                className="pf-v5-u-p-0"
+            >
+                <CardTitle className="pf-v5-u-pl-lg">{type} scope</CardTitle>
             </CardHeader>
             <Divider component="div" />
             <CardBody>
@@ -129,7 +136,9 @@ function PolicyScopeCard({
                                     value={value.namespace || scope?.namespace}
                                     type="text"
                                     id={`${name}-namespace`}
-                                    onChange={handleChangeNamespace}
+                                    onChange={(_event, namespace) =>
+                                        handleChangeNamespace(namespace)
+                                    }
                                     placeholder="Provide a namespace"
                                 />
                             </FormGroup>
@@ -160,7 +169,7 @@ function PolicyScopeCard({
                             </FlexItem>
                         )}
                         <FlexItem>
-                            <FormGroup label="Label" fieldId={`${name}-label`}>
+                            <FormGroup label="Deployment label" fieldId={`${name}-label`}>
                                 <Flex
                                     direction={{ default: 'row' }}
                                     flexWrap={{ default: 'nowrap' }}
@@ -169,7 +178,7 @@ function PolicyScopeCard({
                                         value={value.label?.key || scope?.label?.key}
                                         type="text"
                                         id={`${name}-label-key`}
-                                        onChange={handleChangeLabelKey}
+                                        onChange={(_event, key) => handleChangeLabelKey(key)}
                                         placeholder="Label key"
                                         isDisabled={hasAuditLogEventSource}
                                     />
@@ -177,7 +186,7 @@ function PolicyScopeCard({
                                         value={value.label?.value || scope?.label?.value}
                                         type="text"
                                         id={`${name}-label-value`}
-                                        onChange={handleChangeLabelValue}
+                                        onChange={(_event, val) => handleChangeLabelValue(val)}
                                         placeholder="Label value"
                                         isDisabled={hasAuditLogEventSource}
                                     />

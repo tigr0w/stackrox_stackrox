@@ -1,10 +1,11 @@
 package sensor
 
 import (
+	"context"
 	"io"
-	"time"
 
 	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/sensor/queue"
 	"github.com/stackrox/rox/sensor/common/centralclient"
 	"github.com/stackrox/rox/sensor/kubernetes/client"
 	"github.com/stackrox/rox/sensor/kubernetes/fake"
@@ -13,13 +14,17 @@ import (
 // CreateOptions represents the custom configuration that can be provided when creating sensor
 // using CreateSensor.
 type CreateOptions struct {
-	workloadManager        *fake.WorkloadManager
-	centralConnFactory     centralclient.CentralConnectionFactory
-	localSensor            bool
-	resyncPeriod           time.Duration
-	k8sClient              client.Interface
-	traceWriter            io.Writer
-	eventPipelineQueueSize int
+	workloadManager                    *fake.WorkloadManager
+	centralConnFactory                 centralclient.CentralConnectionFactory
+	certLoader                         centralclient.CertLoader
+	localSensor                        bool
+	k8sClient                          client.Interface
+	traceWriter                        io.Writer
+	eventPipelineQueueSize             int
+	networkFlowServiceAuthFuncOverride func(context.Context, string) (context.Context, error)
+	signalServiceAuthFuncOverride      func(context.Context, string) (context.Context, error)
+	networkFlowWriter                  io.Writer
+	processIndicatorWriter             io.Writer
 }
 
 // ConfigWithDefaults creates a new config object with default properties.
@@ -30,13 +35,17 @@ type CreateOptions struct {
 // before running CreateSensor.
 func ConfigWithDefaults() *CreateOptions {
 	return &CreateOptions{
-		workloadManager:        nil,
-		centralConnFactory:     nil,
-		k8sClient:              nil,
-		localSensor:            false,
-		resyncPeriod:           1 * time.Minute,
-		traceWriter:            nil,
-		eventPipelineQueueSize: env.EventPipelineQueueSize.IntegerSetting(),
+		workloadManager:                    nil,
+		centralConnFactory:                 nil,
+		certLoader:                         centralclient.EmptyCertLoader(),
+		k8sClient:                          nil,
+		localSensor:                        false,
+		traceWriter:                        nil,
+		eventPipelineQueueSize:             queue.ScaleSizeOnNonDefault(env.EventPipelineQueueSize),
+		networkFlowServiceAuthFuncOverride: nil,
+		signalServiceAuthFuncOverride:      nil,
+		networkFlowWriter:                  nil,
+		processIndicatorWriter:             nil,
 	}
 }
 
@@ -61,18 +70,16 @@ func (cfg *CreateOptions) WithCentralConnectionFactory(centralConnFactory centra
 	return cfg
 }
 
+func (cfg *CreateOptions) WithCertLoader(certLoader centralclient.CertLoader) *CreateOptions {
+	cfg.certLoader = certLoader
+	return cfg
+}
+
 // WithLocalSensor sets if sensor is running locally (local sensor or in tests) or if it's running
 // on a cluster.
 // Default: false
 func (cfg *CreateOptions) WithLocalSensor(flag bool) *CreateOptions {
 	cfg.localSensor = flag
-	return cfg
-}
-
-// WithResyncPeriod sets the resync period.
-// Default: 1 minute
-func (cfg *CreateOptions) WithResyncPeriod(duration time.Duration) *CreateOptions {
-	cfg.resyncPeriod = duration
 	return cfg
 }
 
@@ -87,5 +94,33 @@ func (cfg *CreateOptions) WithEventPipelineQueueSize(size int) *CreateOptions {
 // Default: nil
 func (cfg *CreateOptions) WithTraceWriter(trWriter io.Writer) *CreateOptions {
 	cfg.traceWriter = trWriter
+	return cfg
+}
+
+// WithNetworkFlowServiceAuthFuncOverride sets the AuthFuncOverride for the NetworkFlow service.
+// Default: nil
+func (cfg *CreateOptions) WithNetworkFlowServiceAuthFuncOverride(fn func(context.Context, string) (context.Context, error)) *CreateOptions {
+	cfg.networkFlowServiceAuthFuncOverride = fn
+	return cfg
+}
+
+// WithSignalServiceAuthFuncOverride sets the AuthFuncOverride for the Signal service.
+// Default: nil
+func (cfg *CreateOptions) WithSignalServiceAuthFuncOverride(fn func(context.Context, string) (context.Context, error)) *CreateOptions {
+	cfg.signalServiceAuthFuncOverride = fn
+	return cfg
+}
+
+// WithNetworkFlowTraceWriter sets the network flows trace writer.
+// Default: nil
+func (cfg *CreateOptions) WithNetworkFlowTraceWriter(writer io.Writer) *CreateOptions {
+	cfg.networkFlowWriter = writer
+	return cfg
+}
+
+// WithProcessIndicatorTraceWriter sets the network flows trace writer.
+// Default: nil
+func (cfg *CreateOptions) WithProcessIndicatorTraceWriter(writer io.Writer) *CreateOptions {
+	cfg.processIndicatorWriter = writer
 	return cfg
 }

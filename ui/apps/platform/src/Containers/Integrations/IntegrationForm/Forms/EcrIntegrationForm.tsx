@@ -1,6 +1,7 @@
 import React, { ReactElement } from 'react';
 import { TextInput, PageSection, Form, Checkbox } from '@patternfly/react-core';
 import * as yup from 'yup';
+import merge from 'lodash/merge';
 
 import { ImageIntegrationBase } from 'services/ImageIntegrationsService';
 
@@ -9,6 +10,7 @@ import FormMessage from 'Components/PatternFly/FormMessage';
 import FormTestButton from 'Components/PatternFly/FormTestButton';
 import FormSaveButton from 'Components/PatternFly/FormSaveButton';
 import FormCancelButton from 'Components/PatternFly/FormCancelButton';
+import useCentralCapabilities from 'hooks/useCentralCapabilities';
 import useIntegrationForm from '../useIntegrationForm';
 import { IntegrationFormProps } from '../integrationFormTypes';
 
@@ -45,7 +47,7 @@ export const validationSchema = yup.object().shape({
             .min(1, 'Must have at least one type selected')
             .required('A category is required'),
         ecr: yup.object().shape({
-            registryId: yup.string().trim().required('A registry ID is required'),
+            registryId: yup.string().trim().required('A 12-digit AWS ID is required'),
             endpoint: yup.string().trim(),
             region: yup.string().trim().required('An AWS region is required'),
             useIam: yup.bool(),
@@ -117,7 +119,7 @@ export const defaultValues: EcrIntegrationFormValues = {
             registryId: '',
             endpoint: '',
             region: '',
-            useIam: true,
+            useIam: false,
             accessKeyId: '',
             secretAccessKey: '',
             useAssumeRole: false,
@@ -137,9 +139,15 @@ function EcrIntegrationForm({
     initialValues = null,
     isEditable = false,
 }: IntegrationFormProps<EcrIntegration>): ReactElement {
-    const formInitialValues = { ...defaultValues, ...initialValues };
+    const { isCentralCapabilityAvailable } = useCentralCapabilities();
+    const canUseContainerIamRoleForEcr = isCentralCapabilityAvailable(
+        'centralScanningCanUseContainerIamRoleForEcr'
+    );
+
+    const formInitialValues = structuredClone(defaultValues);
     if (initialValues) {
-        formInitialValues.config = { ...formInitialValues.config, ...initialValues };
+        merge(formInitialValues.config, initialValues);
+
         // We want to clear the password because backend returns '******' to represent that there
         // are currently stored credentials
         formInitialValues.config.ecr.accessKeyId = '';
@@ -194,13 +202,13 @@ function EcrIntegrationForm({
                             type="text"
                             id="config.name"
                             value={values.config.name}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
                     </FormLabelGroup>
                     <FormLabelGroup
-                        label="Registry ID"
+                        label="12-digit AWS ID"
                         isRequired
                         fieldId="config.ecr.registryId"
                         touched={touched}
@@ -210,7 +218,7 @@ function EcrIntegrationForm({
                             type="text"
                             id="config.ecr.registryId"
                             value={values.config.ecr.registryId}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -230,7 +238,7 @@ function EcrIntegrationForm({
                             type="text"
                             id="config.ecr.endpoint"
                             value={values.config.ecr.endpoint}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable || values.config.ecr.useAssumeRole}
                         />
@@ -247,7 +255,7 @@ function EcrIntegrationForm({
                             type="text"
                             id="config.ecr.region"
                             value={values.config.ecr.region}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -262,23 +270,29 @@ function EcrIntegrationForm({
                                 label="Update stored credentials"
                                 id="updatePassword"
                                 isChecked={values.updatePassword}
-                                onChange={onUpdateCredentialsChange}
+                                onChange={(event, value) => onUpdateCredentialsChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             />
                         </FormLabelGroup>
                     )}
-                    <FormLabelGroup fieldId="config.ecr.useIam" touched={touched} errors={errors}>
-                        <Checkbox
-                            label="Use container IAM role"
-                            id="config.ecr.useIam"
-                            aria-label="use container iam role"
-                            isChecked={values.config.ecr.useIam}
-                            onChange={onChange}
-                            onBlur={handleBlur}
-                            isDisabled={!isEditable}
-                        />
-                    </FormLabelGroup>
+                    {canUseContainerIamRoleForEcr && (
+                        <FormLabelGroup
+                            fieldId="config.ecr.useIam"
+                            touched={touched}
+                            errors={errors}
+                        >
+                            <Checkbox
+                                label="Use container IAM role"
+                                id="config.ecr.useIam"
+                                aria-label="use container iam role"
+                                isChecked={values.config.ecr.useIam}
+                                onChange={(event, value) => onChange(value, event)}
+                                onBlur={handleBlur}
+                                isDisabled={!isEditable}
+                            />
+                        </FormLabelGroup>
+                    )}
                     {!values.config.ecr.useIam && (
                         <>
                             <FormLabelGroup
@@ -293,7 +307,7 @@ function EcrIntegrationForm({
                                     type="password"
                                     id="config.ecr.accessKeyId"
                                     value={values.config.ecr.accessKeyId}
-                                    onChange={onChange}
+                                    onChange={(event, value) => onChange(value, event)}
                                     onBlur={handleBlur}
                                     isDisabled={!isEditable || !values.updatePassword}
                                 />
@@ -310,7 +324,7 @@ function EcrIntegrationForm({
                                     type="password"
                                     id="config.ecr.secretAccessKey"
                                     value={values.config.ecr.secretAccessKey}
-                                    onChange={onChange}
+                                    onChange={(event, value) => onChange(value, event)}
                                     onBlur={handleBlur}
                                     isDisabled={!isEditable || !values.updatePassword}
                                 />
@@ -332,7 +346,7 @@ function EcrIntegrationForm({
                             id="config.ecr.useAssumeRole"
                             aria-label="use assume role"
                             isChecked={values.config.ecr.useAssumeRole}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable || values.config.ecr.endpoint !== ''}
                         />
@@ -349,7 +363,7 @@ function EcrIntegrationForm({
                                     type="text"
                                     id="config.ecr.assumeRoleId"
                                     value={values.config.ecr.assumeRoleId}
-                                    onChange={onChange}
+                                    onChange={(event, value) => onChange(value, event)}
                                     onBlur={handleBlur}
                                     isDisabled={!isEditable}
                                 />
@@ -364,7 +378,7 @@ function EcrIntegrationForm({
                                     type="text"
                                     id="config.ecr.assumeRoleExternalId"
                                     value={values.config.ecr.assumeRoleExternalId}
-                                    onChange={onChange}
+                                    onChange={(event, value) => onChange(value, event)}
                                     onBlur={handleBlur}
                                     isDisabled={!isEditable}
                                 />
@@ -381,7 +395,7 @@ function EcrIntegrationForm({
                             id="config.skipTestIntegration"
                             aria-label="skip test integration"
                             isChecked={values.config.skipTestIntegration}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />

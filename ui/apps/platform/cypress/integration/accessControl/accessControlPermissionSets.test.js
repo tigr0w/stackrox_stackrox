@@ -1,5 +1,5 @@
 import withAuth from '../../helpers/basicAuth';
-import { hasFeatureFlag } from '../../helpers/features';
+import { assertCannotFindThePage } from '../../helpers/visit';
 
 import {
     assertAccessControlEntityDoesNotExist,
@@ -16,7 +16,7 @@ const defaultNames = ['Admin', 'Analyst', 'Continuous Integration', 'None', 'Sen
 describe('Access Control Permission sets', () => {
     withAuth();
 
-    it('displays alert if no permission', () => {
+    it('cannot find the page if no permission', () => {
         const staticResponseForPermissions = {
             fixture: 'auth/mypermissionsMinimalAccess.json',
         };
@@ -25,10 +25,7 @@ describe('Access Control Permission sets', () => {
             staticResponseForPermissions
         );
 
-        cy.get(selectors.alertTitle).should(
-            'contain', // not have.text because it contains "Info alert:" for screen reader
-            'You do not have permission to view permission sets.'
-        );
+        assertCannotFindThePage();
     });
 
     it('list has heading, button, and table head cells', () => {
@@ -42,7 +39,7 @@ describe('Access Control Permission sets', () => {
         cy.get('th:contains("Origin")');
         cy.get('th:contains("Description")');
         cy.get('th:contains("Roles")');
-        cy.get('th[aria-label="Row actions"]');
+        cy.get(`th:has('span.pf-v5-screen-reader:contains("Row actions")')`);
     });
 
     it('list has default names', () => {
@@ -59,8 +56,8 @@ describe('Access Control Permission sets', () => {
         const entityName = 'Admin';
         clickEntityNameInTable(entitiesKey, entityName);
 
-        cy.get('h2').should('have.text', entityName);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("${entityName}")`);
+        cy.get('h1').should('have.text', entityName);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("${entityName}")`);
 
         cy.get(selectors.form.notEditableLabel).should('exist');
         cy.get(selectors.form.editButton).should('not.exist');
@@ -79,13 +76,7 @@ describe('Access Control Permission sets', () => {
     });
 
     it('direct link to default Admin has all read and write access', () => {
-        /*
-         * TODO: ROX-13585 - remove the pre-postgres constants once the migration to postgres
-         * is completed and the support for BoltDB, RocksDB and Bleve is dropped.
-         */
-        const targetID = hasFeatureFlag('ROX_POSTGRES_DATASTORE')
-            ? 'ffffffff-ffff-fff4-f5ff-ffffffffffff'
-            : 'io.stackrox.authz.permissionset.admin';
+        const targetID = 'ffffffff-ffff-fff4-f5ff-ffffffffffff';
         visitAccessControlEntity(entitiesKey, targetID);
 
         cy.get(selectors.form.inputName).should('have.value', 'Admin');
@@ -124,13 +115,7 @@ describe('Access Control Permission sets', () => {
     });
 
     it('direct link to default Analyst has all (but Administration) read and no write access', () => {
-        /*
-         * TODO: ROX-13585 - remove the pre-postgres constants once the migration to postgres
-         * is completed and the support for BoltDB, RocksDB and Bleve is dropped.
-         */
-        const targetID = hasFeatureFlag('ROX_POSTGRES_DATASTORE')
-            ? 'ffffffff-ffff-fff4-f5ff-fffffffffffe'
-            : 'io.stackrox.authz.permissionset.analyst';
+        const targetID = 'ffffffff-ffff-fff4-f5ff-fffffffffffe';
         visitAccessControlEntity(entitiesKey, targetID);
 
         cy.get(selectors.form.inputName).should('have.value', 'Analyst');
@@ -181,13 +166,7 @@ describe('Access Control Permission sets', () => {
     });
 
     it('direct link to default Continuous Integration has limited read and write accesss', () => {
-        /*
-         * TODO: ROX-13585 - remove the pre-postgres constants once the migration to postgres
-         * is completed and the support for BoltDB, RocksDB and Bleve is dropped.
-         */
-        const targetID = hasFeatureFlag('ROX_POSTGRES_DATASTORE')
-            ? 'ffffffff-ffff-fff4-f5ff-fffffffffffd'
-            : 'io.stackrox.authz.permissionset.continuousintegration';
+        const targetID = 'ffffffff-ffff-fff4-f5ff-fffffffffffd';
         visitAccessControlEntity(entitiesKey, targetID);
 
         cy.get(selectors.form.inputName).should('have.value', 'Continuous Integration');
@@ -258,13 +237,7 @@ describe('Access Control Permission sets', () => {
     });
 
     it('direct link to default None has no read nor write access', () => {
-        /*
-         * TODO: ROX-13585 - remove the pre-postgres constants once the migration to postgres
-         * is completed and the support for BoltDB, RocksDB and Bleve is dropped.
-         */
-        const targetID = hasFeatureFlag('ROX_POSTGRES_DATASTORE')
-            ? 'ffffffff-ffff-fff4-f5ff-fffffffffffc'
-            : 'io.stackrox.authz.permissionset.none';
+        const targetID = 'ffffffff-ffff-fff4-f5ff-fffffffffffc';
         visitAccessControlEntity(entitiesKey, targetID);
 
         cy.get(selectors.form.inputName).should('have.value', 'None');
@@ -300,13 +273,7 @@ describe('Access Control Permission sets', () => {
     });
 
     it('direct link to default Sensor Creator has limited read and write access', () => {
-        /*
-         * TODO: ROX-13585 - remove the pre-postgres constants once the migration to postgres
-         * is completed and the support for BoltDB, RocksDB and Bleve is dropped.
-         */
-        const targetID = hasFeatureFlag('ROX_POSTGRES_DATASTORE')
-            ? 'ffffffff-ffff-fff4-f5ff-fffffffffffa'
-            : 'io.stackrox.authz.permissionset.sensorcreator';
+        const targetID = 'ffffffff-ffff-fff4-f5ff-fffffffffffa';
         visitAccessControlEntity(entitiesKey, targetID);
 
         cy.get(selectors.form.inputName).should('have.value', 'Sensor Creator');

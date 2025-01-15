@@ -3,35 +3,30 @@ package search
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/policycategoryedge/index"
 	"github.com/stackrox/rox/central/policycategoryedge/store"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	pkgPostgres "github.com/stackrox/rox/pkg/search/scoped/postgres"
 	"github.com/stackrox/rox/pkg/search/sortfields"
 )
 
-// New returns a new instance of Searcher for the given storage and indexer.
-func New(storage store.Store, indexer index.Indexer) Searcher {
+// New returns a new instance of Searcher for the given storage.
+func New(storage store.Store) Searcher {
 	return &searcherImpl{
 		storage:  storage,
-		indexer:  indexer,
-		searcher: formatSearcherV2(indexer),
+		searcher: formatSearcherV2(storage),
 	}
 }
 
-func formatSearcherV2(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher {
-	safeSearcher := blevesearch.WrapUnsafeSearcherAsSearcher(unsafeSearcher)
-	scopedSafeSearcher := pkgPostgres.WithScoping(safeSearcher)
+func formatSearcherV2(searcher search.Searcher) search.Searcher {
+	scopedSafeSearcher := pkgPostgres.WithScoping(searcher)
 	return sortfields.TransformSortFields(scopedSafeSearcher, schema.CollectionsSchema.OptionsMap)
 }
 
 type searcherImpl struct {
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 }
 
@@ -54,7 +49,7 @@ func (ds *searcherImpl) Count(ctx context.Context, q *v1.Query) (count int, err 
 	return ds.searcher.Count(ctx, q)
 }
 
-// SearchRawEdges retrieves edges from the indexer and storage
+// SearchRawEdges retrieves edges from the storage.
 func (ds *searcherImpl) SearchRawEdges(ctx context.Context, q *v1.Query) ([]*storage.PolicyCategoryEdge, error) {
 	return ds.searchPolicyCategoryEdges(ctx, q)
 }

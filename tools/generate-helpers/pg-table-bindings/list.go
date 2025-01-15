@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gogo/protobuf/proto"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 )
 
@@ -16,28 +16,43 @@ var typeRegistry = make(map[string]string)
 
 func init() {
 	// KEEP THE FOLLOWING LIST SORTED IN LEXICOGRAPHIC ORDER (case-sensitive).
-	for s, r := range map[proto.Message]permissions.ResourceHandle{
+	for s, r := range map[protocompat.Message]permissions.ResourceHandle{
 		&storage.ActiveComponent{}:                              resources.Deployment,
+		&storage.AdministrationEvent{}:                          resources.Administration,
+		&storage.AuthMachineToMachineConfig{}:                   resources.Access,
 		&storage.AuthProvider{}:                                 resources.Access,
 		&storage.Blob{}:                                         resources.Administration,
+		&storage.CloudSource{}:                                  resources.Integration,
 		&storage.ClusterHealthStatus{}:                          resources.Cluster,
 		&storage.ClusterCVE{}:                                   resources.Cluster,
 		&storage.ClusterCVEEdge{}:                               resources.Cluster,
+		&storage.ComplianceConfig{}:                             resources.Compliance,
 		&storage.ComplianceControlResult{}:                      resources.Compliance,
 		&storage.ComplianceDomain{}:                             resources.Compliance,
-		&storage.ComplianceStrings{}:                            resources.Compliance,
-		&storage.ComplianceConfig{}:                             resources.Compliance,
+		&storage.ComplianceIntegration{}:                        resources.Compliance,
+		&storage.ComplianceOperatorBenchmarkV2{}:                resources.Compliance,
 		&storage.ComplianceOperatorCheckResult{}:                resources.ComplianceOperator,
+		&storage.ComplianceOperatorCheckResultV2{}:              resources.Compliance,
+		&storage.ComplianceOperatorClusterScanConfigStatus{}:    resources.Compliance,
 		&storage.ComplianceOperatorProfile{}:                    resources.ComplianceOperator,
+		&storage.ComplianceOperatorProfileV2{}:                  resources.Compliance,
+		&storage.ComplianceOperatorRemediationV2{}:              resources.Compliance,
+		&storage.ComplianceOperatorReportSnapshotV2{}:           resources.Compliance,
 		&storage.ComplianceOperatorRule{}:                       resources.ComplianceOperator,
+		&storage.ComplianceOperatorRuleV2{}:                     resources.Compliance,
 		&storage.ComplianceOperatorScan{}:                       resources.ComplianceOperator,
+		&storage.ComplianceOperatorScanConfigurationV2{}:        resources.Compliance,
+		&storage.ComplianceOperatorScanV2{}:                     resources.Compliance,
 		&storage.ComplianceOperatorScanSettingBinding{}:         resources.ComplianceOperator,
+		&storage.ComplianceOperatorSuiteV2{}:                    resources.Compliance,
 		&storage.ComplianceRunMetadata{}:                        resources.Compliance,
 		&storage.ComplianceRunResults{}:                         resources.Compliance,
+		&storage.ComplianceStrings{}:                            resources.Compliance,
 		&storage.ComponentCVEEdge{}:                             resources.Image,
 		&storage.Config{}:                                       resources.Administration,
 		&storage.DeclarativeConfigHealth{}:                      resources.Integration,
 		&storage.DelegatedRegistryConfig{}:                      resources.Administration,
+		&storage.DiscoveredCluster{}:                            resources.Administration,
 		&storage.ExternalBackup{}:                               resources.Integration,
 		&storage.Group{}:                                        resources.Access,
 		&storage.Hash{}:                                         resources.Hash,
@@ -63,31 +78,33 @@ func init() {
 		&storage.NodeCVE{}:                                      resources.Node,
 		&storage.NotificationSchedule{}:                         resources.Notifications,
 		&storage.Notifier{}:                                     resources.Integration,
+		&storage.NotifierEncConfig{}:                            resources.InstallationInfo,
 		&storage.PermissionSet{}:                                resources.Access,
 		&storage.Pod{}:                                          resources.Deployment,
-		// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-		&storage.Policy{}:                        resources.Policy,
-		&storage.PolicyCategory{}:                resources.Policy,
-		&storage.PolicyCategoryEdge{}:            resources.Policy,
-		&storage.ProcessBaselineResults{}:        resources.DeploymentExtension,
-		&storage.ProcessBaseline{}:               resources.DeploymentExtension,
-		&storage.ProcessIndicator{}:              resources.DeploymentExtension,
-		&storage.ProcessListeningOnPortStorage{}: resources.DeploymentExtension,
-		&storage.ResourceCollection{}:            resources.WorkflowAdministration,
-		// TODO: ROX-13888 Replace VulnerabilityReports with WorkflowAdministration.
-		&storage.ReportConfiguration{}:    resources.VulnerabilityReports,
-		&storage.Risk{}:                   resources.DeploymentExtension,
-		&storage.Role{}:                   resources.Access,
-		&storage.SensorUpgradeConfig{}:    resources.Administration,
-		&storage.ServiceIdentity{}:        resources.Administration,
-		&storage.SignatureIntegration{}:   resources.Integration,
-		&storage.SimpleAccessScope{}:      resources.Access,
-		&storage.StoredLicenseKey{}:       resources.Access,
-		&storage.TelemetryConfiguration{}: resources.Administration,
-		&storage.TokenMetadata{}:          resources.Integration,
-		&storage.User{}:                   resources.Access,
+		&storage.Policy{}:                                       resources.WorkflowAdministration,
+		&storage.PolicyCategory{}:                               resources.WorkflowAdministration,
+		&storage.PolicyCategoryEdge{}:                           resources.WorkflowAdministration,
+		&storage.ProcessBaselineResults{}:                       resources.DeploymentExtension,
+		&storage.ProcessBaseline{}:                              resources.DeploymentExtension,
+		&storage.ProcessIndicator{}:                             resources.DeploymentExtension,
+		&storage.ProcessListeningOnPortStorage{}:                resources.DeploymentExtension,
+		&storage.ReportConfiguration{}:                          resources.WorkflowAdministration,
+		&storage.ReportSnapshot{}:                               resources.WorkflowAdministration,
+		&storage.ResourceCollection{}:                           resources.WorkflowAdministration,
+		&storage.Risk{}:                                         resources.DeploymentExtension,
+		&storage.Role{}:                                         resources.Access,
+		&storage.ComplianceOperatorScanSettingBindingV2{}:       resources.Compliance,
+		&storage.SecuredUnits{}:                                 resources.Administration,
+		&storage.SensorUpgradeConfig{}:                          resources.Administration,
+		&storage.ServiceIdentity{}:                              resources.Administration,
+		&storage.SignatureIntegration{}:                         resources.Integration,
+		&storage.SimpleAccessScope{}:                            resources.Access,
+		&storage.SystemInfo{}:                                   resources.Administration,
+		&storage.TelemetryConfiguration{}:                       resources.Administration,
+		&storage.TokenMetadata{}:                                resources.Integration,
+		&storage.User{}:                                         resources.Access,
 		// Tests
-		&storage.TestMultiKeyStruct{}:      resources.Namespace,
+		&storage.TestStruct{}:              resources.Namespace,
 		&storage.TestSingleKeyStruct{}:     resources.Namespace,
 		&storage.TestSingleUUIDKeyStruct{}: resources.Namespace,
 		&storage.TestGrandparent{}:         resources.Namespace,

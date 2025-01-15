@@ -27,6 +27,12 @@
 #confirmNewClusterName: null
 #
 ## Custom labels associated with a secured cluster in StackRox.
+##
+## For example:
+##
+## clusterLabels:
+##   someKey: someStringValue
+##
 #clusterLabels: {}
 #
 ## The gRPC endpoint for accessing StackRox Central.
@@ -102,7 +108,7 @@
 #    registry: null  # if set to null, use `image.registry`
 #    name: main      # the final image name is composed of the registry and the name, plus the tag below
 #    tag: null       # should be left as null - will get picked up from the Chart version.
-#    fullRef: null   # you can set a full image reference such as stackrox.io/main:1.2.3.4 here, but this is not
+#    fullRef: null   # you can set a full image reference such as quay.io/stackrox-io/main:1.2.3.4 here, but this is not
 #                    # recommended.
 #    # The default pull policy for this image. Can be overridden for each individual service.
 #    pullPolicy: IfNotPresent
@@ -148,6 +154,41 @@
 #      key: infra
 #      value: reserved
 #
+#   If scheduling needs specific affinities, you can specify the corresponding affinities here.
+#   affinity:
+#     nodeAffinity:
+#       preferredDuringSchedulingIgnoredDuringExecution:
+#         # Sensor is single-homed, so avoid preemptible nodes.
+#         - weight: 100
+#           preference:
+#             matchExpressions:
+#               - key: cloud.google.com/gke-preemptible
+#                 operator: NotIn
+#                 values:
+#                 - "true"
+#         - weight: 50
+#           preference:
+#             matchExpressions:
+#             - key: node-role.kubernetes.io/infra
+#               operator: Exists
+#         - weight: 25
+#           preference:
+#             matchExpressions:
+#             - key: node-role.kubernetes.io/compute
+#               operator: Exists
+#         # From v1.20 node-role.kubernetes.io/control-plane replaces node-role.kubernetes.io/master (removed in
+#         # v1.25). We apply both because our goal is not to run pods on control plane nodes for any version of k8s.
+#         - weight: 100
+#           preference:
+#             matchExpressions:
+#             - key: node-role.kubernetes.io/master
+#               operator: DoesNotExist
+#         - weight: 100
+#           preference:
+#             matchExpressions:
+#             - key: node-role.kubernetes.io/control-plane
+#               operator: DoesNotExist
+#
 #  # Address of the Sensor endpoint including port number. No trailing slash.
 #  # Rarely needs to be changed.
 #  endpoint: sensor.stackrox.svc:443
@@ -183,6 +224,42 @@
 #    - effect: NoExecute
 #      key: infra
 #      value: reserved
+#
+#   If scheduling needs specific affinities, you can specify the corresponding affinities here.
+#   affinity:
+#     nodeAffinity:
+#       preferredDuringSchedulingIgnoredDuringExecution:
+#         # node-role.kubernetes.io/master is replaced by node-role.kubernetes.io/control-plane from certain version
+#         # of k8s. We apply both to be compatible with any k8s version.
+#         - weight: 50
+#           preference:
+#             matchExpressions:
+#             - key: node-role.kubernetes.io/master
+#               operator: Exists
+#         - weight: 50
+#           preference:
+#             matchExpressions:
+#             - key: node-role.kubernetes.io/control-plane
+#               operator: Exists
+#     podAntiAffinity:
+#       preferredDuringSchedulingIgnoredDuringExecution:
+#         - weight: 60
+#           podAffinityTerm:
+#             topologyKey: "kubernetes.io/hostname"
+#             labelSelector:
+#               matchLabels:
+#                 app: admission-control
+#
+#  # If the admission controller webhook needs a specific namespaceSelector, you can specify it here.
+#  namespaceSelector:
+#    matchExpressions:
+#    - key: namespace.metadata.stackrox.io/name
+#      operator: NotIn
+#      values:
+#        - {{ ._rox._namespace }}
+#        - kube-system
+#        - kube-public
+#        - istio-system
 #
 #  # Dynamic part of the configuration which is retrieved from Central and can be modified through
 #  # the frontend.
@@ -234,24 +311,14 @@
 #collector:
 #
 #  # Collection method to use. Can be one of:
-#  #   - EBPF
 #  #   - CORE_BPF
 #  #   - NO_COLLECTION
-#  # Note that CORE_BPF method is in Tech Preview stage.
-#  collectionMethod: EBPF
+#  collectionMethod: CORE_BPF
 #
 #  # Configure usage of taint tolerations. If `false`, tolerations are applied to collector,
 #  # and the collector pods can schedule onto all nodes with taints. If `true`, no tolerations
 #  # are applied, and the collector pods won't scheduled onto nodes with taints.
 #  disableTaintTolerations: false
-#
-#  # Configure whether slim Collector images should be used or not. Using slim Collector images
-#  # requires Central to provide the matching kernel module or eBPF probe. If you are running
-#  # the StackRox Kubernetes Security Platform in offline mode, you must download a kernel support
-#  # package from [stackrox.io](https://install.stackrox.io/collector/support-packages/index.html)
-#  # and upload it to Central for slim Collectors to function. Otherwise, you must ensure that
-#  # Central can access the online probe repository hosted at https://collector-modules.stackrox.io/.
-#  slimMode: false
 #
 #  # Kubernetes image pull policy for Collector.
 #  imagePullPolicy: IfNotPresent
@@ -264,6 +331,10 @@
 #    limits:
 #      memory: "1Gi"
 #      cpu: "750m"
+#
+#   If the nodes selected by the node selector are tainted, you can specify the corresponding taint tolerations here.
+#   tolerations:
+#     - operator: "Exists"
 #
 #  complianceImagePullPolicy: IfNotPresent
 #
@@ -395,3 +466,8 @@
 #    # can be used in conjunction with both data obtained from the API server, or data set
 #    # via `overrideAPIResources`.
 #    extraAPIResources: []
+#
+#monitoring:
+#  # Enables integration with OpenShift platform monitoring.
+#  openshift:
+#    enabled: true

@@ -1,4 +1,4 @@
-name: Prepare manual upgrade test
+name: "RELEASE: Prepare manual upgrade test"
 on:
   workflow_dispatch:
     inputs:
@@ -86,15 +86,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
       - uses: stackrox/actions/infra/install-infractl@v1
-      - uses: 'google-github-actions/auth@v1'
+      - uses: "google-github-actions/auth@v2"
         with:
-          credentials_json: '${{ secrets.GCP_RELEASE_AUTOMATION_SA }}'
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v1'
+          credentials_json: "${{ secrets.GCP_RELEASE_AUTOMATION_SA }}"
+      - name: "Set up Cloud SDK"
+        uses: "google-github-actions/setup-gcloud@v2"
         with:
           install_components: "gke-gcloud-auth-plugin"
       - name: Prepare clusters for upgrade test
@@ -113,11 +113,13 @@ jobs:
       - name: Post to Slack about cluster creation
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        uses: slackapi/slack-github-action@v1.23.0
+        uses: slackapi/slack-github-action@v1.27.0
         with:
           channel-id: ${{ needs.properties.outputs.slack-channel }}
           payload: >-
             {
+              "text": "Upgrade clusters have been prepared for ${{ inputs.milestone }} milestone. Consult the upgrade test documentation for next steps.",
+
               "blocks": [
                 {
                   "type": "section",
@@ -148,11 +150,13 @@ jobs:
       - name: Post to Slack
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        uses: slackapi/slack-github-action@v1.23.0
+        uses: slackapi/slack-github-action@v1.27.0
         with:
           channel-id: ${{ needs.properties.outputs.slack-channel }}
           payload: >-
             {
+              "text": "Couldn't create upgrade clusters for ${{ inputs.milestone }} milestone. Investigate the output of the <${{github.server_url}}/${{github.repository}}/actions/runs/${{github.run_id}}|${{github.workflow}}> workflow run.",
+
               "blocks": [
                 {
                   "type": "section",

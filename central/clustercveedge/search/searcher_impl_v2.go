@@ -3,39 +3,29 @@ package search
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/clustercveedge/index"
 	"github.com/stackrox/rox/central/clustercveedge/store"
 	"github.com/stackrox/rox/central/cve/edgefields"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	"github.com/stackrox/rox/pkg/search/scoped/postgres"
 )
 
-var (
-	sacHelper = sac.ForResource(resources.Cluster).MustCreatePgSearchHelper()
-)
-
-// NewV2 returns a new instance of Searcher for the given storage and indexer.
-func NewV2(storage store.Store, indexer index.Indexer) Searcher {
+// NewV2 returns a new instance of Searcher for the given store.
+func NewV2(storage store.Store) Searcher {
 	return &searcherImplV2{
 		storage:  storage,
-		indexer:  indexer,
-		searcher: formatSearcherV2(indexer),
+		searcher: formatSearcherV2(storage),
 	}
 }
 
-func formatSearcherV2(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher {
-	scopedSearcher := postgres.WithScoping(sacHelper.FilteredSearcher(unsafeSearcher))
+func formatSearcherV2(searcher search.Searcher) search.Searcher {
+	scopedSearcher := postgres.WithScoping(searcher)
 	return edgefields.TransformFixableFields(scopedSearcher)
 }
 
 type searcherImplV2 struct {
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 }
 
@@ -58,7 +48,7 @@ func (ds *searcherImplV2) Count(ctx context.Context, q *v1.Query) (count int, er
 	return ds.searcher.Count(ctx, q)
 }
 
-// SearchRawEdges retrieves edges from the indexer and storage
+// SearchRawEdges retrieves edges from the storage.
 func (ds *searcherImplV2) SearchRawEdges(ctx context.Context, q *v1.Query) ([]*storage.ClusterCVEEdge, error) {
 	return ds.searchImageComponentEdges(ctx, q)
 }

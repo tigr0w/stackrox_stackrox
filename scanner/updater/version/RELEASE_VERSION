@@ -1,0 +1,24 @@
+# This file serves as a list of StackRox versions.
+# As Scanner V4 and StackRox versions are aligned, the vulnerability updaters are responsible for updating vulnerability data across all versions listed in this file.
+# Subsequently, this updated data is uploaded to Google Cloud Storage.
+# For each individual version of Scanner V4's vulnerability updater, corresponding vulnerability data is collected and then seamlessly uploaded to Google Cloud Storage.
+# This process ensures that each version's vulnerability data is accurately captured and maintained in accordance with its respective version.
+4.4.0
+4.4.1
+4.4.2
+4.4.3
+4.4.4
+4.4.5
+4.4.6
+4.4.7
+4.4.8
+4.5.0
+4.5.1
+4.5.2
+4.5.3
+4.5.4
+4.5.5
+4.5.6
+4.6.0
+4.6.1
+4.6.2

@@ -1,43 +1,43 @@
 import * as api from '../../constants/apiEndpoints';
-import { selectors } from '../../constants/VulnManagementPage';
 import withAuth from '../../helpers/basicAuth';
+import { hasFeatureFlag, hasOrchestratorFlavor } from '../../helpers/features';
 import {
-    interactAndWaitForVulnerabilityManagementEntities,
     interactAndWaitForVulnerabilityManagementEntity,
     interactAndWaitForVulnerabilityManagementSecondaryEntities,
     visitVulnerabilityManagementEntities,
-} from '../../helpers/vulnmanagement/entities';
-import { hasFeatureFlag, hasOrchestratorFlavor } from '../../helpers/features';
+} from './VulnerabilityManagement.helpers';
+import { selectors } from './VulnerabilityManagement.selectors';
 
 describe('Entities single views', () => {
     withAuth();
 
     // Some tests might fail in local deployment.
 
-    it('related entities tile links should unset search params upon navigation', function () {
+    // TODO skip pending more robust criterion than deployment count
+    // deploymentTileLink selector is obsolete
+    it.skip('related entities tile links should unset search params upon navigation', function () {
         if (hasOrchestratorFlavor('openshift')) {
             this.skip();
         }
 
         const entitiesKey1 = 'clusters';
-        const usingVMUpdates = hasFeatureFlag('ROX_POSTGRES_DATASTORE');
 
         visitVulnerabilityManagementEntities(entitiesKey1);
 
         // Specify td elements for Image CVEs instead of Node CVEs or Platform CVEs.
         interactAndWaitForVulnerabilityManagementSecondaryEntities(
             () => {
-                cy.get(`.rt-td:nth-child(3) ${selectors.fixableCvesLink}:eq(0)`).click();
+                cy.get(`.rt-td:nth-child(3) [data-testid="fixableCvesLink"]:eq(0)`).click();
             },
             entitiesKey1,
-            usingVMUpdates ? 'image-cves' : 'cves'
+            'image-cves'
         );
 
         interactAndWaitForVulnerabilityManagementEntity(() => {
             cy.get(selectors.backButton).click();
         }, entitiesKey1);
 
-        cy.get(`${selectors.deploymentTileLink} ${selectors.tileLinkSuperText}`)
+        cy.get(`${selectors.deploymentTileLink} [data-testid="tileLinkSuperText"]`)
             .invoke('text')
             .then((numDeployments) => {
                 interactAndWaitForVulnerabilityManagementSecondaryEntities(
@@ -54,153 +54,8 @@ describe('Entities single views', () => {
             });
     });
 
-    // ROX-15888 ROX-15985: skip until decision whether valid to assume high severity violations.
-    it.skip('related entities table header should not say "0 entities" or have "page 0 of 0" if there are rows in the table', function () {
-        if (hasOrchestratorFlavor('openshift')) {
-            this.skip();
-        }
-
-        const entitiesKey1 = 'policies';
-        const entitiesKey2 = 'deployments';
-        visitVulnerabilityManagementEntities(entitiesKey1);
-
-        interactAndWaitForVulnerabilityManagementSecondaryEntities(
-            () => {
-                cy.get(
-                    `${selectors.tableBodyRows} ${selectors.failingDeploymentCountLink}:eq(0)`
-                ).click();
-            },
-            entitiesKey1,
-            entitiesKey2
-        );
-
-        cy.get(selectors.sidePanelTableBodyRows).then((value) => {
-            const { length: numRows } = value;
-            if (numRows) {
-                // TODO positive tests for the numbers are more robust, pardon pun.
-                cy.get(selectors.entityRowHeader)
-                    .invoke('text')
-                    .then((headerText) => {
-                        expect(headerText).not.to.equal('0 deployments');
-                    });
-
-                cy.get(`${selectors.sidePanel} ${selectors.paginationHeader}`)
-                    .invoke('text')
-                    .then((paginationText) => {
-                        expect(paginationText).not.to.contain('of 0');
-                    });
-            }
-        });
-    });
-
-    // ROX-15985: skip until decision whether valid to assume high severity violations.
-    // TODO if the test survives, rewrite as described below.
-    it.skip('should scope deployment data based on selected policy from table row click', function () {
-        if (hasOrchestratorFlavor('openshift')) {
-            this.skip();
-        }
-
-        const entitiesKey1 = 'policies';
-        const entitiesKey2 = 'deployments';
-        // policy -> related deployments list should scope policy status column by the policy x deployment row
-        // in both side panel and entity page
-        visitVulnerabilityManagementEntities(entitiesKey1);
-
-        // TODO Replace first row and conditional assertion with first row which has pass?
-        // That is, rewrite this test as a counterpart to the following test?
-        cy.get(`${selectors.tableBodyRows}:eq(0) ${selectors.statusChips}`)
-            .invoke('text')
-            .then((firstPolicyStatus) => {
-                interactAndWaitForVulnerabilityManagementEntity(() => {
-                    cy.get(`${selectors.tableBodyRows}:eq(0)`).click();
-                }, entitiesKey1);
-
-                cy.get(`${selectors.sidePanel} ${selectors.statusChips}:eq(0)`)
-                    .invoke('text')
-                    .then((selectedPolicyStatus) => {
-                        expect(firstPolicyStatus).to.equal(selectedPolicyStatus);
-                    });
-
-                if (firstPolicyStatus === 'pass') {
-                    cy.get(
-                        `${selectors.emptyFindingsSection}:contains("No deployments have failed across this policy")`
-                    );
-
-                    interactAndWaitForVulnerabilityManagementSecondaryEntities(
-                        () => {
-                            cy.get(`${selectors.deploymentTileLink}:eq(0)`).click();
-                        },
-                        entitiesKey1,
-                        entitiesKey2
-                    );
-
-                    cy.get(
-                        `${selectors.sidePanel} ${selectors.statusChips}:contains('pass')`
-                    ).should('exist');
-                    cy.get(
-                        `${selectors.sidePanel} ${selectors.statusChips}:contains('fail')`
-                    ).should('not.exist');
-                }
-            });
-    });
-
-    // ROX-15889 ROX-15985: skip until decision whether valid to assume high severity violations.
-    it.skip('should scope deployment data based on selected policy from table count link click', function () {
-        if (hasOrchestratorFlavor('openshift')) {
-            this.skip();
-        }
-
-        const entitiesKey1 = 'policies';
-        const entitiesKey2 = 'deployments';
-        visitVulnerabilityManagementEntities(entitiesKey1);
-
-        // Assume at least one policy has failing deployments.
-        interactAndWaitForVulnerabilityManagementSecondaryEntities(
-            () => {
-                cy.get(`${selectors.failingDeploymentCountLink}:eq(0)`).click();
-            },
-            entitiesKey1,
-            entitiesKey2
-        );
-
-        cy.get(`${selectors.sidePanel} ${selectors.statusChips}:contains('fail')`).should('exist');
-        cy.get(`${selectors.sidePanel} ${selectors.statusChips}:contains('pass')`).should(
-            'not.exist'
-        );
-    });
-
-    // ROX-15934 ROX-15985: skip until decision whether valid to assume high severity violations.
-    it.skip('should scope deployment data based on selected policy from entity page tab sublist', function () {
-        if (hasOrchestratorFlavor('openshift')) {
-            this.skip();
-        }
-
-        const entitiesKey1 = 'policies';
-        const entitiesKey2 = 'deployments';
-        visitVulnerabilityManagementEntities(entitiesKey1);
-
-        interactAndWaitForVulnerabilityManagementSecondaryEntities(
-            () => {
-                cy.get(`${selectors.failingDeploymentCountLink}:eq(0)`).click();
-            },
-            entitiesKey1,
-            entitiesKey2
-        );
-
-        cy.get(selectors.sidePanelExternalLinkButton).click();
-
-        // Entity single page, not side panel.
-        cy.get(`${selectors.tableBodyRows} ${selectors.statusChips}:contains('fail')`).should(
-            'exist'
-        );
-        cy.get(`${selectors.tableBodyRows} ${selectors.statusChips}:contains('pass')`).should(
-            'not.exist'
-        );
-    });
-
     it('should show a CVE description in overview when coming from cve list', () => {
-        const usingVMUpdates = hasFeatureFlag('ROX_POSTGRES_DATASTORE');
-        const entitiesKey = usingVMUpdates ? 'image-cves' : 'cves';
+        const entitiesKey = 'image-cves';
         visitVulnerabilityManagementEntities(entitiesKey);
 
         cy.get(`${selectors.tableBodyRowGroups}:eq(0) ${selectors.cveDescription}`)
@@ -210,7 +65,7 @@ describe('Entities single views', () => {
                     cy.get(`${selectors.tableBodyRows}:eq(0)`).click();
                 }, entitiesKey);
 
-                cy.get(`${selectors.entityOverview} ${selectors.metadataDescription}`)
+                cy.get(`[data-testid="entity-overview"] ${selectors.metadataDescription}`)
                     .invoke('text')
                     .then((descriptionInSidePanel) => {
                         expect(descriptionInSidePanel).to.equal(descriptionInList);
@@ -218,52 +73,26 @@ describe('Entities single views', () => {
             });
     });
 
-    it('should not filter cluster entity page regardless of entity context', function () {
-        if (hasOrchestratorFlavor('openshift')) {
-            this.skip();
-        }
-
-        const entitiesKey = 'namespaces';
-        visitVulnerabilityManagementEntities(entitiesKey);
-
-        // Sort descending by Risk Priority, because on OpenShift,
-        // all namespaces on the first page might have deployments.
-        const thSelector = '.rt-th:contains("Risk Priority")';
-        interactAndWaitForVulnerabilityManagementEntities(() => {
-            cy.get(thSelector).click();
-        }, entitiesKey);
-
-        interactAndWaitForVulnerabilityManagementEntity(() => {
-            cy.get(`${selectors.tableRows}:contains("No deployments"):eq(0)`).click();
-        }, entitiesKey);
-
-        interactAndWaitForVulnerabilityManagementEntity(() => {
-            cy.get(`${selectors.metadataClusterValue} a`).click();
-        }, 'clusters');
-
-        cy.get(`${selectors.sidePanel} ${selectors.tableRows}`).should('exist');
-        cy.get(`${selectors.sidePanel} ${selectors.tableRows}:contains("No deployments")`).should(
-            'not.exist'
-        );
-    });
-
     it('should show the active state in Component overview when scoped under a deployment', () => {
         const activeVulnEnabled = hasFeatureFlag('ROX_ACTIVE_VULN_MGMT');
-        const usingVMUpdates = hasFeatureFlag('ROX_POSTGRES_DATASTORE');
         const entitiesKey1 = 'deployments';
-        const entitiesKey2 = usingVMUpdates ? 'image-components' : 'components';
+        const entitiesKey2 = 'image-components';
         visitVulnerabilityManagementEntities(entitiesKey1);
 
         // click on the first deployment in the list
         interactAndWaitForVulnerabilityManagementEntity(() => {
-            cy.get(`${selectors.tableBodyRows}:eq(0) .rt-td:nth-child(2)`).click();
+            cy.get(
+                `${selectors.tableBodyRows}:has(.rt-td:eq(2) a:contains("CVE")) .rt-td:nth-child(2)`
+            )
+                .first()
+                .click();
         }, entitiesKey1);
 
         // now, go to the components for that deployment
         interactAndWaitForVulnerabilityManagementSecondaryEntities(
             () => {
                 cy.get(
-                    usingVMUpdates ? selectors.imageComponentTileLink : selectors.componentTileLink
+                    'h2:contains("Related entities") ~ div ul li a:contains("image component")'
                 ).click();
             },
             entitiesKey1,
@@ -295,11 +124,8 @@ describe('Entities single views', () => {
     it('should show the active state in the fixable CVES widget for a single deployment', () => {
         const activeVulnEnabled = hasFeatureFlag('ROX_ACTIVE_VULN_MGMT');
         const entitiesKey = 'deployments';
-        const usingVMUpdates = hasFeatureFlag('ROX_POSTGRES_DATASTORE');
 
-        const fixableCvesFixture = usingVMUpdates
-            ? 'vulnerabilities/fixableCvesForEntity.json'
-            : 'vulnerabilities/fixableCvesForEntityLegacy.json';
+        const fixableCvesFixture = 'vulnerabilities/fixableCvesForEntity.json';
         const getFixableCvesForEntity = api.graphql('getFixableCvesForEntity');
         cy.intercept('POST', getFixableCvesForEntity, {
             fixture: fixableCvesFixture,

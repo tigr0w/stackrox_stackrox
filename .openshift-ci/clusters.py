@@ -9,7 +9,13 @@ import signal
 import subprocess
 import time
 
-from common import popen_graceful_kill
+from common import popen_graceful_kill, set_ci_shared_export
+
+OUTCOME_PASSED = "passed"
+OUTCOME_FAILED = "failed"
+CREATE_CLUSTER_OUTCOME_VAR = "CREATE_CLUSTER_OUTCOME"
+DESTROY_CLUSTER_OUTCOME_VAR = "DESTROY_CLUSTER_OUTCOME"
+CLUSTER_FLAVOR_VARIANT_VAR = "CLUSTER_FLAVOR_VARIANT"
 
 
 class NullCluster:
@@ -32,27 +38,45 @@ class GKECluster:
     REFRESH_PATH = "scripts/ci/gke.sh"
     TEARDOWN_PATH = "scripts/ci/gke.sh"
 
-    def __init__(self, cluster_id, num_nodes=3, machine_type="e2-standard-4"):
+    def __init__(self, cluster_id, num_nodes=None, machine_type=None, disk_gb=None):
         self.cluster_id = cluster_id
         self.num_nodes = num_nodes
         self.machine_type = machine_type
+        self.disk_gb = disk_gb
         self.refresh_token_cmd = None
 
     def provision(self):
+        set_ci_shared_export(CLUSTER_FLAVOR_VARIANT_VAR, "gke")
+        try:
+            self._provision()
+            set_ci_shared_export(CREATE_CLUSTER_OUTCOME_VAR, OUTCOME_PASSED)
+        except Exception as err:
+            set_ci_shared_export(CREATE_CLUSTER_OUTCOME_VAR, OUTCOME_FAILED)
+            raise err
+
+        return self
+
+    def _provision(self):
+        if self.num_nodes is not None:
+            os.environ["NUM_NODES"] = str(self.num_nodes)
+        if self.machine_type is not None:
+            os.environ["MACHINE_TYPE"] = str(self.machine_type)
+        if self.disk_gb is not None:
+            os.environ["DISK_SIZE_GB"] = str(self.disk_gb)
+
         with subprocess.Popen(
             [
                 GKECluster.PROVISION_PATH,
                 "provision_gke_cluster",
                 self.cluster_id,
-                str(self.num_nodes),
-                self.machine_type,
             ]
         ) as cmd:
 
             try:
                 exitstatus = cmd.wait(GKECluster.PROVISION_TIMEOUT)
                 if exitstatus != 0:
-                    raise RuntimeError(f"Cluster provision failed: exit {exitstatus}")
+                    raise RuntimeError(
+                        f"Cluster provision failed: exit {exitstatus}")
             except subprocess.TimeoutExpired as err:
                 popen_graceful_kill(cmd)
                 raise err
@@ -74,6 +98,17 @@ class GKECluster:
         return self
 
     def teardown(self, canceled=False):
+        set_ci_shared_export(CLUSTER_FLAVOR_VARIANT_VAR, "gke")
+        try:
+            self._teardown(canceled)
+            set_ci_shared_export(DESTROY_CLUSTER_OUTCOME_VAR, OUTCOME_PASSED)
+        except Exception as err:
+            set_ci_shared_export(DESTROY_CLUSTER_OUTCOME_VAR, OUTCOME_FAILED)
+            raise err
+
+        return self
+
+    def _teardown(self, canceled):
         while os.path.exists("/tmp/hold-cluster"):
             print("Pausing teardown because /tmp/hold-cluster exists")
             time.sleep(60)
@@ -114,25 +149,6 @@ class AutomationFlavorsCluster:
             ["kubectl", "get", "nodes", "-o", "wide"],
             check=True,
             timeout=AutomationFlavorsCluster.KUBECTL_TIMEOUT,
-        )
-
-        return self
-
-    def teardown(self):
-        pass
-
-class OpenShiftScaleWorkersCluster:
-    SCALE_CHANGE_TIMEOUT = 15 * 60
-
-    def __init__(self, increment=1):
-        self.increment = increment
-
-    def provision(self):
-        print("Scaling worker nodes")
-        subprocess.run(
-            ["scripts/ci/openshift.sh", "scale_worker_nodes", str(self.increment)],
-            check=True,
-            timeout=OpenShiftScaleWorkersCluster.SCALE_CHANGE_TIMEOUT,
         )
 
         return self

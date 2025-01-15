@@ -1,10 +1,12 @@
 package utils
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/fixtures"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -57,7 +59,7 @@ func TestNewImage(t *testing.T) {
 		t.Run(c.ImageString, func(t *testing.T) {
 			img, err := GenerateImageFromString(c.ImageString)
 			assert.NoError(t, err)
-			assert.Equal(t, c.ExpectedImage, img)
+			protoassert.Equal(t, c.ExpectedImage, img)
 		})
 	}
 }
@@ -179,7 +181,7 @@ func TestGenerateImageFromStringWithOverride(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			img, err := GenerateImageFromStringWithOverride(c.image, c.override)
 			assert.NoError(t, err)
-			assert.Equal(t, c.expectedName, img.Name)
+			protoassert.Equal(t, c.expectedName, img.Name)
 		})
 	}
 }
@@ -212,4 +214,72 @@ func TestExtractOpenShiftProject_solelyRemote(t *testing.T) {
 		Remote: "stackrox/nginx",
 	}
 	assert.Equal(t, "stackrox", ExtractOpenShiftProject(imgName))
+}
+
+func TestRemoveScheme(t *testing.T) {
+	tcs := []struct {
+		imageStr string
+		want     string
+	}{
+		{"", ""},
+		{"nginx:latest", "nginx:latest"},
+		{"docker-pullable://rest-of-image", "rest-of-image"},
+		{
+			"crio://image-registry.openshift-image-registry.svc:5000/testdev/nginx:1.18.0@sha256:e90ac5331fe095cea01b121a3627174b2e33e06e83720e9a934c7b8ccc9c55a0",
+			"image-registry.openshift-image-registry.svc:5000/testdev/nginx:1.18.0@sha256:e90ac5331fe095cea01b121a3627174b2e33e06e83720e9a934c7b8ccc9c55a0",
+		},
+	}
+	for i, tc := range tcs {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			assert.Equal(t, tc.want, RemoveScheme(tc.imageStr))
+		})
+	}
+}
+
+func TestNormalizeImageFullName(t *testing.T) {
+	img, _ := GenerateImageFromString("nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000")
+	fmt.Printf("\n%+v\n\n", img)
+	tcs := []struct {
+		name    string
+		imgName *storage.ImageName
+		digest  string
+		want    string
+	}{
+		{
+			"only tag",
+			&storage.ImageName{Registry: "docker.io", Remote: "library/nginx", Tag: "latest"},
+			"",
+			"docker.io/library/nginx:latest",
+		},
+		{
+			"only digest",
+			&storage.ImageName{Registry: "docker.io", Remote: "library/nginx", Tag: ""},
+			"sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			"docker.io/library/nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		},
+		{
+			"tag and digest (latest tag)",
+			&storage.ImageName{Registry: "docker.io", Remote: "library/nginx", Tag: "latest"},
+			"sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			"docker.io/library/nginx:latest@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		},
+		{
+			"tag and digest (specific tag)",
+			&storage.ImageName{Registry: "docker.io", Remote: "library/nginx", Tag: "v1.2.3"},
+			"sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			"docker.io/library/nginx:v1.2.3@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		},
+		{
+			"no tag or digest (malformed) do not modify fullname",
+			&storage.ImageName{Registry: "docker.io", Remote: "library/nginx", Tag: "", FullName: "helloworld"},
+			"",
+			"helloworld",
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeImageFullName(tc.imgName, tc.digest)
+			assert.Equal(t, tc.want, got.GetFullName())
+		})
+	}
 }

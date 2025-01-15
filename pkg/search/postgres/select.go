@@ -7,15 +7,36 @@ import (
 	"strings"
 	"time"
 
-	"github.com/georgysavva/scany/pgxscan"
+	"github.com/georgysavva/scany/v2/dbscan"
+	"github.com/georgysavva/scany/v2/pgxscan"
 	"github.com/pkg/errors"
 	v1 "github.com/stackrox/rox/generated/api/v1"
+	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/postgres/walker"
 	"github.com/stackrox/rox/pkg/search/postgres/aggregatefunc"
 	pgsearch "github.com/stackrox/rox/pkg/search/postgres/query"
+	"github.com/stackrox/rox/pkg/utils"
 )
+
+var scanAPI = newScanAPI(newDBScanAPI(dbscan.WithAllowUnknownColumns(true)))
+
+func newScanAPI(dbscanAPI *dbscan.API) *pgxscan.API {
+	api, err := pgxscan.NewAPI(dbscanAPI)
+	if err != nil {
+		utils.Must(err)
+	}
+	return api
+}
+
+func newDBScanAPI(opts ...dbscan.APIOption) *dbscan.API {
+	api, err := pgxscan.NewDBScanAPI(opts...)
+	if err != nil {
+		utils.Must(err)
+	}
+	return api
+}
 
 // RunSelectRequestForSchema executes a select request against the database for given schema. The input query must
 // explicitly specify select fields.
@@ -46,7 +67,7 @@ func RunSelectRequestForSchema[T any](ctx context.Context, db postgres.DB, schem
 	if query == nil {
 		return nil, nil
 	}
-	return pgutils.Retry2(func() ([]*T, error) {
+	return pgutils.Retry2(ctx, func() ([]*T, error) {
 		return retryableRunSelectRequestForSchema[T](ctx, db, query)
 	})
 }
@@ -61,16 +82,23 @@ func standardizeSelectQueryAndPopulatePath(ctx context.Context, q *v1.Query, sch
 	}
 
 	standardizeFieldNamesInQuery(q)
-	innerJoins, dbFields := getJoinsAndFields(schema, q)
+	joins, dbFields := getJoinsAndFields(schema, q)
 	if len(q.GetSelects()) == 0 && q.GetQuery() == nil {
 		return nil, nil
 	}
 
+	if env.ImageCVEEdgeCustomJoin.BooleanSetting() {
+		joins, err = handleImageCveEdgesTableInJoins(schema, joins)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	parsedQuery := &query{
-		Schema:     schema,
-		QueryType:  queryType,
-		From:       schema.Table,
-		InnerJoins: innerJoins,
+		Schema:    schema,
+		QueryType: queryType,
+		From:      schema.Table,
+		Joins:     joins,
 	}
 
 	if err = populateSelect(parsedQuery, schema, q.GetSelects(), dbFields, nowForQuery); err != nil {
@@ -119,7 +147,7 @@ func retryableRunSelectRequestForSchema[T any](ctx context.Context, db postgres.
 	defer rows.Close()
 
 	var scannedRows []*T
-	if err := pgxscan.ScanAll(&scannedRows, rows); err != nil {
+	if err := scanAPI.ScanAll(&scannedRows, rows); err != nil {
 		return nil, err
 	}
 	return scannedRows, rows.Err()
@@ -147,6 +175,7 @@ func populateSelect(querySoFar *query, schema *walker.Schema, querySelects []*v1
 			querySoFar.SelectedFields = append(querySoFar.SelectedFields,
 				selectQueryField(field.GetName(), dbField, field.GetDistinct(), aggregatefunc.GetAggrFunc(field.GetAggregateFunc()), ""),
 			)
+			querySoFar.DistinctAppliedToSelects = querySoFar.DistinctAppliedToSelects || field.GetDistinct()
 			continue
 		}
 
@@ -166,6 +195,7 @@ func populateSelect(querySoFar *query, schema *walker.Schema, querySelects []*v1
 		querySoFar.Data = append(querySoFar.Data, qe.Where.Values...)
 
 		selectField := selectQueryField(field.GetName(), dbField, field.GetDistinct(), aggregatefunc.GetAggrFunc(field.GetAggregateFunc()), qe.Where.Query)
+		querySoFar.DistinctAppliedToSelects = querySoFar.DistinctAppliedToSelects || field.GetDistinct()
 		if alias := filter.GetName(); alias != "" {
 			selectField.Alias = alias
 		} else {

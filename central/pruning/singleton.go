@@ -2,8 +2,10 @@ package pruning
 
 import (
 	alertDatastore "github.com/stackrox/rox/central/alert/datastore"
+	blobDS "github.com/stackrox/rox/central/blob/datastore"
 	clusterDatastore "github.com/stackrox/rox/central/cluster/datastore"
 	configDatastore "github.com/stackrox/rox/central/config/datastore"
+	nodeCVEDS "github.com/stackrox/rox/central/cve/node/datastore"
 	deploymentDatastore "github.com/stackrox/rox/central/deployment/datastore"
 	imagesDatastore "github.com/stackrox/rox/central/image/datastore"
 	imageComponentDatastore "github.com/stackrox/rox/central/imagecomponent/datastore"
@@ -13,12 +15,13 @@ import (
 	podDatastore "github.com/stackrox/rox/central/pod/datastore"
 	processBaselineDatastore "github.com/stackrox/rox/central/processbaseline/datastore"
 	processDatastore "github.com/stackrox/rox/central/processindicator/datastore"
-	plopDatastore "github.com/stackrox/rox/central/processlisteningonport/datastore"
+	plopDataStore "github.com/stackrox/rox/central/processlisteningonport/datastore"
 	k8sRoleDataStore "github.com/stackrox/rox/central/rbac/k8srole/datastore"
 	k8srolebindingStore "github.com/stackrox/rox/central/rbac/k8srolebinding/datastore"
+	snapshotDataStore "github.com/stackrox/rox/central/reports/snapshot/datastore"
 	riskDataStore "github.com/stackrox/rox/central/risk/datastore"
 	serviceAccountDataStore "github.com/stackrox/rox/central/serviceaccount/datastore"
-	vulnReqDataStore "github.com/stackrox/rox/central/vulnerabilityrequest/datastore"
+	vulnReqDataStore "github.com/stackrox/rox/central/vulnmgmt/vulnerabilityrequest/datastore"
 	"github.com/stackrox/rox/pkg/sync"
 )
 
@@ -37,7 +40,6 @@ func Singleton() GarbageCollector {
 			deploymentDatastore.Singleton(),
 			podDatastore.Singleton(),
 			processDatastore.Singleton(),
-			plopDatastore.Singleton(),
 			processBaselineDatastore.Singleton(),
 			networkFlowsDataStore.Singleton(),
 			configDatastore.Singleton(),
@@ -47,7 +49,12 @@ func Singleton() GarbageCollector {
 			serviceAccountDataStore.Singleton(),
 			k8sRoleDataStore.Singleton(),
 			k8srolebindingStore.Singleton(),
-			logimbueStore.Singleton())
+			logimbueStore.Singleton(),
+			snapshotDataStore.Singleton(),
+			plopDataStore.Singleton(),
+			blobDS.Singleton(),
+			nodeCVEDS.Singleton(),
+		)
 	})
 	return gc
 }

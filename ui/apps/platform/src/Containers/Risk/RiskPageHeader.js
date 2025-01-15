@@ -8,11 +8,21 @@ import {
     orchestratorComponentsOption,
 } from 'utils/orchestratorComponents';
 import SearchFilterInput from 'Components/SearchFilterInput';
+import useIsRouteEnabled from 'hooks/useIsRouteEnabled';
+import usePermissions from 'hooks/usePermissions';
 import useURLSearch from 'hooks/useURLSearch';
 import searchOptionsToQuery from 'services/searchOptionsToQuery';
+
 import CreatePolicyFromSearch from './CreatePolicyFromSearch';
 
 function RiskPageHeader({ isViewFiltered, searchOptions }) {
+    const isRouteEnabled = useIsRouteEnabled();
+    const { hasReadWriteAccess } = usePermissions();
+
+    // Require READ_WRITE_ACCESS to create plus READ_ACCESS to other resources for Policies route.
+    const hasWriteAccessForCreatePolicy =
+        hasReadWriteAccess('WorkflowAdministration') && isRouteEnabled('policy-management');
+
     const { searchFilter, setSearchFilter } = useURLSearch();
     const subHeader = isViewFiltered ? 'Filtered view' : 'Default view';
     const autoCompleteCategory = searchCategories[entityTypes.DEPLOYMENT];
@@ -31,7 +41,7 @@ function RiskPageHeader({ isViewFiltered, searchOptions }) {
                 handleChangeSearchFilter={(filter) => setSearchFilter(filter, 'push')}
                 autocompleteQueryPrefix={searchOptionsToQuery(prependAutocompleteQuery)}
             />
-            <CreatePolicyFromSearch />
+            {hasWriteAccessForCreatePolicy && <CreatePolicyFromSearch />}
         </PageHeader>
     );
 }

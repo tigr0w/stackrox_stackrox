@@ -3,7 +3,7 @@ package datastore
 import (
 	"context"
 
-	rocksDBStore "github.com/stackrox/rox/central/role/store"
+	"github.com/stackrox/rox/central/role/store"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 )
@@ -39,13 +39,14 @@ type DataStore interface {
 	UpsertAccessScope(ctx context.Context, scope *storage.SimpleAccessScope) error
 	RemoveAccessScope(ctx context.Context, id string) error
 
+	GetAllResolvedRoles(ctx context.Context) ([]permissions.ResolvedRole, error)
 	GetAndResolveRole(ctx context.Context, name string) (permissions.ResolvedRole, error)
 	UpsertRole(ctx context.Context, role *storage.Role) error
 }
 
 // New returns a new DataStore instance.
-func New(roleStorage rocksDBStore.RoleStore, permissionSetStore rocksDBStore.PermissionSetStore,
-	accessScopeStore rocksDBStore.SimpleAccessScopeStore,
+func New(roleStorage store.RoleStore, permissionSetStore store.PermissionSetStore,
+	accessScopeStore store.SimpleAccessScopeStore,
 	groupGetFilteredFunc func(ctx context.Context, filter func(*storage.Group) bool) ([]*storage.Group, error)) DataStore {
 	return &dataStoreImpl{
 		roleStorage:          roleStorage,

@@ -1,14 +1,7 @@
 import React from 'react';
 import { useField } from 'formik';
-import {
-    TextInput,
-    ToggleGroup,
-    ToggleGroupItem,
-    FormGroup,
-    Select,
-    SelectOption,
-    SelectVariant,
-} from '@patternfly/react-core';
+import { TextInput, ToggleGroup, ToggleGroupItem, FormGroup } from '@patternfly/react-core';
+import { Select, SelectOption } from '@patternfly/react-core/deprecated';
 
 import { Descriptor } from './policyCriteriaDescriptors';
 import PolicyCriteriaFieldSubInput from './PolicyCriteriaFieldSubInput';
@@ -65,8 +58,9 @@ function PolicyCriteriaFieldInput({
                     type="text"
                     id={name}
                     isDisabled={readOnly}
-                    onChange={handleChangeValue}
+                    onChange={(_event, val) => handleChangeValue(val)}
                     data-testid="policy-criteria-value-text-input"
+                    placeholder={descriptor.placeholder || ''}
                 />
             );
         case 'radioGroup': {
@@ -111,7 +105,7 @@ function PolicyCriteriaFieldInput({
                     type="number"
                     id={name}
                     isDisabled={readOnly}
-                    onChange={handleChangeValue}
+                    onChange={(_event, val) => handleChangeValue(val)}
                     data-testid="policy-criteria-value-number-input"
                 />
             );
@@ -120,7 +114,7 @@ function PolicyCriteriaFieldInput({
                 <FormGroup
                     label={descriptor.label}
                     fieldId={descriptor.name}
-                    className="pf-u-flex-1"
+                    className="pf-v5-u-flex-1"
                     data-testid="policy-criteria-value-select"
                 >
                     <Select
@@ -130,6 +124,7 @@ function PolicyCriteriaFieldInput({
                         isDisabled={readOnly}
                         selections={value.value}
                         placeholderText={descriptor.placeholder || 'Select an option'}
+                        menuAppendTo={() => document.body}
                     >
                         {descriptor?.options?.map((option) => (
                             <SelectOption
@@ -148,7 +143,7 @@ function PolicyCriteriaFieldInput({
                 <FormGroup
                     label={descriptor.label}
                     fieldId={descriptor.name}
-                    className="pf-u-flex-1"
+                    className="pf-v5-u-flex-1"
                     data-testid="policy-criteria-value-multiselect"
                 >
                     <Select
@@ -159,7 +154,8 @@ function PolicyCriteriaFieldInput({
                         selections={value.value === '' ? [] : value.value}
                         onClear={handleChangeSelectedValue([])}
                         placeholderText={descriptor.placeholder || 'Select one or more options'}
-                        variant={SelectVariant.typeaheadMulti}
+                        variant="typeaheadmulti"
+                        menuAppendTo={() => document.body}
                     >
                         {descriptor.options?.map((option) => (
                             <SelectOption

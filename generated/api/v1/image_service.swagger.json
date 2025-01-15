@@ -4,6 +4,11 @@
     "title": "api/v1/image_service.proto",
     "version": "version not set"
   },
+  "tags": [
+    {
+      "name": "ImageService"
+    }
+  ],
   "consumes": [
     "application/json"
   ],
@@ -11,9 +16,55 @@
     "application/json"
   ],
   "paths": {
+    "/v1/export/images": {
+      "get": {
+        "operationId": "ImageService_ExportImages",
+        "responses": {
+          "200": {
+            "description": "A successful response.(streaming responses)",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "result": {
+                  "$ref": "#/definitions/v1ExportImageResponse"
+                },
+                "error": {
+                  "$ref": "#/definitions/googlerpcStatus"
+                }
+              },
+              "title": "Stream result of v1ExportImageResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "timeout",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "ImageService"
+        ]
+      }
+    },
     "/v1/images": {
       "get": {
-        "summary": "ListImages returns all the images.",
+        "summary": "ListImages returns all the images that match the input query.",
         "operationId": "ImageService_ListImages",
         "responses": {
           "200": {
@@ -25,7 +76,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -99,7 +150,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -181,7 +232,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -204,7 +255,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -237,7 +288,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -268,7 +319,7 @@
     },
     "/v1/imagescount": {
       "get": {
-        "summary": "ListImages returns all the images.",
+        "summary": "CountImages returns a count of images that match the input query.",
         "operationId": "ImageService_CountImages",
         "responses": {
           "200": {
@@ -280,7 +331,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -356,7 +407,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -377,7 +428,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -407,7 +458,7 @@
           "default": {
             "description": "An unexpected error response.",
             "schema": {
-              "$ref": "#/definitions/runtimeError"
+              "$ref": "#/definitions/googlerpcStatus"
             }
           }
         },
@@ -483,6 +534,18 @@
       ],
       "default": "UNKNOWN_VULNERABILITY"
     },
+    "EnvironmentList": {
+      "type": "object",
+      "properties": {
+        "environments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v4Environment"
+          }
+        }
+      }
+    },
     "WatchImageResponseErrorType": {
       "type": "string",
       "enum": [
@@ -493,27 +556,9 @@
       ],
       "default": "NO_ERROR"
     },
-    "protobufAny": {
+    "googlerpcStatus": {
       "type": "object",
       "properties": {
-        "typeUrl": {
-          "type": "string",
-          "description": "A URL/resource name that uniquely identifies the type of the serialized\nprotocol buffer message. This string must contain at least\none \"/\" character. The last segment of the URL's path must represent\nthe fully qualified name of the type (as in\n`path/google.protobuf.Duration`). The name should be in a canonical form\n(e.g., leading \".\" is not accepted).\n\nIn practice, teams usually precompile into the binary all types that they\nexpect it to use in the context of Any. However, for URLs which use the\nscheme `http`, `https`, or no scheme, one can optionally set up a type\nserver that maps type URLs to message definitions as follows:\n\n* If no scheme is provided, `https` is assumed.\n* An HTTP GET on the URL must yield a [google.protobuf.Type][]\n  value in binary format, or produce an error.\n* Applications are allowed to cache lookup results based on the\n  URL, or have them precompiled into a binary to avoid any\n  lookup. Therefore, binary compatibility needs to be preserved\n  on changes to types. (Use versioned type names to manage\n  breaking changes.)\n\nNote: this functionality is not currently available in the official\nprotobuf release, and it is not used for type URLs beginning with\ntype.googleapis.com.\n\nSchemes other than `http`, `https` (or the empty scheme) might be\nused with implementation specific semantics."
-        },
-        "value": {
-          "type": "string",
-          "format": "byte",
-          "description": "Must be a valid serialized protocol buffer of the above specified type."
-        }
-      },
-      "description": "`Any` contains an arbitrary serialized protocol buffer message along with a\nURL that describes the type of the serialized message.\n\nProtobuf library provides support to pack/unpack Any values in the form\nof utility functions or additional generated methods of the Any type.\n\nExample 1: Pack and unpack a message in C++.\n\n    Foo foo = ...;\n    Any any;\n    any.PackFrom(foo);\n    ...\n    if (any.UnpackTo(\u0026foo)) {\n      ...\n    }\n\nExample 2: Pack and unpack a message in Java.\n\n    Foo foo = ...;\n    Any any = Any.pack(foo);\n    ...\n    if (any.is(Foo.class)) {\n      foo = any.unpack(Foo.class);\n    }\n    // or ...\n    if (any.isSameTypeAs(Foo.getDefaultInstance())) {\n      foo = any.unpack(Foo.getDefaultInstance());\n    }\n\nExample 3: Pack and unpack a message in Python.\n\n    foo = Foo(...)\n    any = Any()\n    any.Pack(foo)\n    ...\n    if any.Is(Foo.DESCRIPTOR):\n      any.Unpack(foo)\n      ...\n\nExample 4: Pack and unpack a message in Go\n\n     foo := \u0026pb.Foo{...}\n     any, err := anypb.New(foo)\n     if err != nil {\n       ...\n     }\n     ...\n     foo := \u0026pb.Foo{}\n     if err := any.UnmarshalTo(foo); err != nil {\n       ...\n     }\n\nThe pack methods provided by protobuf library will by default use\n'type.googleapis.com/full.type.name' as the type URL and the unpack\nmethods only use the fully qualified type name after the last '/'\nin the type URL, for example \"foo.bar.com/x/y.z\" will yield type\nname \"y.z\".\n\nJSON\n\nThe JSON representation of an `Any` value uses the regular\nrepresentation of the deserialized, embedded message, with an\nadditional field `@type` which contains the type URL. Example:\n\n    package google.profile;\n    message Person {\n      string first_name = 1;\n      string last_name = 2;\n    }\n\n    {\n      \"@type\": \"type.googleapis.com/google.profile.Person\",\n      \"firstName\": \u003cstring\u003e,\n      \"lastName\": \u003cstring\u003e\n    }\n\nIf the embedded message type is well-known and has a custom JSON\nrepresentation, that representation will be embedded adding a field\n`value` which holds the custom JSON in addition to the `@type`\nfield. Example (for message [google.protobuf.Duration][]):\n\n    {\n      \"@type\": \"type.googleapis.com/google.protobuf.Duration\",\n      \"value\": \"1.212s\"\n    }"
-    },
-    "runtimeError": {
-      "type": "object",
-      "properties": {
-        "error": {
-          "type": "string"
-        },
         "code": {
           "type": "integer",
           "format": "int32"
@@ -524,10 +569,22 @@
         "details": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/protobufAny"
           }
         }
       }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string",
+          "description": "A URL/resource name that uniquely identifies the type of the serialized\nprotocol buffer message. This string must contain at least\none \"/\" character. The last segment of the URL's path must represent\nthe fully qualified name of the type (as in\n`path/google.protobuf.Duration`). The name should be in a canonical form\n(e.g., leading \".\" is not accepted).\n\nIn practice, teams usually precompile into the binary all types that they\nexpect it to use in the context of Any. However, for URLs which use the\nscheme `http`, `https`, or no scheme, one can optionally set up a type\nserver that maps type URLs to message definitions as follows:\n\n* If no scheme is provided, `https` is assumed.\n* An HTTP GET on the URL must yield a [google.protobuf.Type][]\n  value in binary format, or produce an error.\n* Applications are allowed to cache lookup results based on the\n  URL, or have them precompiled into a binary to avoid any\n  lookup. Therefore, binary compatibility needs to be preserved\n  on changes to types. (Use versioned type names to manage\n  breaking changes.)\n\nNote: this functionality is not currently available in the official\nprotobuf release, and it is not used for type URLs beginning with\ntype.googleapis.com. As of May 2023, there are no widely used type server\nimplementations and no plans to implement one.\n\nSchemes other than `http`, `https` (or the empty scheme) might be\nused with implementation specific semantics."
+        }
+      },
+      "additionalProperties": {},
+      "description": "`Any` contains an arbitrary serialized protocol buffer message along with a\nURL that describes the type of the serialized message.\n\nProtobuf library provides support to pack/unpack Any values in the form\nof utility functions or additional generated methods of the Any type.\n\nExample 1: Pack and unpack a message in C++.\n\n    Foo foo = ...;\n    Any any;\n    any.PackFrom(foo);\n    ...\n    if (any.UnpackTo(&foo)) {\n      ...\n    }\n\nExample 2: Pack and unpack a message in Java.\n\n    Foo foo = ...;\n    Any any = Any.pack(foo);\n    ...\n    if (any.is(Foo.class)) {\n      foo = any.unpack(Foo.class);\n    }\n    // or ...\n    if (any.isSameTypeAs(Foo.getDefaultInstance())) {\n      foo = any.unpack(Foo.getDefaultInstance());\n    }\n\n Example 3: Pack and unpack a message in Python.\n\n    foo = Foo(...)\n    any = Any()\n    any.Pack(foo)\n    ...\n    if any.Is(Foo.DESCRIPTOR):\n      any.Unpack(foo)\n      ...\n\n Example 4: Pack and unpack a message in Go\n\n     foo := &pb.Foo{...}\n     any, err := anypb.New(foo)\n     if err != nil {\n       ...\n     }\n     ...\n     foo := &pb.Foo{}\n     if err := any.UnmarshalTo(foo); err != nil {\n       ...\n     }\n\nThe pack methods provided by protobuf library will by default use\n'type.googleapis.com/full.type.name' as the type URL and the unpack\nmethods only use the fully qualified type name after the last '/'\nin the type URL, for example \"foo.bar.com/x/y.z\" will yield type\nname \"y.z\".\n\nJSON\n====\nThe JSON representation of an `Any` value uses the regular\nrepresentation of the deserialized, embedded message, with an\nadditional field `@type` which contains the type URL. Example:\n\n    package google.profile;\n    message Person {\n      string first_name = 1;\n      string last_name = 2;\n    }\n\n    {\n      \"@type\": \"type.googleapis.com/google.profile.Person\",\n      \"firstName\": <string>,\n      \"lastName\": <string>\n    }\n\nIf the embedded message type is well-known and has a custom JSON\nrepresentation, that representation will be embedded adding a field\n`value` which holds the custom JSON in addition to the `@type`\nfield. Example (for message [google.protobuf.Duration][]):\n\n    {\n      \"@type\": \"type.googleapis.com/google.protobuf.Duration\",\n      \"value\": \"1.212s\"\n    }"
     },
     "scannerV1Components": {
       "type": "object",
@@ -538,18 +595,21 @@
         "osComponents": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/scannerV1OSComponent"
           }
         },
         "rhelComponents": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/scannerV1RHELComponent"
           }
         },
         "languageComponents": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/scannerV1LanguageComponent"
           }
         },
@@ -570,6 +630,7 @@
         "requiredFeatures": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/scannerV1FeatureNameVersion"
           }
         }
@@ -663,6 +724,7 @@
         "executables": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/scannerV1Executable"
           }
         }
@@ -722,6 +784,7 @@
         "executables": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/scannerV1Executable"
           }
         }
@@ -738,6 +801,23 @@
         "DOTNETCORERUNTIME"
       ],
       "default": "UNSET_SOURCE_TYPE"
+    },
+    "storageCVSSScore": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/definitions/storageSource"
+        },
+        "url": {
+          "type": "string"
+        },
+        "cvssv2": {
+          "$ref": "#/definitions/storageCVSSV2"
+        },
+        "cvssv3": {
+          "$ref": "#/definitions/storageCVSSV3"
+        }
+      }
     },
     "storageCVSSV2": {
       "type": "object",
@@ -922,6 +1002,14 @@
         "signaturePayload": {
           "type": "string",
           "format": "byte"
+        },
+        "certPem": {
+          "type": "string",
+          "format": "byte"
+        },
+        "certChainPem": {
+          "type": "string",
+          "format": "byte"
         }
       }
     },
@@ -933,8 +1021,25 @@
         },
         "name": {
           "type": "string"
+        },
+        "mirror": {
+          "type": "string"
         }
       }
+    },
+    "storageEPSS": {
+      "type": "object",
+      "properties": {
+        "epssProbability": {
+          "type": "number",
+          "format": "float"
+        },
+        "epssPercentile": {
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "title": "EPSS Score stores two epss metrics returned by scanner - epss probability and epss percentile"
     },
     "storageEmbeddedImageScanComponent": {
       "type": "object",
@@ -951,6 +1056,7 @@
         "vulns": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageEmbeddedVulnerability"
           }
         },
@@ -983,6 +1089,7 @@
         "executables": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageEmbeddedImageScanComponentExecutable"
           },
           "title": "Values are cleared after moving to cache, remove them from the grpc return as well"
@@ -1027,7 +1134,8 @@
           "$ref": "#/definitions/storageEmbeddedVulnerabilityScoreVersion"
         },
         "cvssV2": {
-          "$ref": "#/definitions/storageCVSSV2"
+          "$ref": "#/definitions/storageCVSSV2",
+          "title": "CVSSV2 CVSSV3 can be deprecated ROX-26066"
         },
         "cvssV3": {
           "$ref": "#/definitions/storageCVSSV3"
@@ -1064,21 +1172,36 @@
         "firstSystemOccurrence": {
           "type": "string",
           "format": "date-time",
-          "description": "Time when the CVE was first seen in the system."
+          "description": "Time when the CVE was first seen, for this specific distro, in the system."
         },
         "firstImageOccurrence": {
           "type": "string",
           "format": "date-time",
-          "description": "Time when the CVE was first seen in the image."
+          "description": "Time when the CVE was first seen in this image."
         },
         "severity": {
           "$ref": "#/definitions/storageVulnerabilitySeverity"
         },
         "state": {
           "$ref": "#/definitions/storageVulnerabilityState"
+        },
+        "cvssMetrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/storageCVSSScore"
+          },
+          "title": "cvss_metrics stores list of cvss scores from different sources like nvd, Redhat etc"
+        },
+        "nvdCvss": {
+          "type": "number",
+          "format": "float"
+        },
+        "epss": {
+          "$ref": "#/definitions/storageEPSS"
         }
       },
-      "title": "Next Tag: 21"
+      "title": "Next Tag: 22"
     },
     "storageEmbeddedVulnerabilityScoreVersion": {
       "type": "string",
@@ -1086,7 +1209,9 @@
         "V2",
         "V3"
       ],
-      "default": "V2"
+      "default": "V2",
+      "description": "- V2: No unset for automatic backwards compatibility",
+      "title": "ScoreVersion can be deprecated ROX-26066"
     },
     "storageImage": {
       "type": "object",
@@ -1100,6 +1225,7 @@
         "names": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageImageName"
           },
           "description": "This should deprecate the ImageName field long-term, allowing images with the same digest to be associated with\ndifferent locations.\nTODO(dhaus): For now, this message will be without search tags due to duplicated search tags otherwise."
@@ -1196,7 +1322,7 @@
           "items": {
             "type": "string"
           },
-          "title": "We never need both sets of layers so consolidate them. They will be ordered by oldest-\u003enewest"
+          "title": "We never need both sets of layers so consolidate them. They will be ordered by oldest->newest"
         },
         "dataSource": {
           "$ref": "#/definitions/storageDataSource",
@@ -1250,6 +1376,7 @@
         "components": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageEmbeddedImageScanComponent"
           }
         },
@@ -1265,9 +1392,13 @@
           "items": {
             "$ref": "#/definitions/storageImageScanNote"
           }
+        },
+        "hash": {
+          "type": "string",
+          "format": "uint64"
         }
       },
-      "title": "Next tag: 7"
+      "title": "Next tag: 8"
     },
     "storageImageScanNote": {
       "type": "string",
@@ -1288,6 +1419,7 @@
         "signatures": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageSignature"
           }
         },
@@ -1303,6 +1435,7 @@
         "results": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageImageSignatureVerificationResult"
           }
         }
@@ -1406,6 +1539,16 @@
         }
       }
     },
+    "storageSource": {
+      "type": "string",
+      "enum": [
+        "SOURCE_UNKNOWN",
+        "SOURCE_RED_HAT",
+        "SOURCE_OSV",
+        "SOURCE_NVD"
+      ],
+      "default": "SOURCE_UNKNOWN"
+    },
     "storageSourceType": {
       "type": "string",
       "enum": [
@@ -1414,6 +1557,7 @@
         "JAVA",
         "RUBY",
         "NODEJS",
+        "GO",
         "DOTNETCORERUNTIME",
         "INFRASTRUCTURE"
       ],
@@ -1435,6 +1579,7 @@
         "layers": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageImageLayer"
           }
         },
@@ -1494,7 +1639,7 @@
         "FALSE_POSITIVE"
       ],
       "default": "OBSERVED",
-      "description": "VulnerabilityState indicates if vulnerability is being observed or deferred(/suppressed). By default, it vulnerabilities are observed."
+      "description": "VulnerabilityState indicates if vulnerability is being observed or deferred(/suppressed). By default, it vulnerabilities are observed.\n\n - OBSERVED: [Default state]"
     },
     "storageWatchedImage": {
       "type": "object",
@@ -1549,12 +1694,21 @@
     "v1Empty": {
       "type": "object"
     },
+    "v1ExportImageResponse": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "$ref": "#/definitions/storageImage"
+        }
+      }
+    },
     "v1GetWatchedImagesResponse": {
       "type": "object",
       "properties": {
         "watchedImages": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageWatchedImage"
           }
         }
@@ -1566,6 +1720,7 @@
         "images": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/storageListImage"
           }
         }
@@ -1588,6 +1743,7 @@
         "sortOptions": {
           "type": "array",
           "items": {
+            "type": "object",
             "$ref": "#/definitions/v1SortOption"
           },
           "description": "This field is under development. It is not supported on any REST APIs."
@@ -1604,7 +1760,7 @@
           "$ref": "#/definitions/v1Pagination"
         }
       },
-      "description": "RawQuery represents the search query string.\nThe format of the query string is \"\u003cfield name\u003e:\u003cvalue,value,...\u003e+\u003cfield name\u003e:\u003cvalue, value,...\u003e+...\"\nFor example:\nTo search for deployments named \"central\" and \"sensor\" in the namespace \"stackrox\", the query string would be\n\"Deployment:central,sensor+Namespace:stackrox\"\nRawQuery is used in ListAPIs to search for a particular object."
+      "description": "RawQuery represents the search query string.\nThe format of the query string is \"<field name>:<value,value,...>+<field name>:<value, value,...>+...\"\nFor example:\nTo search for deployments named \"central\" and \"sensor\" in the namespace \"stackrox\", the query string would be\n\"Deployment:central,sensor+Namespace:stackrox\"\nRawQuery is used in ListAPIs to search for a particular object."
     },
     "v1ScanImageInternalRequestSource": {
       "type": "object",
@@ -1642,6 +1798,10 @@
         },
         "includeSnoozed": {
           "type": "boolean"
+        },
+        "cluster": {
+          "type": "string",
+          "description": "Cluster to delegate scan to, may be the cluster's name or ID."
         }
       }
     },
@@ -1674,7 +1834,7 @@
       "properties": {
         "normalizedName": {
           "type": "string",
-          "title": "If the image was scanned successfully, this returns the normalized name of the image.\nThis depends on what we get from the registry.\nFor example, \"docker.io/wordpress:latest\" -\u003e \"docker.io/library/wordpress:latest\""
+          "title": "If the image was scanned successfully, this returns the normalized name of the image.\nThis depends on what we get from the registry.\nFor example, \"docker.io/wordpress:latest\" -> \"docker.io/library/wordpress:latest\""
         },
         "errorType": {
           "$ref": "#/definitions/WatchImageResponseErrorType"
@@ -1682,6 +1842,167 @@
         "errorMessage": {
           "type": "string",
           "description": "Only set if error_type is NOT equal to \"NO_ERROR\"."
+        }
+      }
+    },
+    "v4Contents": {
+      "type": "object",
+      "properties": {
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v4Package"
+          }
+        },
+        "distributions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v4Distribution"
+          }
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v4Repository"
+          }
+        },
+        "environments": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/EnvironmentList"
+          }
+        }
+      }
+    },
+    "v4Distribution": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "did": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "versionCodeName": {
+          "type": "string"
+        },
+        "versionId": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "cpe": {
+          "type": "string"
+        },
+        "prettyName": {
+          "type": "string"
+        }
+      }
+    },
+    "v4Environment": {
+      "type": "object",
+      "properties": {
+        "packageDb": {
+          "type": "string"
+        },
+        "introducedIn": {
+          "type": "string"
+        },
+        "distributionId": {
+          "type": "string"
+        },
+        "repositoryIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Environment describes the surrounding environment a package was\ndiscovered in."
+    },
+    "v4NormalizedVersion": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "v": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      }
+    },
+    "v4Package": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "normalizedVersion": {
+          "$ref": "#/definitions/v4NormalizedVersion"
+        },
+        "fixedInVersion": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/v4Package"
+        },
+        "packageDb": {
+          "type": "string"
+        },
+        "repositoryHint": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "cpe": {
+          "type": "string"
+        }
+      }
+    },
+    "v4Repository": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "cpe": {
+          "type": "string"
         }
       }
     }

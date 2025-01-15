@@ -1,3 +1,5 @@
+import uniq from 'lodash/uniq';
+
 import entityTypes from 'constants/entityTypes';
 
 export function getFilteredCVEColumns(columns, workflowState, isFeatureFlagEnabled) {
@@ -9,8 +11,6 @@ export function getFilteredCVEColumns(columns, workflowState, isFeatureFlagEnabl
                 workflowState.getSingleAncestorOfType(entityTypes.IMAGE)));
 
     const shouldKeepFixedByColumn =
-        workflowState.isPreceding(entityTypes.COMPONENT) ||
-        workflowState.isCurrentSingle(entityTypes.COMPONENT) ||
         workflowState.isPreceding(entityTypes.IMAGE_COMPONENT) ||
         workflowState.isCurrentSingle(entityTypes.IMAGE_COMPONENT) ||
         workflowState.isPreceding(entityTypes.NODE_COMPONENT) ||
@@ -27,23 +27,20 @@ export function getFilteredCVEColumns(columns, workflowState, isFeatureFlagEnabl
 
     // No need to show entities in the node component or cluster context.
     const shouldKeepEntitiesColumn =
-        !workflowState.isPrecedingSingle(entityTypes.COMPONENT) ||
+        !workflowState.isPrecedingSingle(entityTypes.NODE_COMPONENT) ||
         !workflowState.getSingleAncestorOfType(entityTypes.NODE);
     // special case CLUSTER CVE under CLUSTER
     const clusterCveUnderCluster =
         workflowState.getSingleAncestorOfType(entityTypes.CLUSTER) &&
         currentEntityType === entityTypes.CLUSTER_CVE;
 
-    // TODO: remove this temporary conditional check, after generic CVE list is removed
-    const shouldKeepCveType =
-        currentEntityType === entityTypes.CVE || currentEntityType === entityTypes.CLUSTER_CVE;
+    const shouldKeepCveType = currentEntityType === entityTypes.CLUSTER_CVE;
 
     const shouldKeepSeverity =
         currentEntityType === entityTypes.IMAGE_CVE || currentEntityType === entityTypes.NODE_CVE;
 
     return columns.filter((col) => {
         switch (col.accessor) {
-            // TODO: remove after generic CVE list is removed
             case 'vulnerabilityTypes': {
                 return !!shouldKeepCveType;
             }
@@ -72,6 +69,15 @@ export function getFilteredCVEColumns(columns, workflowState, isFeatureFlagEnabl
     });
 }
 
+export function parseCveNamesFromIds(cveIds) {
+    const cveNames = cveIds.map((cveId) => {
+        return cveId.split('#')[0];
+    });
+
+    return uniq(cveNames);
+}
+
 export default {
     getFilteredCVEColumns,
+    parseCveNamesFromIds,
 };

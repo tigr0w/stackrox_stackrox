@@ -9,12 +9,15 @@ import (
 	"github.com/stackrox/rox/central/sensor/service/pipeline"
 	"github.com/stackrox/rox/central/sensor/service/pipeline/reconciliation"
 	"github.com/stackrox/rox/generated/internalapi/central"
+	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/metrics"
 )
 
 var (
 	log = logging.LoggerForModule()
+
+	_ pipeline.Fragment = (*pipelineImpl)(nil)
 )
 
 // GetPipeline returns an instantiation of this particular pipeline
@@ -26,6 +29,10 @@ func GetPipeline() pipeline.Fragment {
 
 type pipelineImpl struct {
 	dataStore datastore.DataStore
+}
+
+func (s *pipelineImpl) Capabilities() []centralsensor.CentralCapability {
+	return nil
 }
 
 func (s *pipelineImpl) Reconcile(
@@ -45,7 +52,7 @@ func (s *pipelineImpl) Match(msg *central.MsgFromSensor) bool {
 // Run runs the pipeline template on the input and returns the output.
 func (s *pipelineImpl) Run(
 	ctx context.Context,
-	_ string,
+	clusterID string,
 	msg *central.MsgFromSensor,
 	_ common.MessageInjector,
 ) error {
@@ -57,17 +64,17 @@ func (s *pipelineImpl) Run(
 		portProcesses := update.GetProcessesListeningOnPorts()
 
 		if portProcesses != nil {
-			if err := s.dataStore.AddProcessListeningOnPort(ctx, portProcesses...); err != nil {
+			if err := s.dataStore.AddProcessListeningOnPort(ctx, clusterID, portProcesses...); err != nil {
 				return err
 			}
 		}
 	} else {
 		if s.dataStore == nil {
-			log.Warnf("Cannot process PLOP event: data store is nil")
+			log.Warn("Cannot process PLOP event: data store is nil")
 		}
 
 		if update == nil {
-			log.Warnf("Cannot process PLOP event: update message is nil")
+			log.Warn("Cannot process PLOP event: update message is nil")
 		}
 	}
 

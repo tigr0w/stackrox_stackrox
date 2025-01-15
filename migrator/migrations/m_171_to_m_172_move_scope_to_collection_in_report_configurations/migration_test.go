@@ -14,6 +14,8 @@ import (
 	pghelper "github.com/stackrox/rox/migrator/migrations/postgreshelper"
 	"github.com/stackrox/rox/migrator/types"
 	"github.com/stackrox/rox/pkg/postgres/schema"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stretchr/testify/suite"
 )
@@ -387,7 +389,7 @@ func TestMigration(t *testing.T) {
 }
 
 func (s *reportConfigsMigrationTestSuite) SetupTest() {
-	s.db = pghelper.ForT(s.T(), true)
+	s.db = pghelper.ForT(s.T(), false)
 	s.reportConfigStore = reportConfigurationPostgres.New(s.db.DB)
 	s.accessScopeStore = accessScopePostgres.New(s.db.DB)
 	s.collectionStore = collectionPostgres.New(s.db.DB)
@@ -402,7 +404,7 @@ func (s *reportConfigsMigrationTestSuite) TearDownTest() {
 }
 
 func (s *reportConfigsMigrationTestSuite) TestMigration() {
-	ctx := context.Background()
+	ctx := sac.WithAllAccess(context.Background())
 	s.NoError(s.accessScopeStore.UpsertMany(ctx, accessScopes))
 	s.NoError(s.reportConfigStore.UpsertMany(ctx, configSliceFromMap(configIDToReportConfig)))
 
@@ -425,8 +427,8 @@ func (s *reportConfigsMigrationTestSuite) TestMigration() {
 		s.True(found)
 		s.Equal(expectedCollection.GetId(), collection.GetId())
 		s.Equal(expectedCollection.GetName(), collection.GetName())
-		s.Equal(expectedCollection.GetResourceSelectors(), collection.GetResourceSelectors())
-		s.Equal(expectedCollection.GetEmbeddedCollections(), collection.GetEmbeddedCollections())
+		protoassert.SlicesEqual(s.T(), expectedCollection.GetResourceSelectors(), collection.GetResourceSelectors())
+		protoassert.SlicesEqual(s.T(), expectedCollection.GetEmbeddedCollections(), collection.GetEmbeddedCollections())
 		return nil
 	})
 	s.NoError(err)

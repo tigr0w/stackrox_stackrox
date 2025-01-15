@@ -10,6 +10,14 @@ import (
 	"github.com/stackrox/rox/pkg/concurrency"
 )
 
+// Preferences determines preferences for the connection learned from sensor.
+type Preferences struct {
+	// SendDeduperState is set to true by default and can be switched off by Central if a Sensor sends a ResourcesSynced event
+	// with too many resources which could lead to a resourcesExhausted error in the gRPC connection. If this is set
+	// to false, the connected sensor will fall back to the classic reconciliation (i.e. no deduper state is transmitted).
+	SendDeduperState bool
+}
+
 // Manager is responsible for managing all active connections from sensors.
 //
 //go:generate mockgen-wrapper
@@ -21,6 +29,8 @@ type Manager interface {
 		baselineMgr common.ProcessBaselineManager,
 		networkBaselineMgr common.NetworkBaselineManager,
 		delegatedRegistryConfigMgr common.DelegatedRegistryConfigManager,
+		imageIntegrationMgr common.ImageIntegrationManager,
+		complianceOperatorMgr common.ComplianceOperatorManager,
 		autoTriggerUpgrades *concurrency.Flag) error
 
 	// Connection-related methods.
@@ -31,6 +41,7 @@ type Manager interface {
 	PreparePoliciesAndBroadcast(policies []*storage.Policy)
 	BroadcastMessage(msg *central.MsgToSensor)
 	SendMessage(clusterID string, msg *central.MsgToSensor) error
+	GetConnectionPreference(clusterID string) Preferences
 
 	// Upgrade-related methods.
 	TriggerUpgrade(ctx context.Context, clusterID string) error

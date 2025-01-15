@@ -6,14 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	deploymentMocks "github.com/stackrox/rox/central/deployment/datastore/mocks"
 	queueMocks "github.com/stackrox/rox/central/deployment/queue/mocks"
 	"github.com/stackrox/rox/central/networkbaseline/datastore"
 	networkEntityDSMock "github.com/stackrox/rox/central/networkgraph/entity/datastore/mocks"
 	networkFlowDSMocks "github.com/stackrox/rox/central/networkgraph/flow/datastore/mocks"
 	networkPolicyMocks "github.com/stackrox/rox/central/networkpolicies/datastore/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	connectionMocks "github.com/stackrox/rox/central/sensor/service/connection/mocks"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
@@ -22,11 +20,15 @@ import (
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/networkgraph"
 	"github.com/stackrox/rox/pkg/networkgraph/networkbaseline"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/timestamp"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 var (
@@ -115,7 +117,7 @@ func (suite *ManagerTestSuite) TearDownTest() {
 func (suite *ManagerTestSuite) mustInitManager(initialBaselines ...*storage.NetworkBaseline) {
 	suite.ds = &fakeDS{baselines: make(map[string]*storage.NetworkBaseline)}
 	for _, baseline := range initialBaselines {
-		baseline.ObservationPeriodEnd = getNewObservationPeriodEnd().GogoProtobuf()
+		baseline.ObservationPeriodEnd = protoconv.ConvertMicroTSToProtobufTS(getNewObservationPeriodEnd())
 		suite.ds.baselines[baseline.GetDeploymentId()] = baseline
 	}
 	var err error
@@ -204,14 +206,14 @@ func (suite *ManagerTestSuite) assertBaselinesAre(baselines ...*storage.NetworkB
 	// Assume that the test takes no longer than one minute.
 	obsPeriodEnd := obsPeriodStart.Add(time.Minute)
 	for _, baseline := range suite.ds.baselines {
-		cloned := baseline.Clone()
+		cloned := baseline.CloneVT()
 		actualObsEnd := timestamp.FromProtobuf(cloned.GetObservationPeriodEnd())
 		suite.True(actualObsEnd.After(obsPeriodStart), "Actual obs end: %v, expected obs window: %v-%v", actualObsEnd.GoTime(), obsPeriodStart.GoTime(), obsPeriodEnd.GoTime())
 		suite.True(obsPeriodEnd.After(actualObsEnd), "Actual obs end: %v, expected obs window: %v-%v", actualObsEnd.GoTime(), obsPeriodStart.GoTime(), obsPeriodEnd.GoTime())
 		cloned.ObservationPeriodEnd = nil
 		baselinesWithoutObsPeriod = append(baselinesWithoutObsPeriod, cloned)
 	}
-	suite.ElementsMatch(baselinesWithoutObsPeriod, baselines)
+	protoassert.ElementsMatch(suite.T(), baselinesWithoutObsPeriod, baselines)
 }
 
 func (suite *ManagerTestSuite) TestFlowsUpdateForOtherEntityTypes() {
@@ -264,6 +266,19 @@ func (suite *ManagerTestSuite) TestFlowsUpdateForOtherEntityTypes() {
 			Protocol: storage.L4Protocol_L4_PROTOCOL_TCP,
 			DstPort:  13,
 		},
+		// This conn is also valid and should get incorporated into the baseline.
+		{
+			SrcEntity: networkgraph.Entity{
+				Type: storage.NetworkEntityInfo_DEPLOYMENT,
+				ID:   depID(1),
+			},
+			DstEntity: networkgraph.Entity{
+				Type: storage.NetworkEntityInfo_INTERNAL_ENTITIES,
+				ID:   "INTERNALZZ",
+			},
+			Protocol: storage.L4Protocol_L4_PROTOCOL_TCP,
+			DstPort:  13,
+		},
 		// This is to a listen endpoint, so it should not get incorporated.
 		{
 			SrcEntity: networkgraph.Entity{
@@ -305,6 +320,13 @@ func (suite *ManagerTestSuite) TestFlowsUpdateForOtherEntityTypes() {
 					},
 				}},
 				Properties: []*storage.NetworkBaselineConnectionProperties{properties(false, 1)},
+			},
+			&storage.NetworkBaselinePeer{
+				Entity: &storage.NetworkEntity{Info: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_INTERNAL_ENTITIES,
+					Id:   "INTERNALZZ",
+				}},
+				Properties: []*storage.NetworkBaselineConnectionProperties{properties(false, 13)},
 			},
 			&storage.NetworkBaselinePeer{
 				Entity: &storage.NetworkEntity{Info: &storage.NetworkEntityInfo{
@@ -561,6 +583,25 @@ func (suite *ManagerTestSuite) TestDeploymentDelete() {
 	)
 }
 
+func (suite *ManagerTestSuite) TestDeploymentDelete_WithoutBaseline() {
+	suite.mustInitManager(
+		baselineWithPeers(1, depPeer(2, properties(false, 52))),
+		wrapWithForbidden(baselineWithPeers(3),
+			depPeer(2, properties(false, 52))),
+	)
+
+	// DeploymentID 2 should be in the internal map, but no baseline created yet.
+	suite.Require().NoError(suite.m.ProcessDeploymentCreate(depID(2), depName(2), clusterID(2), ns(2)))
+
+	suite.Require().NoError(suite.m.ProcessDeploymentDelete(depID(2)))
+
+	// Should remove DeploymentID 2 from other baselines (BaselinedPeers and ForbiddenPeers) even if its baseline was never created
+	suite.assertBaselinesAre(
+		baselineWithPeers(1),
+		baselineWithPeers(3),
+	)
+}
+
 func (suite *ManagerTestSuite) TestDeleteWithExtSrcPeer() {
 	suite.networkPolicyDS.EXPECT().GetNetworkPolicies(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	suite.mustInitManager(
@@ -688,7 +729,7 @@ func (suite *ManagerTestSuite) TestLockBaseline() {
 	)
 	baseline1 := suite.mustGetBaseline(1)
 	beforeLockUpdateState := baseline1.GetLocked()
-	baseline1Copy := baseline1.Clone()
+	baseline1Copy := baseline1.CloneVT()
 	baseline1Copy.Locked = !beforeLockUpdateState
 	expectOneTimeCallToConnectionManagerWithBaseline(suite, baseline1Copy)
 
@@ -765,7 +806,7 @@ func (suite *ManagerTestSuite) TestBaselineSyncMsg() {
 	suite.Nil(suite.m.ProcessBaselineLockUpdate(managerCtx, depID(1), false))
 
 	baseline1 := suite.mustGetBaseline(1)
-	baseline1Copy := baseline1.Clone()
+	baseline1Copy := baseline1.CloneVT()
 	baseline1Copy.Locked = true
 	// Lock state changed from unlocked to locked, we should sync this baseline to sensor now
 	expectOneTimeCallToConnectionManagerWithBaseline(suite, baseline1Copy)

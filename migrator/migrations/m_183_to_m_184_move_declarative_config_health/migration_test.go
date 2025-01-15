@@ -82,7 +82,7 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, unhealthyDeclarativeConfigName, config.GetName())
 	assert.Equal(t, unhealthyDeclarativeConfig.GetErrorMessage(), config.GetErrorMessage())
 	assert.Equal(t, unhealthyDeclarativeConfig.GetStatus().String(), config.GetStatus().String())
-	assert.Equal(t, unhealthyDeclarativeConfig.GetLastTimestamp(), config.GetLastTimestamp())
+	assert.Equal(t, unhealthyDeclarativeConfig.GetLastTimestamp().AsTime(), config.GetLastTimestamp().AsTime())
 
 	config, exists, err = healthStore.Get(ctx, healthyDeclarativeConfigID)
 	assert.NoError(t, err)
@@ -90,5 +90,5 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, healthyDeclarativeConfigName, config.GetName())
 	assert.Equal(t, healthyDeclarativeConfig.GetErrorMessage(), config.GetErrorMessage())
 	assert.Equal(t, healthyDeclarativeConfig.GetStatus().String(), config.GetStatus().String())
-	assert.Equal(t, healthyDeclarativeConfig.GetLastTimestamp(), config.GetLastTimestamp())
+	assert.Equal(t, healthyDeclarativeConfig.GetLastTimestamp().AsTime(), config.GetLastTimestamp().AsTime())
 }

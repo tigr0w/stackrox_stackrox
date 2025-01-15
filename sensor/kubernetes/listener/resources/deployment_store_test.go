@@ -1,13 +1,15 @@
 package resources
 
 import (
-	"sort"
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/features"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/uuid"
-	"github.com/stackrox/rox/sensor/common/registry"
 	"github.com/stackrox/rox/sensor/common/selector"
 	"github.com/stackrox/rox/sensor/common/service"
 	"github.com/stackrox/rox/sensor/common/store"
@@ -43,7 +45,7 @@ func (s *deploymentStoreSuite) SetupTest() {
 func (s *deploymentStoreSuite) createDeploymentWrap(deploymentObj interface{}) *deploymentWrap {
 	action := central.ResourceAction_CREATE_RESOURCE
 	wrap := newDeploymentEventFromResource(deploymentObj, &action,
-		"deployment", "", s.mockPodLister, s.namespaceStore, hierarchyFromPodLister(s.mockPodLister), "", orchestratornamespaces.NewOrchestratorNamespaces(), registry.NewRegistryStore(nil))
+		"deployment", "", s.mockPodLister, s.namespaceStore, hierarchyFromPodLister(s.mockPodLister), "", orchestratornamespaces.NewOrchestratorNamespaces())
 	return wrap
 }
 
@@ -101,9 +103,113 @@ func (s *deploymentStoreSuite) Test_FindDeploymentIDsWithServiceAccount() {
 
 			ids := s.deploymentStore.FindDeploymentIDsWithServiceAccount(testCase.queryNs, testCase.querySa)
 			s.Require().Len(ids, len(testCase.expectedIDs), "FindDeploymentIDsWithServiceAccount returned incorrect number of elements")
-			sort.Strings(testCase.expectedIDs)
-			sort.Strings(ids)
+			slices.Sort(testCase.expectedIDs)
+			slices.Sort(ids)
 			s.Equal(testCase.expectedIDs, ids)
+		})
+	}
+}
+
+func (s *deploymentStoreSuite) Test_BuildDeployments_CachedDependencies() {
+	s.T().Setenv(features.SensorDeploymentBuildOptimization.EnvVar(), "true")
+	defaultExposure := []map[service.PortRef][]*storage.PortConfig_ExposureInfo{
+		{
+			service.PortRefOf(stubService()): []*storage.PortConfig_ExposureInfo{{
+				Level:       storage.PortConfig_EXTERNAL,
+				ServiceName: "test.service",
+				ServicePort: 5432,
+			}},
+		},
+		{
+			service.PortRefOf(stubService()): []*storage.PortConfig_ExposureInfo{{
+				Level:       storage.PortConfig_HOST,
+				ServiceName: "test2.service",
+				ServicePort: 2345,
+				ExternalIps: []string{"a.com", "b.com"},
+			}},
+		},
+	}
+
+	defaultExposureUnordered := []map[service.PortRef][]*storage.PortConfig_ExposureInfo{
+		{
+			service.PortRefOf(stubService()): []*storage.PortConfig_ExposureInfo{{
+				Level:       storage.PortConfig_HOST,
+				ServiceName: "test2.service",
+				ServicePort: 2345,
+				ExternalIps: []string{"b.com", "a.com"},
+			}},
+		},
+		{
+			service.PortRefOf(stubService()): []*storage.PortConfig_ExposureInfo{{
+				Level:       storage.PortConfig_EXTERNAL,
+				ServiceName: "test.service",
+				ServicePort: 5432,
+			}},
+		},
+	}
+
+	dependenciesX := store.Dependencies{
+		PermissionLevel: storage.PermissionLevel_CLUSTER_ADMIN,
+		Exposures:       defaultExposure,
+	}
+
+	dependenciesXUnordered := store.Dependencies{
+		PermissionLevel: storage.PermissionLevel_CLUSTER_ADMIN,
+		Exposures:       defaultExposureUnordered,
+	}
+
+	dependenciesY := store.Dependencies{
+		PermissionLevel: storage.PermissionLevel_NONE,
+		Exposures:       defaultExposure,
+	}
+
+	testCases := map[string]struct {
+		orderedDependencies        []store.Dependencies
+		orderedExpectedPointerSame []bool
+	}{
+		"No dependencies changed returns cached deployment": {
+			orderedDependencies:        []store.Dependencies{dependenciesX, dependenciesX},
+			orderedExpectedPointerSame: []bool{true},
+		},
+		"Dependency changed returns a new deployment object": {
+			orderedDependencies:        []store.Dependencies{dependenciesX, dependenciesY},
+			orderedExpectedPointerSame: []bool{false},
+		},
+		"Multiple events with only one dependency change doesn't cause multiple clones": {
+			orderedDependencies:        []store.Dependencies{dependenciesX, dependenciesY, dependenciesY, dependenciesY},
+			orderedExpectedPointerSame: []bool{false, true, true}, // should build new object once and then return it for subsequent calls
+		},
+		"Dependencies with mixed ordered in fields should not cause new object to be built": {
+			orderedDependencies:        []store.Dependencies{dependenciesX, dependenciesXUnordered},
+			orderedExpectedPointerSame: []bool{true},
+		},
+	}
+
+	for name, testCase := range testCases {
+		s.Run(name, func() {
+			uid := uuid.NewV4().String()
+			wrap := s.createDeploymentWrap(makeDeploymentObject("test-deployment", "test-ns", types.UID(uid)))
+			s.deploymentStore.addOrUpdateDeployment(wrap)
+
+			objs := make([]*storage.Deployment, len(testCase.orderedDependencies))
+			var err error
+			for i := 0; i < len(testCase.orderedDependencies); i++ {
+				objs[i], _, err = s.deploymentStore.BuildDeploymentWithDependencies(uid, testCase.orderedDependencies[i])
+				s.Require().NoError(err)
+			}
+
+			for i, exp := range testCase.orderedExpectedPointerSame {
+				if exp {
+					s.Assert().Samef(objs[i], objs[i+1], "Comparing objects %d and %d failed", i, i+1)
+				} else {
+					s.Assert().NotSamef(objs[i], objs[i+1], "Comparing objects %d and %d failed", i, i+1)
+				}
+			}
+
+			s.deploymentStore.Cleanup()
+			s.Assert().Len(s.deploymentStore.deploymentSnapshots, 0)
+			s.Assert().Len(s.deploymentStore.deploymentIDs, 0)
+			s.Assert().Len(s.deploymentStore.deployments, 0)
 		})
 	}
 }
@@ -113,7 +219,7 @@ func (s *deploymentStoreSuite) Test_BuildDeploymentWithDependencies() {
 	wrap := s.createDeploymentWrap(makeDeploymentObject("test-deployment", "test-ns", types.UID(uid)))
 	s.deploymentStore.addOrUpdateDeployment(wrap)
 
-	expectedExposureInfo := storage.PortConfig_ExposureInfo{
+	expectedExposureInfo := &storage.PortConfig_ExposureInfo{
 		Level:       storage.PortConfig_EXTERNAL,
 		ServiceName: "test.service",
 		ServicePort: 5432,
@@ -122,11 +228,11 @@ func (s *deploymentStoreSuite) Test_BuildDeploymentWithDependencies() {
 	_, isBuilt := s.deploymentStore.GetBuiltDeployment(uid)
 	s.Assert().False(isBuilt, "deployment should not be fully built yet")
 
-	deployment, err := s.deploymentStore.BuildDeploymentWithDependencies(uid, store.Dependencies{
+	deployment, _, err := s.deploymentStore.BuildDeploymentWithDependencies(uid, store.Dependencies{
 		PermissionLevel: storage.PermissionLevel_CLUSTER_ADMIN,
 		Exposures: []map[service.PortRef][]*storage.PortConfig_ExposureInfo{
 			{
-				service.PortRefOf(stubService()): []*storage.PortConfig_ExposureInfo{&expectedExposureInfo},
+				service.PortRefOf(stubService()): []*storage.PortConfig_ExposureInfo{expectedExposureInfo},
 			},
 		},
 	})
@@ -136,7 +242,7 @@ func (s *deploymentStoreSuite) Test_BuildDeploymentWithDependencies() {
 	s.Require().Len(deployment.GetPorts(), 1)
 	s.Require().Len(deployment.GetPorts()[0].GetExposureInfos(), 1)
 
-	s.Equal(expectedExposureInfo, *deployment.GetPorts()[0].GetExposureInfos()[0])
+	protoassert.Equal(s.T(), expectedExposureInfo, deployment.GetPorts()[0].GetExposureInfos()[0])
 	s.Equal(storage.PermissionLevel_CLUSTER_ADMIN, deployment.GetServiceAccountPermissionLevel(), "Service account permission level")
 
 	_, isBuilt = s.deploymentStore.GetBuiltDeployment(uid)
@@ -144,12 +250,37 @@ func (s *deploymentStoreSuite) Test_BuildDeploymentWithDependencies() {
 }
 
 func (s *deploymentStoreSuite) Test_BuildDeploymentWithDependencies_NoDeployment() {
-	_, err := s.deploymentStore.BuildDeploymentWithDependencies("some-uuid", store.Dependencies{
+	_, _, err := s.deploymentStore.BuildDeploymentWithDependencies("some-uuid", store.Dependencies{
 		PermissionLevel: storage.PermissionLevel_CLUSTER_ADMIN,
 		Exposures:       []map[service.PortRef][]*storage.PortConfig_ExposureInfo{},
 	})
 
 	s.ErrorContains(err, "some-uuid doesn't exist")
+}
+
+func (s *deploymentStoreSuite) Test_DeleteSnapshot() {
+	s.T().Setenv(features.SensorDeploymentBuildOptimization.EnvVar(), "true")
+	uid := uuid.NewV4().String()
+	wrap := s.createDeploymentWrap(makeDeploymentObject("test-deployment", "test-ns", types.UID(uid)))
+	s.deploymentStore.addOrUpdateDeployment(wrap)
+
+	_, isBuilt := s.deploymentStore.GetBuiltDeployment(uid)
+	s.Assert().False(isBuilt, "deployment should not be fully built yet")
+
+	deployment, _, err := s.deploymentStore.BuildDeploymentWithDependencies(uid, store.Dependencies{
+		PermissionLevel: storage.PermissionLevel_CLUSTER_ADMIN,
+	})
+
+	s.NoError(err, "should not have error building dependencies")
+	s.Assert().Len(s.deploymentStore.deploymentSnapshots, 1)
+
+	s.deploymentStore.removeDeployment(&deploymentWrap{
+		Deployment: &storage.Deployment{
+			Id:        deployment.GetId(),
+			Namespace: deployment.GetNamespace(),
+		},
+	})
+	s.Assert().Len(s.deploymentStore.deploymentSnapshots, 0)
 }
 
 func withLabels(deployment *v1.Deployment, labels map[string]string) *v1.Deployment {
@@ -359,6 +490,103 @@ func (s *deploymentStoreSuite) Test_FindDeploymentIDsByImages() {
 			s.ElementsMatch(c.expectedIDs, ids)
 		})
 	}
+}
+
+func (s *deploymentStoreSuite) Test_DeleteAllDeployments() {
+	testCases := []struct {
+		before []*v1.Deployment
+		after  []*v1.Deployment
+	}{
+		{
+			before: []*v1.Deployment{
+				makeDeploymentObject("before1", "test-ns", "uuid-1"),
+			},
+		},
+		{
+			after: []*v1.Deployment{
+				makeDeploymentObject("after1", "test-ns", "uuid-2"),
+			},
+		},
+		{
+			before: []*v1.Deployment{
+				makeDeploymentObject("before1", "test-ns", "uuid-1"),
+				makeDeploymentObject("before2", "test-ns", "uuid-2"),
+			},
+			after: []*v1.Deployment{
+				makeDeploymentObject("after1", "test-ns", "uuid-3"),
+			},
+		},
+		{
+			before: []*v1.Deployment{
+				makeDeploymentObject("same", "test-ns", "uuid-1"),
+			},
+			after: []*v1.Deployment{
+				makeDeploymentObject("same", "test-ns", "uuid-1"),
+			},
+		},
+		{
+			before: []*v1.Deployment{
+				makeDeploymentObject("before1", "old-ns", "uuid-1"),
+			},
+			after: []*v1.Deployment{
+				makeDeploymentObject("after1", "new-ns", "uuid-2"),
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		s.Run(fmt.Sprintf("Create %d before %d after", len(testCase.before), len(testCase.after)), func() {
+			s.namespaceStore = newNamespaceStore()
+			s.namespaceStore.addNamespace(&storage.NamespaceMetadata{Name: "test-ns", Id: "1"})
+			s.deploymentStore = newDeploymentStore()
+			s.mockPodLister = &mockPodLister{}
+
+			for _, before := range testCase.before {
+				s.deploymentStore.addOrUpdateDeployment(s.createDeploymentWrap(before))
+			}
+
+			s.deploymentStore.Cleanup()
+
+			for _, before := range testCase.before {
+				s.Assert().Nil(s.deploymentStore.Get(string(before.GetUID())))
+			}
+
+			s.Assert().Equal(0, s.deploymentStore.CountDeploymentsForNamespace("test-ns"))
+			s.Assert().Equal(0, s.deploymentStore.CountDeploymentsForNamespace("old-ns"))
+			s.Assert().Equal(0, s.deploymentStore.CountDeploymentsForNamespace("new-ns"))
+
+			for _, after := range testCase.after {
+				s.deploymentStore.addOrUpdateDeployment(s.createDeploymentWrap(after))
+			}
+
+			for _, after := range testCase.after {
+				s.Assert().NotNil(s.deploymentStore.Get(string(after.GetUID())))
+			}
+
+		})
+	}
+}
+
+func (s *deploymentStoreSuite) TestEnhanceDeploymentReadOnly() {
+	d := storage.Deployment{
+		Id:   uuid.NewV4().String(),
+		Name: "testDeployment",
+	}
+	deps := store.Dependencies{
+		PermissionLevel: storage.PermissionLevel_CLUSTER_ADMIN,
+		Exposures: []map[service.PortRef][]*storage.PortConfig_ExposureInfo{
+			{
+				service.PortRefOf(stubService()): make([]*storage.PortConfig_ExposureInfo, 0),
+			},
+		},
+	}
+	s.Empty(s.deploymentStore.deployments)
+
+	s.deploymentStore.EnhanceDeploymentReadOnly(&d, deps)
+
+	s.Equal(storage.PermissionLevel_CLUSTER_ADMIN, d.GetServiceAccountPermissionLevel())
+	protoassert.SliceContains(s.T(), d.GetPorts(), &storage.PortConfig{ContainerPort: 4321, Protocol: "TCP"})
+	s.Empty(s.deploymentStore.deployments, "EnhanceDeploymentReadOnly mustn't modify deployment store")
 }
 
 func makeDeploymentObject(name, namespace string, id types.UID) *v1.Deployment {

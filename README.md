@@ -19,6 +19,7 @@
             - [Common Makefile Targets](#common-makefile-targets)
             - [Productivity](#productivity)
             - [GoLand Configuration](#goland-configuration)
+            - [Running sql_integration tests](#running-sql_integration-tests)
             - [Debugging](#debugging)
     - [Generating Portable Installers](#generating-portable-installers)
     - [Dependencies and Recommendations for Running StackRox](#dependencies-and-recommendations-for-running-stackrox)
@@ -101,13 +102,14 @@ helm search repo stackrox
 ```
 To install stackrox-central-services, you will need a secure password. This password will be needed later for UI login and when creating an init bundle.
 ```sh
-STACKROX_ADMIN_PASSWORD="$(openssl rand -base64 20 | tr -d '/=+')"
+ROX_ADMIN_PASSWORD="$(openssl rand -base64 20 | tr -d '/=+')"
 ```
 From here, you can install stackrox-central-services to get Central and Scanner components deployed on your cluster. Note that you need only one deployed instance of stackrox-central-services even if you plan to secure multiple clusters.
 ```sh
 helm upgrade --install -n stackrox --create-namespace stackrox-central-services \
   stackrox/stackrox-central-services \
-  --set central.adminPassword.value="${STACKROX_ADMIN_PASSWORD}"
+  --set central.adminPassword.value="${ROX_ADMIN_PASSWORD}" \
+  --set central.persistence.none="true"
 ```
 
 #### Install Central in Clusters With Limited Resources
@@ -129,7 +131,8 @@ helm upgrade -n stackrox stackrox-central-services stackrox/stackrox-central-ser
   --set scanner.resources.requests.memory=500Mi \
   --set scanner.resources.requests.cpu=500m \
   --set scanner.resources.limits.memory=2500Mi \
-  --set scanner.resources.limits.cpu=2000m
+  --set scanner.resources.limits.cpu=2000m \
+  --set central.persistence.none="true"
 ```
 
 </details>
@@ -141,9 +144,9 @@ Next, the secured cluster component will need to be deployed to collect informat
 
 Generate an init bundle containing initialization secrets. The init bundle will be saved in `stackrox-init-bundle.yaml`, and you will use it to provision secured clusters as shown below.
 ```sh
-kubectl -n stackrox exec deploy/central -- roxctl --insecure-skip-tls-verify \
-  --password "${STACKROX_ADMIN_PASSWORD}" \
-  central init-bundles generate stackrox-init-bundle --output - > stackrox-init-bundle.yaml
+echo "$ROX_ADMIN_PASSWORD" | \
+kubectl -n stackrox exec -i deploy/central -- bash -c 'ROX_ADMIN_PASSWORD=$(cat) roxctl --insecure-skip-tls-verify \
+  central init-bundles generate stackrox-init-bundle --output -' > stackrox-init-bundle.yaml
 ```
 Set a meaningful cluster name for your secured cluster in the `CLUSTER_NAME` shell variable. The cluster will be identified by this name in the clusters list of the StackRox UI.
 ```sh
@@ -151,9 +154,10 @@ CLUSTER_NAME="my-secured-cluster"
 ```
 Then install stackrox-secured-cluster-services (with the init bundle you generated earlier) using this command:
 ```sh
-helm install -n stackrox stackrox-secured-cluster-services stackrox/stackrox-secured-cluster-services \
+helm upgrade --install --create-namespace -n stackrox stackrox-secured-cluster-services stackrox/stackrox-secured-cluster-services \
   -f stackrox-init-bundle.yaml \
-  --set clusterName="$CLUSTER_NAME"
+  --set clusterName="$CLUSTER_NAME" \
+  --set centralEndpoint="central.stackrox.svc:443"
 ```
 When deploying stackrox-secured-cluster-services on a different cluster than the one where stackrox-central-services is deployed, you will also need to specify the endpoint (address and port number) of Central via `--set centralEndpoint=<endpoint_of_central_service>` command-line argument.
 
@@ -164,6 +168,7 @@ When deploying StackRox Secured Cluster Services on a small node, you can instal
 helm install -n stackrox stackrox-secured-cluster-services stackrox/stackrox-secured-cluster-services \
   -f stackrox-init-bundle.yaml \
   --set clusterName="$CLUSTER_NAME" \
+  --set centralEndpoint="central.stackrox.svc:443" \
   --set sensor.resources.requests.memory=500Mi \
   --set sensor.resources.requests.cpu=500m \
   --set sensor.resources.limits.memory=500Mi \
@@ -274,7 +279,7 @@ Then go to https://localhost:8000/ in your web browser.
 
 **Username** = The default user is `admin`
 
-**Password (Helm)**   = The password is in `$STACKROX_ADMIN_PASSWORD` after a manual installation, or printed at the end of the quick installation script.
+**Password (Helm)**   = The password is in `$ROX_ADMIN_PASSWORD` after a manual installation, or printed at the end of the quick installation script.
 
 **Password (Script)** = The password will be located in the `/deploy/<orchestrator>/central-deploy/password.txt` folder for the script install.
 
@@ -287,6 +292,10 @@ Then go to https://localhost:8000/ in your web browser.
 
 - **E2E Dev Docs**: Refer to [qa-tests-backend/README.md](./qa-tests-backend/README.md)
 
+- **Pull request guidelines**: [contributing.md](./.github/contributing.md)
+
+- **Go coding style guide**: [go-coding-style.md](./.github/go-coding-style.md)
+
 ### Quickstart
 
 #### Build Tooling
@@ -297,14 +306,11 @@ The following tools are necessary to test code and build image(s):
 
 * [Make](https://www.gnu.org/software/make/)
 * [Go](https://golang.org/dl/)
-  * Get the version specified in [EXPECTED_GO_VERSION](./EXPECTED_GO_VERSION).
-* Various Go linters and RocksDB dependencies that can be installed using `make reinstall-dev-tools`.
+* Various Go linters that can be installed using `make reinstall-dev-tools`.
 * UI build tooling as specified in [ui/README.md](ui/README.md#Build-Tooling).
 * [Docker](https://docs.docker.com/get-docker/)
   * Note: Docker Desktop now requires a paid subscription for larger, enterprise companies.
   * Some StackRox devs recommend [Colima](https://github.com/abiosoft/colima)
-* [RocksDB](https://rocksdb.org/)
-  * Follow [Mac](https://github.com/stackrox/dev-docs/blob/main/docs/getting-started/getting-started-darwin.md#install-rocksdb) or [Linux](https://github.com/stackrox/dev-docs/blob/main/docs/getting-started/getting-started-linux.md#install-rocksdb) guide)
 * [Xcode](https://developer.apple.com/xcode/) command line tools (macOS only)
 * [Bats](https://github.com/sstephenson/bats) is used to run certain shell tests.
   You can obtain it with `brew install bats` or `npm install -g bats`.
@@ -331,7 +337,7 @@ try first making sure the EULA is agreed by:
 
 For more info, see <https://github.com/nodejs/node-gyp/issues/569>
 
-</details>  
+</details>
 
 #### Clone StackRox
 <details><summary>Click to expand</summary>
@@ -360,7 +366,6 @@ git clone git@github.com:stackrox/stackrox.git
 
 To sweeten your experience, install [the workflow scripts](#productivity) beforehand.
 
-First install RocksDB. Follow [Mac](https://github.com/stackrox/dev-docs/blob/main/docs/getting-started/getting-started-darwin.md#install-rocksdb) or [Linux](https://github.com/stackrox/dev-docs/blob/main/docs/getting-started/getting-started-linux.md#install-rocksdb) guidelines
 ```bash
 $ cd $GOPATH/src/github.com/stackrox/stackrox
 $ make install-dev-tools
@@ -373,11 +378,14 @@ Development can either happen in GCP or locally with
 Note that Docker Desktop and Colima are more suited for macOS development, because the cluster will have access to images built with `make image` locally without additional configuration. Also, Collector has better support for these than minikube where drivers may not be available.
 
 ```bash
-# To keep the StackRox Central's RocksDB state between restarts, set:
+# To keep the StackRox Central's Postgres DB state between database upgrades and restarts, set:
 $ export STORAGE=pvc
 
 # To save time on rebuilds by skipping UI builds, set:
 $ export SKIP_UI_BUILD=1
+
+# To save time on rebuilds by skipping CLI builds, set:
+$ export SKIP_CLI_BUILD=1
 
 # When you deploy locally make sure your kube context points to the desired kubernetes cluster,
 # for example Docker Desktop.
@@ -395,8 +403,11 @@ $ logmein
 See [Installation via Scripts](#installation-via-scripts) for further reading. To read more about the environment variables, consult
 [deploy/README.md](https://github.com/stackrox/stackrox/blob/master/deploy/README.md#env-variables).
 
+</details>
+
 #### Common Makefile Targets
 
+<details><summary>Click to expand</summary>
 
 ```bash
 # Build image, this will create `stackrox/main` with a tag defined by `make tag`.
@@ -468,7 +479,7 @@ $ smart-diff                    # check diff relative to parent branch
 If you're using GoLand for development, the following can help improve the experience.
 
 
-Make sure the `Protocol Buffers` plugin is installed. The plugin comes installed by default in GoLand.  
+Make sure the `Protocol Buffers` plugin is installed. The plugin comes installed by default in GoLand.
 If it isn't, use `Help | Find Action...`, type `Plugins` and hit enter, then switch to `Marketplace`, type its name and install the plugin.
 
 This plugin does not know where to look for `.proto` imports by default in GoLand therefore you need to explicitly
@@ -481,6 +492,21 @@ configure paths for this plugin. See <https://github.com/jvolkman/intellij-proto
   and `$HOME/go/pkg/mod/github.com/gogo/protobuf@v1.3.1/`.
 * To verify: use menu `Navigate | File...` type any `.proto` file name, e.g. `alert_service.proto`, and check that all
   import strings are shown green, not red.
+
+</details>
+
+#### Running sql_integration tests
+
+<details><summary>Click to expand</summary>
+
+Go tests annotated with `//go:build sql_integration` require a PostgreSQL server listening on port 5432.
+Due to how authentication is set up in code, it is the easiest to start Postgres in a container like this:
+
+```bash
+$ docker run --rm --env POSTGRES_USER="$USER" --env POSTGRES_HOST_AUTH_METHOD=trust --publish 5432:5432 docker.io/library/postgres:13
+```
+
+With that running in the background, `sql_integration` tests can be triggered from IDE or command-line.
 
 </details>
 
@@ -527,7 +553,7 @@ more info.
 <details><summary>Kubernetes</summary>
 
 ```bash
-docker run -i --rm stackrox.io/main:<tag> interactive > k8s.zip
+docker run -i --rm quay.io/stackrox-io/main:<tag> central generate interactive > k8s.zip
 ```
 
 This will run you through an installer and generate a `k8s.zip` file.
@@ -557,7 +583,7 @@ bash image-setup.sh
 ```
 
 ```bash
-docker run -i --rm stackrox.io/main:<tag> interactive > openshift.zip
+docker run -i --rm quay.io/stackrox-io/main:<tag> central generate interactive > openshift.zip
 ```
 
 This will run you through an installer and generate a `openshift.zip` file.

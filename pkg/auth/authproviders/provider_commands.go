@@ -6,6 +6,8 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/tokens"
 	"github.com/stackrox/rox/pkg/dberrors"
+	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/protocompat"
 )
 
 // Commands that providers can execute.
@@ -13,11 +15,42 @@ import (
 // These commands are temporarily applied as options.
 /////////////////////////////////////////////////////
 
+// ValidateName checks that the name of the provider is neither empty
+// nor already used in database.
+func ValidateName(ctx context.Context, store Store) ProviderOption {
+	return func(pr *providerImpl) error {
+		return validateName(ctx, pr, store)
+	}
+}
+
+var (
+	errNoProviderName        = errox.InvalidArgs.CausedBy("no name specified for the provider")
+	errDuplicateProviderName = errox.InvalidArgs.CausedBy("a provider already exists with the given name")
+)
+
+func validateName(ctx context.Context, pr *providerImpl, store Store) error {
+	providerName := pr.storedInfo.GetName()
+	if len(providerName) == 0 {
+		return errNoProviderName
+	}
+	exists, err := store.AuthProviderExistsWithName(ctx, providerName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return errDuplicateProviderName
+	}
+	return nil
+}
+
 // DefaultAddToStore adds the providers stored data to the input store.
 func DefaultAddToStore(ctx context.Context, store Store) ProviderOption {
 	return func(pr *providerImpl) error {
 		if pr.doNotStore {
 			return nil
+		}
+		if pr.storedInfo.LastUpdated == nil {
+			pr.storedInfo.LastUpdated = protocompat.TimestampNow()
 		}
 		return store.AddAuthProvider(ctx, pr.storedInfo)
 	}
@@ -29,6 +62,7 @@ func UpdateStore(ctx context.Context, store Store) ProviderOption {
 		if pr.doNotStore {
 			return nil
 		}
+		pr.storedInfo.LastUpdated = protocompat.TimestampNow()
 		return store.UpdateAuthProvider(ctx, pr.storedInfo)
 	}
 }

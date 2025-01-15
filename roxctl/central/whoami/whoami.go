@@ -2,14 +2,14 @@ package whoami
 
 import (
 	"context"
-	"sort"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/utils"
+	"github.com/stackrox/rox/roxctl/common"
 	"github.com/stackrox/rox/roxctl/common/environment"
 	"github.com/stackrox/rox/roxctl/common/flags"
 	"github.com/stackrox/rox/roxctl/common/util"
@@ -17,8 +17,9 @@ import (
 
 type centralWhoAmICommand struct {
 	// Properties that are injected or constructed.
-	env     environment.Environment
-	timeout time.Duration
+	env          environment.Environment
+	timeout      time.Duration
+	retryTimeout time.Duration
 }
 
 // Command defines the central command tree
@@ -32,18 +33,20 @@ func Command(cliEnvironment environment.Environment) *cobra.Command {
 	}
 
 	flags.AddTimeout(cbr)
+	flags.AddRetryTimeout(cbr)
 	return cbr
 }
 
 func makeCentralWhoAmICommand(cliEnvironment environment.Environment, cbr *cobra.Command) *centralWhoAmICommand {
 	return &centralWhoAmICommand{
-		env:     cliEnvironment,
-		timeout: flags.Timeout(cbr),
+		env:          cliEnvironment,
+		timeout:      flags.Timeout(cbr),
+		retryTimeout: flags.RetryTimeout(cbr),
 	}
 }
 
 func (cmd *centralWhoAmICommand) whoami() error {
-	conn, err := cmd.env.GRPCConnection()
+	conn, err := cmd.env.GRPCConnection(common.WithRetryTimeout(cmd.retryTimeout))
 	if err != nil {
 		return err
 	}
@@ -62,46 +65,33 @@ func (cmd *centralWhoAmICommand) whoami() error {
 		return err
 	}
 
-	roles, err := v1.NewRoleServiceClient(conn).GetRoles(ctx, &v1.Empty{})
-	if err != nil {
-		return err
-	}
-
 	// Lexicographically sort the set of resources we have (known) access to.
 	resourceToAccess := perms.GetResourceToAccess()
 	resources := make([]string, 0, len(resourceToAccess))
 	for resource := range resourceToAccess {
 		resources = append(resources, resource)
 	}
-	sort.Strings(resources)
+	slices.Sort(resources)
 
 	cmd.env.Logger().PrintfLn(`UserID:
 	%s
 User name:
 	%s`, auth.GetUserId(), auth.GetUserInfo().GetFriendlyName())
 
-	// Print resource access information
-	cmd.printRoles(roles.GetRoles())
+	// Print the roles associated with the user.
+	cmd.env.Logger().PrintfLn("Roles:")
+	for _, role := range auth.GetUserInfo().GetRoles() {
+		cmd.env.Logger().PrintfLn("\t- %s", role.GetName())
+	}
+
+	// Print resource access information.
 	cmd.env.Logger().PrintfLn("Access:")
 	for _, resource := range resources {
 		access := resourceToAccess[resource]
-		cmd.env.Logger().PrintfLn("  %s %s", accessString(access), resource)
+		cmd.env.Logger().PrintfLn("\t%s %s", accessString(access), resource)
 	}
 
 	return nil
-}
-
-func (cmd *centralWhoAmICommand) printRoles(roles []*storage.Role) {
-	cmd.env.Logger().PrintfLn("Roles:")
-	sb := strings.Builder{}
-	sb.WriteRune(' ')
-	for i, r := range roles {
-		sb.WriteString(r.GetName())
-		if i != len(roles)-1 {
-			sb.WriteString(", ")
-		}
-	}
-	cmd.env.Logger().PrintfLn(sb.String())
 }
 
 func accessString(access storage.Access) string {

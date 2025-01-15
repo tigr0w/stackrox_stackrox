@@ -6,25 +6,14 @@ import queryService from 'utils/queryService';
 
 import Loader from 'Components/Loader';
 import Widget from 'Components/Widget';
-import ViewAllButton from 'Components/ViewAllButton';
 import Sunburst from 'Components/visuals/Sunburst';
 import NoComponentVulnMessage from 'Components/NoComponentVulnMessage';
 import workflowStateContext from 'Containers/workflowStateContext';
-import { vulnSeverityIconColors } from 'constants/visuals/colors';
+import { vulnerabilitySeverityColorMap } from 'constants/severityColors';
 import { vulnerabilitySeverityLabels } from 'messages/common';
 import { getScopeQuery } from 'Containers/VulnMgmt/Entity/VulnMgmtPolicyQueryUtil';
-import useFeatureFlags from 'hooks/useFeatureFlags';
 
-const CVES_QUERY = gql`
-    query getCvesByCVSS($query: String, $scopeQuery: String) {
-        results: vulnerabilities(query: $query, scopeQuery: $scopeQuery) {
-            cve
-            cvss
-            severity
-            summary
-        }
-    }
-`;
+import ViewAllButton from './ViewAllButton';
 
 const IMAGE_CVES_QUERY = gql`
     query getImageCvesByCVSS($query: String, $scopeQuery: String) {
@@ -67,28 +56,20 @@ const vulnerabilitySeverities = [
 ];
 
 const CvesByCvssScore = ({ entityContext, parentContext }) => {
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVMUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
+    let queryToUse = IMAGE_CVES_QUERY;
+    let linkTypeToUse = entityTypes.IMAGE_CVE;
 
-    let queryToUse = CVES_QUERY;
-    let linkTypeToUse = entityTypes.CVE;
-
-    if (showVMUpdates) {
-        if (entityContext[entityTypes.CLUSTER]) {
-            queryToUse = CLUSTER_CVES_QUERY;
-            linkTypeToUse = entityTypes.CLUSTER_CVE;
-        } else if (
-            entityContext[entityTypes.NODE] ||
-            entityContext[entityTypes.NODE_COMPONENT] ||
-            parentContext[entityTypes.NODE] ||
-            parentContext[entityTypes.NODE_COMPONENT]
-        ) {
-            queryToUse = NODE_CVES_QUERY;
-            linkTypeToUse = entityTypes.NODE_CVE;
-        } else {
-            queryToUse = IMAGE_CVES_QUERY;
-            linkTypeToUse = entityTypes.IMAGE_CVE;
-        }
+    if (entityContext[entityTypes.CLUSTER]) {
+        queryToUse = CLUSTER_CVES_QUERY;
+        linkTypeToUse = entityTypes.CLUSTER_CVE;
+    } else if (
+        entityContext[entityTypes.NODE] ||
+        entityContext[entityTypes.NODE_COMPONENT] ||
+        parentContext[entityTypes.NODE] ||
+        parentContext[entityTypes.NODE_COMPONENT]
+    ) {
+        queryToUse = NODE_CVES_QUERY;
+        linkTypeToUse = entityTypes.NODE_CVE;
     }
 
     const { loading, data = {} } = useQuery(queryToUse, {
@@ -114,11 +95,9 @@ const CvesByCvssScore = ({ entityContext, parentContext }) => {
                 return {
                     // severity, // generic Sunburst does not expect this data-specific property
                     name: `${cve} -- ${summary}`,
-                    color: vulnSeverityIconColors[severity],
-                    labelColor: 'var(--base-600)',
-                    textColor: 'var(--base-600)',
+                    color: vulnerabilitySeverityColorMap[severity],
                     value: cvss,
-                    link: workflowState.pushRelatedEntity(entityTypes.CVE, cve).toUrl(),
+                    link: workflowState.pushRelatedEntity(linkTypeToUse, cve).toUrl(),
                 };
             });
     }
@@ -127,9 +106,8 @@ const CvesByCvssScore = ({ entityContext, parentContext }) => {
         return vulnerabilitySeverities.map((severity) => {
             return {
                 name: vulnerabilitySeverityLabels[severity],
-                color: vulnSeverityIconColors[severity],
+                color: vulnerabilitySeverityColorMap[severity],
                 children: getChildren(vulns, severity),
-                textColor: 'var(--base-600)',
                 value: 0,
             };
         });
@@ -141,7 +119,6 @@ const CvesByCvssScore = ({ entityContext, parentContext }) => {
             const text = `${category.length} rated as ${vulnerabilitySeverityLabels[severity]}`;
             return {
                 text,
-                textColor: 'var(--base-600)',
             };
         });
     }
@@ -169,7 +146,7 @@ const CvesByCvssScore = ({ entityContext, parentContext }) => {
     }
 
     return (
-        <Widget className="h-full pdf-page" header="CVEs by CVSS Score" headerComponents={header}>
+        <Widget className="h-full pdf-page" header="CVEs by CVSS score" headerComponents={header}>
             {content}
         </Widget>
     );

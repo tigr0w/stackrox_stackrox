@@ -1,5 +1,5 @@
 import withAuth from '../../helpers/basicAuth';
-import { visitMainDashboardWithStaticResponseForSummaryCounts } from '../../helpers/main';
+import { visitMainDashboardWithStaticResponseForClustersForPermission } from '../../helpers/main';
 
 import { clustersAlias, interactAndVisitClusters } from './Clusters.helpers';
 
@@ -16,27 +16,19 @@ describe('Clusters', () => {
         };
 
         interactAndVisitClusters(() => {
-            const staticResponseForSummaryCounts = {
+            const staticResponseForClustersForPermissions = {
                 body: {
-                    data: {
-                        clusterCount: 0, // no secured clusters
-                        nodeCount: 3,
-                        violationCount: 20,
-                        deploymentCount: 35,
-                        imageCount: 31,
-                        secretCount: 15,
-                    },
+                    clusters: [], // no secured clusters
                 },
             };
-            visitMainDashboardWithStaticResponseForSummaryCounts(staticResponseForSummaryCounts);
+            visitMainDashboardWithStaticResponseForClustersForPermission(
+                staticResponseForClustersForPermissions
+            );
         }, staticResponseMapForClusters);
 
-        cy.get(
-            'p:contains("You have successfully deployed a Red Hat Advanced Cluster Security platform.")'
-        );
-
-        cy.get('h2:contains("Configure the clusters you want to secure.")');
-
-        cy.get('a:contains("View instructions")');
+        // Replace with h2 if refactoring restores h1 element with Clusters
+        cy.get('h1:contains("Secure clusters with a reusable init bundle")');
+        // Button text depends whether or not init bundles exist.
+        cy.get('button:contains("View installation methods")');
     });
 });

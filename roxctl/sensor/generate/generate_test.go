@@ -31,7 +31,7 @@ type mockClustersServiceServer struct {
 	postClusterInjectedFn      postClusterFn
 
 	// spy properties
-	clusterSent                     []storage.Cluster
+	clusterSent                     []*storage.Cluster
 	getClusterCalled                bool
 	getKernelSupportAvailableCalled bool
 }
@@ -50,7 +50,7 @@ func (m *mockClustersServiceServer) GetKernelSupportAvailable(_ context.Context,
 }
 
 func (m *mockClustersServiceServer) PostCluster(_ context.Context, cluster *storage.Cluster) (*v1.ClusterResponse, error) {
-	m.clusterSent = append(m.clusterSent, *cluster)
+	m.clusterSent = append(m.clusterSent, cluster)
 	return m.postClusterInjectedFn(cluster)
 }
 
@@ -351,6 +351,7 @@ func (s *sensorGenerateTestSuite) TestSlimCollectorSelection() {
 	}
 
 	for name, testCase := range testCases {
+		testCase := testCase
 		s.Run(name, func() {
 			_, errOut, closeF, generateCmd, mock := s.createMockedCommand(getDefaultsFake(testCase.serverHasKernelSupport), postClusterFake)
 			defer closeF()

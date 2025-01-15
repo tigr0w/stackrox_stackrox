@@ -2,11 +2,12 @@ package service
 
 import (
 	"context"
-	"sort"
+	_ "embed"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	clusterDataStore "github.com/stackrox/rox/central/cluster/datastore"
 	deploymentDataStore "github.com/stackrox/rox/central/deployment/datastore"
@@ -15,7 +16,6 @@ import (
 	notifierDataStore "github.com/stackrox/rox/central/notifier/datastore"
 	"github.com/stackrox/rox/central/policy/datastore"
 	"github.com/stackrox/rox/central/reprocessor"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
@@ -31,12 +31,11 @@ import (
 	"github.com/stackrox/rox/pkg/detection"
 	"github.com/stackrox/rox/pkg/errorhelpers"
 	"github.com/stackrox/rox/pkg/errox"
-	"github.com/stackrox/rox/pkg/expiringcache"
-	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/grpc/authn"
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
+	"github.com/stackrox/rox/pkg/images/cache"
 	"github.com/stackrox/rox/pkg/logging"
 	mitreDS "github.com/stackrox/rox/pkg/mitre/datastore"
 	mitreUtils "github.com/stackrox/rox/pkg/mitre/utils"
@@ -44,7 +43,9 @@ import (
 	"github.com/stackrox/rox/pkg/policies"
 	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
+	"github.com/stackrox/rox/pkg/search/paginated"
 	"github.com/stackrox/rox/pkg/search/predicate/basematchers"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/stringutils"
@@ -59,8 +60,7 @@ var (
 	log = logging.LoggerForModule()
 
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
-		// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-		user.With(permissions.View(resources.Policy)): {
+		user.With(permissions.View(resources.WorkflowAdministration)): {
 			"/v1.PolicyService/GetPolicy",
 			"/v1.PolicyService/ListPolicies",
 			"/v1.PolicyService/ReassessPolicies",
@@ -70,8 +70,7 @@ var (
 			"/v1.PolicyService/PolicyFromSearch",
 			"/v1.PolicyService/GetPolicyMitreVectors",
 		},
-		// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-		user.With(permissions.Modify(resources.Policy)): {
+		user.With(permissions.Modify(resources.WorkflowAdministration)): {
 			"/v1.PolicyService/PostPolicy",
 			"/v1.PolicyService/PutPolicy",
 			"/v1.PolicyService/PatchPolicy",
@@ -89,13 +88,13 @@ const (
 	uncategorizedCategory = `Uncategorized`
 	dryRunParallelism     = 8
 	identityUIDKey        = "identityUID"
+	maxPoliciesReturned   = 1000
 )
 
 var (
 	policySyncReadCtx = sac.WithGlobalAccessScopeChecker(context.Background(),
 		sac.AllowFixedScopes(sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
-			// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-			sac.ResourceScopeKeys(resources.Policy)))
+			sac.ResourceScopeKeys(resources.WorkflowAdministration)))
 
 	partialListPolicyGroups = set.NewStringSet(fieldnames.ImageComponent, fieldnames.DockerfileLine, fieldnames.EnvironmentVariable)
 )
@@ -112,11 +111,9 @@ type serviceImpl struct {
 	mitreStore        mitreDS.AttackReadOnlyDataStore
 	reprocessor       reprocessor.Loop
 	connectionManager connection.Manager
-
-	buildTimePolicies detection.PolicySet
 	lifecycleManager  lifecycle.Manager
 	processor         notifier.Processor
-	metadataCache     expiringcache.Cache
+	metadataCache     cache.ImageMetadata
 
 	validator *policyValidator
 
@@ -174,6 +171,7 @@ func convertPoliciesToListPolicies(policies []*storage.Policy) []*storage.ListPo
 			LastUpdated:     p.GetLastUpdated(),
 			EventSource:     p.GetEventSource(),
 			IsDefault:       p.GetIsDefault(),
+			Source:          p.GetSource(),
 		})
 	}
 	return listPolicies
@@ -182,23 +180,24 @@ func convertPoliciesToListPolicies(policies []*storage.Policy) []*storage.ListPo
 // ListPolicies retrieves all policies in ListPolicy form according to the request.
 func (s *serviceImpl) ListPolicies(ctx context.Context, request *v1.RawQuery) (*v1.ListPoliciesResponse, error) {
 	resp := new(v1.ListPoliciesResponse)
-	if request.GetQuery() == "" {
-		policies, err := s.policies.GetAllPolicies(ctx)
-		if err != nil {
-			return nil, err
-		}
-		resp.Policies = convertPoliciesToListPolicies(policies)
-	} else {
-		parsedQuery, err := search.ParseQuery(request.GetQuery())
-		if err != nil {
-			return nil, errors.Wrap(errox.InvalidArgs, err.Error())
-		}
-		policies, err := s.policies.SearchRawPolicies(ctx, parsedQuery)
-		if err != nil {
-			return nil, err
-		}
-		resp.Policies = convertPoliciesToListPolicies(policies)
+	parsedQuery, err := search.ParseQuery(request.GetQuery(), search.MatchAllIfEmpty())
+	if err != nil {
+		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
 	}
+	// Fill in pagination.
+	pagination := request.GetPagination()
+	if request.GetPagination() == nil {
+		pagination = &v1.Pagination{
+			Limit: maxPoliciesReturned,
+		}
+	}
+	paginated.FillPagination(parsedQuery, pagination, maxPoliciesReturned)
+
+	policies, err := s.policies.SearchRawPolicies(ctx, parsedQuery)
+	if err != nil {
+		return nil, err
+	}
+	resp.Policies = convertPoliciesToListPolicies(policies)
 
 	return resp, nil
 }
@@ -317,10 +316,24 @@ func (s *serviceImpl) PatchPolicy(ctx context.Context, request *v1.PatchPolicyRe
 	return s.PutPolicy(ctx, policy)
 }
 
-// DeletePolicy deletes an policy from the system.
+// DeletePolicy deletes a policy from the system.
 func (s *serviceImpl) DeletePolicy(ctx context.Context, request *v1.ResourceByID) (*v1.Empty, error) {
 	if request.GetId() == "" {
 		return nil, errors.Wrap(errox.InvalidArgs, "A policy id must be specified to delete a Policy")
+	}
+
+	policy, exists, err := s.policies.GetPolicy(ctx, request.GetId())
+	if !exists {
+		// make repeated calls with the same policy ID idempotent
+		return &v1.Empty{}, nil
+	} else if err != nil {
+		// if any database error other than not exist occurs, bail early
+		return nil, errors.Wrap(err, "Database error while trying to delete policy")
+	}
+
+	// Note: default policies cannot be deleted, only disabled
+	if policy.IsDefault {
+		return nil, errors.Wrap(errox.InvalidArgs, "A default policy cannot be deleted. (You can disable a default policy, but not delete it.)")
 	}
 
 	if err := s.policies.RemovePolicy(ctx, request.GetId()); err != nil {
@@ -489,13 +502,10 @@ func (s *serviceImpl) predicateBasedDryRunPolicy(ctx context.Context, cancelCtx 
 				return
 			}
 
-			var matched *augmentedobjs.NetworkPoliciesApplied
-			if features.NetworkPolicySystemPolicy.Enabled() {
-				matched, err = s.getNetworkPoliciesForDeployment(ctx, deployment)
-				if err != nil {
-					log.Errorf("failed to fetch network policies for deployment: %s", err.Error())
-					return
-				}
+			matched, err := s.getNetworkPoliciesForDeployment(ctx, deployment)
+			if err != nil {
+				log.Errorf("failed to fetch network policies for deployment: %s", err.Error())
+				return
 			}
 
 			violations, err := compiledPolicy.MatchAgainstDeployment(nil, booleanpolicy.EnhancedDeployment{
@@ -554,7 +564,7 @@ func (s *serviceImpl) GetPolicyCategories(ctx context.Context, _ *v1.Empty) (*v1
 
 	response := new(v1.PolicyCategoriesResponse)
 	response.Categories = categorySet.AsSlice()
-	sort.Strings(response.Categories)
+	slices.Sort(response.Categories)
 
 	return response, nil
 }
@@ -575,23 +585,11 @@ func (s *serviceImpl) getPolicyCategorySet(ctx context.Context) (categorySet set
 }
 
 func (s *serviceImpl) addActivePolicy(policy *storage.Policy) error {
-	errorList := errorhelpers.NewErrorList("error adding policy to detection caches: ")
-
-	if policies.AppliesAtBuildTime(policy) {
-		errorList.AddError(s.buildTimePolicies.UpsertPolicy(policy))
-	} else {
-		s.buildTimePolicies.RemovePolicy(policy.GetId())
-	}
-
-	errorList.AddError(s.lifecycleManager.UpsertPolicy(policy))
-	return errorList.ToError()
+	return errors.Wrap(s.lifecycleManager.UpsertPolicy(policy), "adding policy to detection cache")
 }
 
 func (s *serviceImpl) removeActivePolicy(id string) error {
-	errorList := errorhelpers.NewErrorList("error removing policy from detection: ")
-	s.buildTimePolicies.RemovePolicy(id)
-	errorList.AddError(s.lifecycleManager.RemovePolicy(id))
-	return errorList.ToError()
+	return errors.Wrap(s.lifecycleManager.RemovePolicy(id), "removing policy from detection cache")
 }
 
 func (s *serviceImpl) EnableDisablePolicyNotification(ctx context.Context, request *v1.EnableDisablePolicyNotificationRequest) (*v1.Empty, error) {
@@ -720,10 +718,10 @@ func (s *serviceImpl) ExportPolicies(ctx context.Context, request *v1.ExportPoli
 	if err != nil {
 		return nil, err
 	}
-	errDetails := &v1.ExportPoliciesErrorList{}
+	errDetails := &v1.PolicyOperationErrorList{}
 	for _, missingIndex := range missingIndices {
 		policyID := request.PolicyIds[missingIndex]
-		errDetails.Errors = append(errDetails.Errors, &v1.ExportPolicyError{
+		errDetails.Errors = append(errDetails.Errors, &v1.PolicyOperationError{
 			PolicyId: policyID,
 			Error: &v1.PolicyError{
 				Error: "not found",
@@ -801,7 +799,7 @@ func (s *serviceImpl) ImportPolicies(ctx context.Context, request *v1.ImportPoli
 			}
 		}
 		// Clone here because this may be the same object stored by the DB
-		importResponse.Policy = importResponse.GetPolicy().Clone()
+		importResponse.Policy = importResponse.GetPolicy().CloneVT()
 		removeInternal(importResponse.Policy)
 	}
 

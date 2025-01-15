@@ -7,12 +7,12 @@ jobs:
   update-scanner:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         ref: master # this is our target branch
         fetch-depth: 0 # we need to fetch all branches
     - name: Checkout scanner repo
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: stackrox/scanner
         path: deps/scanner
@@ -21,16 +21,16 @@ jobs:
       run: make -sC deps/scanner tag | tee SCANNER_VERSION
     - name: Create Pull Request
       id: cpr
-      uses: peter-evans/create-pull-request@v5
+      uses: peter-evans/create-pull-request@v7
       with:
-        token: '${{ secrets.ROBOT_ROX_GITHUB_TOKEN }}'
+        token: '${{ secrets.RHACS_BOT_GITHUB_TOKEN }}'
         commit-message: Update SCANNER_VERSION
-        committer: RoxBot <roxbot@stackrox.com>
-        author: RoxBot <roxbot@stackrox.com>
+        committer: '${{ secrets.RHACS_BOT_GITHUB_USERNAME }} <${{ secrets.RHACS_BOT_GITHUB_EMAIL }}>'
+        author: '${{ secrets.RHACS_BOT_GITHUB_USERNAME }} <${{ secrets.RHACS_BOT_GITHUB_EMAIL }}>'
         branch: update_scanner_version
         signoff: false
         delete-branch: true
-        title: Update SCANNER_VERSION
+        title: 'chore(scanner): Update SCANNER_VERSION'
         body: |
           Weekly update of SCANNER_VERSION to latest master version
         labels: |
@@ -40,8 +40,8 @@ jobs:
         draft: false
     - name: Enable Pull Request Automerge
       if: steps.cpr.outputs.pull-request-operation == 'created'
-      uses: peter-evans/enable-pull-request-automerge@v2
+      uses: peter-evans/enable-pull-request-automerge@v3
       with:
-        token: '${{ secrets.ROBOT_ROX_GITHUB_TOKEN }}'
+        token: '${{ secrets.RHACS_BOT_GITHUB_TOKEN }}'
         pull-request-number: '${{ steps.cpr.outputs.pull-request-number }}'
         merge-method: squash

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	alertDataStore "github.com/stackrox/rox/central/alert/datastore"
 	"github.com/stackrox/rox/central/alert/mappings"
@@ -31,20 +31,25 @@ import (
 	secretDataStore "github.com/stackrox/rox/central/secret/datastore"
 	serviceAccountDataStore "github.com/stackrox/rox/central/serviceaccount/datastore"
 	v1 "github.com/stackrox/rox/generated/api/v1"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	"github.com/stackrox/rox/pkg/search/enumregistry"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/utils"
 	"google.golang.org/grpc"
 )
 
-const maxAutocompleteResults = 10
+const (
+	// auto-complete sets its pagination to 100, reduces the result set by removing duplicates and will return a list of maxAutocompleteResults.
+	// The number was chosen as a reasonably big set of results to try to return 10 results after removing duplicates.
+	// Ideally the auto-complete would guarantee a result set of 10, but the nature of the search framework and SQL-queries
+	// did not make this possible without more investigations.
+	pagination             = 100
+	maxAutocompleteResults = 10
+)
 
 var (
 	categoryToOptionsMultimap = func() map[v1.SearchCategory]search.OptionsMultiMap {
@@ -80,10 +85,7 @@ func (s *serviceImpl) getSearchFuncs() map[v1.SearchCategory]SearchFunc {
 		v1.SearchCategory_ROLEBINDINGS:       s.bindings.SearchRoleBindings,
 		v1.SearchCategory_SUBJECTS:           service.NewSubjectSearcher(s.bindings).SearchSubjects,
 		v1.SearchCategory_IMAGE_INTEGRATIONS: s.imageIntegrations.SearchImageIntegrations,
-	}
-
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		searchfuncs[v1.SearchCategory_POLICY_CATEGORIES] = s.categories.SearchPolicyCategories
+		v1.SearchCategory_POLICY_CATEGORIES:  s.categories.SearchPolicyCategories,
 	}
 
 	return searchfuncs
@@ -106,10 +108,7 @@ func (s *serviceImpl) getAutocompleteSearchers() map[v1.SearchCategory]search.Se
 		v1.SearchCategory_ROLEBINDINGS:       s.bindings,
 		v1.SearchCategory_SUBJECTS:           service.NewSubjectSearcher(s.bindings),
 		v1.SearchCategory_IMAGE_INTEGRATIONS: s.imageIntegrations,
-	}
-
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		searchers[v1.SearchCategory_POLICY_CATEGORIES] = s.categories
+		v1.SearchCategory_POLICY_CATEGORIES:  s.categories,
 	}
 
 	return searchers
@@ -203,7 +202,7 @@ func RunAutoComplete(ctx context.Context, queryString string, categories []v1.Se
 	}
 	// Set the max return size for the query
 	query.Pagination = &v1.QueryPagination{
-		Limit: maxAutocompleteResults,
+		Limit: pagination,
 	}
 
 	if len(categories) == 0 {
@@ -238,8 +237,8 @@ func RunAutoComplete(ctx context.Context, queryString string, categories []v1.Se
 		for _, field := range autocompleteFields {
 			fieldPaths = append(fieldPaths,
 				field.GetFieldPath(),
-				blevesearch.ToMapKeyPath(field.GetFieldPath()),
-				blevesearch.ToMapValuePath(field.GetFieldPath()),
+				search.ToMapKeyPath(field.GetFieldPath()),
+				search.ToMapValuePath(field.GetFieldPath()),
 			)
 		}
 
@@ -310,7 +309,7 @@ func (s *serviceImpl) RegisterServiceHandler(ctx context.Context, mux *runtime.S
 
 func (s *serviceImpl) initializeAuthorizer() {
 	s.authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
-		user.With(): {
+		user.Authenticated(): {
 			"/v1.SearchService/Search",
 			"/v1.SearchService/Options",
 			"/v1.SearchService/Autocomplete",

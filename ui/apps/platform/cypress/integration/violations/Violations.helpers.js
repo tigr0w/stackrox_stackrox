@@ -1,12 +1,15 @@
+import path from 'path';
+
 import { visitFromLeftNav } from '../../helpers/nav';
 import { interactAndWaitForResponses } from '../../helpers/request';
 import { visit } from '../../helpers/visit';
+import { selectors } from './Violations.selectors';
 
 // Source of truth for keys in routeMatcherMap and staticResponseMap objects.
 export const alertsAlias = 'alerts';
 export const alertsCountAlias = 'alertscount';
 
-const routeMatcherMapForViolationsWithoutSearchOptions = {
+const routeMatcherMapForViolations = {
     [alertsAlias]: {
         method: 'GET',
         url: '/v1/alerts?query=*',
@@ -17,20 +20,6 @@ const routeMatcherMapForViolationsWithoutSearchOptions = {
     },
 };
 
-const searchOptionsAlias = 'search/metadata/options';
-
-const routeMatcherMapForSearchOptions = {
-    [searchOptionsAlias]: {
-        method: 'GET',
-        url: '/v1/search/metadata/options?categories=ALERTS',
-    },
-};
-
-const routeMatcherMapForViolationsWithSearchOptions = {
-    ...routeMatcherMapForViolationsWithoutSearchOptions,
-    ...routeMatcherMapForSearchOptions,
-};
-
 const basePath = '/main/violations';
 
 const title = 'Violations';
@@ -38,7 +27,7 @@ const title = 'Violations';
 // visit
 
 export function visitViolationsFromLeftNav() {
-    visitFromLeftNav(title, routeMatcherMapForViolationsWithSearchOptions);
+    visitFromLeftNav(title, routeMatcherMapForViolations);
 
     cy.location('pathname').should('eq', basePath);
     cy.get(`h1:contains("${title}")`);
@@ -48,9 +37,9 @@ export function visitViolationsFromLeftNav() {
  * @param {Record<string, { body: unknown } | { fixture: string }>} [staticResponseMap]
  */
 export function visitViolations(staticResponseMap) {
-    visit(basePath, routeMatcherMapForViolationsWithSearchOptions, staticResponseMap);
+    visit(basePath, routeMatcherMapForViolations, staticResponseMap);
 
-    cy.get(`.pf-c-page__sidebar nav.pf-c-nav > ul > li > a:contains("${title}")`).should(
+    cy.get(`.pf-v5-c-page__sidebar nav.pf-v5-c-nav > ul > li > a:contains("${title}")`).should(
         'have.class',
         'pf-m-current'
     );
@@ -65,7 +54,7 @@ export function visitViolationsWithFixture(fixturePath) {
             [alertsCountAlias]: { body: { count } },
         };
 
-        visit(basePath, routeMatcherMapForViolationsWithSearchOptions, staticResponseMap);
+        visit(basePath, routeMatcherMapForViolations, staticResponseMap);
 
         cy.get(`h1:contains("${title}")`);
     });
@@ -196,7 +185,7 @@ export function clickDeploymentTabWithFixture(fixturePath) {
         },
     };
 
-    const deploymentTab = 'li.pf-c-tabs__item:contains("Deployment")';
+    const deploymentTab = 'li.pf-v5-c-tabs__item:contains("Deployment")';
 
     cy.get(deploymentTab).should('not.have.class', 'pf-m-current');
 
@@ -209,4 +198,49 @@ export function clickDeploymentTabWithFixture(fixturePath) {
     );
 
     cy.get(deploymentTab).should('have.class', 'pf-m-current');
+}
+
+export function interactAndWaitForNetworkPoliciesResponse(interactionCallback) {
+    const networkPolicyAlias = 'networkpolicies';
+
+    const routeMatcherMapForNetworkPolicies = {
+        [networkPolicyAlias]: {
+            method: 'GET',
+            url: '/v1/networkpolicies?*',
+        },
+    };
+
+    const staticResponseMapForNetworkPolicies = {
+        [networkPolicyAlias]: {
+            fixture: 'network/networkPoliciesInNamespace.json',
+        },
+    };
+
+    interactAndWaitForResponses(
+        () => {
+            interactionCallback();
+        },
+        routeMatcherMapForNetworkPolicies,
+        staticResponseMapForNetworkPolicies
+    );
+}
+
+/**
+ * Click the Export YAML button in the Network Policy modal and wait for the file to be downloaded.
+ * @param {string} fileName
+ * @param {(yaml: string) => void} onDownload
+ */
+export function exportAndWaitForNetworkPolicyYaml(fileName, onDownload) {
+    cy.get(
+        `[role="dialog"]:contains("Network policy details") button:contains('Export YAML')`
+    ).click();
+
+    cy.readFile(path.join(Cypress.config('downloadsFolder'), fileName)).then(onDownload);
+}
+
+export function selectFilteredWorkflowView(viewName) {
+    cy.get(selectors.filteredWorkflowSelectButton).click();
+    cy.get(
+        `ul[aria-label="Filtered workflow select options"] button:contains("${viewName}")`
+    ).click();
 }

@@ -7,9 +7,10 @@ import orchestratormanager.OrchestratorTypes
 import io.stackrox.proto.api.v1.SearchServiceOuterClass
 import io.stackrox.proto.storage.ImageIntegrationOuterClass
 import io.stackrox.proto.storage.ImageOuterClass
+import io.stackrox.proto.storage.PolicyOuterClass.Policy
+import io.stackrox.proto.storage.ScopeOuterClass.Scope
 import io.stackrox.proto.storage.Vulnerability
 
-import common.Constants
 import objects.AzureRegistryIntegration
 import objects.ClairScannerIntegration
 import objects.ClairV4ScannerIntegration
@@ -23,8 +24,8 @@ import objects.StackroxScannerIntegration
 import services.ClusterService
 import services.ImageIntegrationService
 import services.ImageService
+import services.PolicyService
 import util.Env
-import util.Helpers
 import util.Timer
 
 import org.junit.Assume
@@ -32,17 +33,22 @@ import org.junit.AssumptionViolatedException
 import spock.lang.Shared
 import spock.lang.Tag
 import spock.lang.Unroll
+import spock.lang.IgnoreIf
 
+@Tag("PZ")
 class ImageScanningTest extends BaseSpecification {
+    static final private String TEST_NAMESPACE = "qa-image-scanning-test"
+    private final static String CLONED_POLICY_SUFFIX = "(${TEST_NAMESPACE})"
 
     static final private String UBI8_0_IMAGE = "registry.access.redhat.com/ubi8:8.0-208"
-    static final private String RHEL7_IMAGE =
-            "richxsl/rhel7@sha256:8f3aae325d2074d2dc328cb532d6e7aeb0c588e15ddf847347038fe0566364d6"
-    static final private String QUAY_IMAGE_WITH_CLAIR_SCAN_DATA = "quay.io/rhacs-eng/qa:struts-app"
-    static final private String GCR_IMAGE   = "us.gcr.io/stackrox-ci/qa/registry-image:0.2"
+    static final private String RHEL7_IMAGE = "quay.io/rhacs-eng/qa-multi-arch:rhel7-minimal-7.5-422"
+    static final private String QUAY_IMAGE_WITH_CLAIR_SCAN_DATA = "quay.io/rhacs-eng/qa:nginx-unprivileged"
+    static final private String GCR_IMAGE   = "us.gcr.io/acs-san-stackroxci/qa-multi-arch/registry-image:0.2"
     static final private String NGINX_IMAGE = "quay.io/rhacs-eng/qa:nginx-1-12-1"
     static final private String OCI_IMAGE   = "quay.io/rhacs-eng/qa:oci-manifest"
-    static final private String AR_IMAGE    = "us-west1-docker.pkg.dev/stackrox-ci/artifact-registry-test1/nginx:1.17"
+    static final private String LIST_IMAGE_OCI_MANIFEST = "quay.io/rhacs-eng/qa:list-image-oci-manifest"
+    static final private String AR_IMAGE =
+        "us-west1-docker.pkg.dev/acs-san-stackroxci/artifact-registry-test/nginx:1.17"
     static final private String CENTOS_IMAGE = "quay.io/rhacs-eng/qa:centos7-base"
     static final private String CENTOS_ECHO_IMAGE = "quay.io/rhacs-eng/qa:centos7-base-echo"
 
@@ -55,12 +61,16 @@ class ImageScanningTest extends BaseSpecification {
             "Secure Shell (ssh) Port Exposed in Image",
     ]
 
+    @Shared
+    private List<Policy> policiesScopedForTest
+
     static final private Integer WAIT_FOR_VIOLATION_TIMEOUT = isRaceBuild() ? 450 : 30
 
     static final private Map<String, Deployment> DEPLOYMENTS = [
             "quay": new Deployment()
                     .setName("quay-image-scanning-test")
-                    // same image as us.gcr.io/stackrox-ci/qa/registry-image:0.3 but just retagged
+                    .setNamespace(TEST_NAMESPACE)
+                    // same image as us.gcr.io/acs-san-stackroxci/qa/registry-image:0.3 but just retagged
                     // Alternatively can use quay.io/rhacs-eng/qa:struts-app but that doesn't have as many
                     // dockerfile violations
                     .setImage("quay.io/rhacs-eng/qa:registry-image-0-3")
@@ -68,17 +78,20 @@ class ImageScanningTest extends BaseSpecification {
                     .addImagePullSecret("quay-image-scanning-test"),
             "gcr": new Deployment()
                     .setName("gcr-image-scanning-test")
-                    .setImage("us.gcr.io/stackrox-ci/qa/registry-image:0.3")
+                    .setNamespace(TEST_NAMESPACE)
+                    .setImage("us.gcr.io/acs-san-stackroxci/qa/registry-image:0.3")
                     .addLabel("app", "gcr-image-scanning-test")
                     .addImagePullSecret("gcr-image-scanning-test"),
             "ecr": new Deployment()
                     .setName("ecr-image-registry-test")
+                    .setNamespace(TEST_NAMESPACE)
                     .setImage("${Env.mustGetAWSECRRegistryID()}.dkr.ecr.${Env.mustGetAWSECRRegistryRegion()}." +
                             "amazonaws.com/stackrox-qa-ecr-test:registry-image-no-secrets")
                     .addLabel("app", "ecr-image-registry-test")
                     .addImagePullSecret("ecr-image-registry-test"),
             "acr": new Deployment()
                     .setName("acr-image-registry-test")
+                    .setNamespace(TEST_NAMESPACE)
                     .setImage("stackroxci.azurecr.io/stackroxci/registry-image:0.3")
                     .addLabel("app", "acr-image-registry-test")
                     .addImagePullSecret("acr-image-registry-test"),
@@ -87,53 +100,63 @@ class ImageScanningTest extends BaseSpecification {
     static final private Map<String, Secret> IMAGE_PULL_SECRETS = [
             "quay": new Secret(
                     name: "quay-image-scanning-test",
-                    namespace: Constants.ORCHESTRATOR_NAMESPACE,
+                    namespace: TEST_NAMESPACE,
                     username: Env.mustGet("QUAY_RHACS_ENG_RO_USERNAME"),
                     password: Env.mustGet("QUAY_RHACS_ENG_RO_PASSWORD"),
                     server: "https://quay.io"),
             "gcr": new Secret(
                     name: "gcr-image-scanning-test",
-                    namespace: Constants.ORCHESTRATOR_NAMESPACE,
+                    namespace: TEST_NAMESPACE,
                     username: "_json_key",
-                    password: Env.mustGet("GOOGLE_CREDENTIALS_GCR_SCANNER"),
+                    password: Env.mustGetGCRServiceAccount(),
                     server: "https://us.gcr.io"),
             "ecr": new Secret(
                     name: "ecr-image-registry-test",
-                    namespace: Constants.ORCHESTRATOR_NAMESPACE,
+                    namespace: TEST_NAMESPACE,
                     username: "AWS",
                     password: Env.mustGetAWSECRDockerPullPassword(),
                     server: "https://${Env.mustGetAWSECRRegistryID()}.dkr.ecr."+
                             "${Env.mustGetAWSECRRegistryRegion()}.amazonaws.com"),
             "acr": new Secret(
                     name: "acr-image-registry-test",
-                    namespace: Constants.ORCHESTRATOR_NAMESPACE,
+                    namespace: TEST_NAMESPACE,
                     username: "stackroxci",
                     password: Env.mustGet("AZURE_REGISTRY_PASSWORD"),
                     server: "https://stackroxci.azurecr.io"),
     ]
-
-    @Shared
-    static final private List<String> UPDATED_POLICIES = []
 
     def setupSpec() {
         ImageIntegrationService.deleteStackRoxScannerIntegrationIfExists()
         removeGCRImagePullSecret()
         ImageIntegrationService.deleteAutoRegisteredGCRIntegrationIfExists()
 
-        // Enable specific policies to test image integrations
-        for (String policy : POLICIES) {
-            if (Services.setPolicyDisabled(policy, false)) {
-                UPDATED_POLICIES.add(policy)
-            }
+        // Create namespace scoped policies for test.
+        policiesScopedForTest = []
+        for (String policyName : POLICIES) {
+            Policy policy = Services.getPolicyByName(policyName)
+            Policy scopedPolicyForTest = policy.toBuilder()
+                .clearId()
+                .setName(policy.getName() + " ${CLONED_POLICY_SUFFIX}")
+                .setDisabled(false)
+                .clearScope()
+                .addScope(Scope.newBuilder().setNamespace(TEST_NAMESPACE))
+                .build()
+            Policy created = PolicyService.createAndFetchPolicy(scopedPolicyForTest)
+            assert created
+            policiesScopedForTest.add(created)
         }
+
+        orchestrator.ensureNamespaceExists(TEST_NAMESPACE)
     }
 
     def cleanupSpec() {
+        orchestrator.deleteNamespace(TEST_NAMESPACE)
+
         ImageIntegrationService.addStackroxScannerIntegration()
         addGCRImagePullSecret()
 
-        for (String policy : UPDATED_POLICIES) {
-            Services.setPolicyDisabled(policy, true)
+        for (Policy policy : policiesScopedForTest) {
+            PolicyService.deletePolicy(policy.getId())
         }
     }
 
@@ -179,19 +202,12 @@ class ImageScanningTest extends BaseSpecification {
         }
     }
 
-    def cleanupSetupForRetry() {
-        if (Helpers.getAttemptCount() > 1) {
-            cleanup()
-            setup()
-        }
-    }
-
     @Unroll
     @Tag("BAT")
     @Tag("Integration")
+    // GCR doesn't have MA images to verify the GCR-image-integrations on P/Z
+    @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
     def "Verify Image Registry+Scanner Integrations: #testName"() {
-        cleanupSetupForRetry()
-
         given:
         "Get deployment details used to test integration"
         assert IMAGE_PULL_SECRETS.containsKey(integration)
@@ -235,8 +251,8 @@ class ImageScanningTest extends BaseSpecification {
 
         and:
         "validate expected violations based on dockerfile"
-        for (String policy : POLICIES) {
-            assert Services.waitForViolation(deployment.name, policy, WAIT_FOR_VIOLATION_TIMEOUT)
+        for (Policy policy : policiesScopedForTest) {
+            assert Services.waitForViolation(deployment.name, policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
         }
 
         when:
@@ -362,7 +378,7 @@ class ImageScanningTest extends BaseSpecification {
                  {
             GCRImageIntegration.createCustomIntegration(
                              name: "gcr-no-access",
-                             serviceAccount: Env.mustGet("GOOGLE_CREDENTIALS_GCR_NO_ACCESS_KEY"),
+                             serviceAccount: Env.mustGetGCRNoAccessServiceAccount(),
                              skipTestIntegration: true,
                      ) },]                                                                                          |
                 41  | 170 | 28
@@ -381,7 +397,6 @@ class ImageScanningTest extends BaseSpecification {
     @Tag("Integration")
     def "Verify Image Scan Results - #scanner.name() - #component:#version - #image - #cve - #idx"() {
         Assume.assumeTrue(scanner.isTestable())
-        cleanupSetupForRetry()
 
         when:
         "A registry is required"
@@ -402,7 +417,7 @@ class ImageScanningTest extends BaseSpecification {
 
         and:
         "Scan Image and verify results"
-        ImageOuterClass.Image img = Services.scanImage(image)
+        ImageOuterClass.Image img = ImageService.scanImage(image, false)
         assert img.metadata.dataSource.id != ""
         assert img.metadata.dataSource.name != ""
         assert img.scan.dataSource.id != ""
@@ -413,6 +428,10 @@ class ImageScanningTest extends BaseSpecification {
                 img.scan.componentsList.find {
                     c -> c.name == component && c.version == version && c.layerIndex == idx
                 }
+        if (Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x") {
+            // some breather for few arches
+            sleep(10000)
+        }
         foundComponent != null
 
         Vulnerability.EmbeddedVulnerability vuln =
@@ -429,9 +448,10 @@ class ImageScanningTest extends BaseSpecification {
         "Data inputs are: "
 
         scanner                          | component      | version            | idx | cve              | image        | registry
-        new StackroxScannerIntegration() | "openssl-libs"        | "1:1.0.1e-34.el7"  | 1   | "RHSA-2014:1052" | RHEL7_IMAGE  | ""
-        new StackroxScannerIntegration() | "openssl-libs"        | "1:1.0.1e-34.el7"  | 1   | "CVE-2014-3509"  | RHEL7_IMAGE  | ""
+        new StackroxScannerIntegration() | "openssl-libs"        | "1:1.0.2k-12.el7"  | 0   | "RHSA-2019:0483" | RHEL7_IMAGE  | ""
+        new StackroxScannerIntegration() | "openssl-libs"        | "1:1.0.2k-12.el7"  | 0   | "CVE-2018-0735"  | RHEL7_IMAGE  | ""
         new StackroxScannerIntegration() | "systemd"             | "229-4ubuntu21.29" | 0   | "CVE-2021-33910" | OCI_IMAGE    | ""
+        new StackroxScannerIntegration() | "glibc"               | "2.35-0ubuntu3.1"  | 4   | "CVE-2016-20013" | LIST_IMAGE_OCI_MANIFEST | ""
         new ClairScannerIntegration()    | "apt"                 | "1.4.8"            | 0   | "CVE-2011-3374"  | NGINX_IMAGE  | ""
         new ClairScannerIntegration()    | "bash"                | "4.4-5"            | 0   | "CVE-2019-18276" | NGINX_IMAGE  | ""
         new ClairV4ScannerIntegration()  | "openssl-libs"        | "1:1.1.1-8.el8"    | 0   | "RHSA-2021:1024" | UBI8_0_IMAGE | ""
@@ -442,7 +462,6 @@ class ImageScanningTest extends BaseSpecification {
     @Tag("BAT")
     @Tag("Integration")
     def "Verify Scan Results from Registries - #registry.name() - #component:#version - #image - #cve - #idx"() {
-        cleanupSetupForRetry()
         ImageIntegrationService.addStackroxScannerIntegration()
 
         when:
@@ -453,7 +472,7 @@ class ImageScanningTest extends BaseSpecification {
 
         and:
         "Scan Image and verify results"
-        ImageOuterClass.Image img = Services.scanImage(image)
+        ImageOuterClass.Image img = ImageService.scanImage(image, false)
         assert img.metadata.dataSource.id != ""
         assert img.metadata.dataSource.name != ""
         assert img.scan.dataSource.id != ""
@@ -498,7 +517,6 @@ class ImageScanningTest extends BaseSpecification {
     @Tag("Integration")
     def "Verify image scan exceptions - #scanner.name() - #testAspect"() {
         Assume.assumeTrue(scanner.isTestable())
-        cleanupSetupForRetry()
 
         when:
         "Add scanner"
@@ -510,7 +528,7 @@ class ImageScanningTest extends BaseSpecification {
         "Scan image"
         String image = IMAGES_FOR_ERROR_TESTS[scanner.name()][testAspect]
         assert image
-        Services.scanImage(image)
+        ImageService.scanImageNoRetry(image, false)
 
         then:
         "Verify image scan outcome"
@@ -521,8 +539,8 @@ class ImageScanningTest extends BaseSpecification {
         "tests are:"
 
         scanner                          | expectedMessage                      | testAspect
-        new ClairScannerIntegration()    | /Failed to get the manifest digest/  | "image does not exist"
-        new StackroxScannerIntegration() | /Failed to get the manifest digest/  | "image does not exist"
+        new ClairScannerIntegration()    | /failed to get the manifest digest/  | "image does not exist"
+        new StackroxScannerIntegration() | /failed to get the manifest digest/  | "image does not exist"
         new ClairScannerIntegration()    | /no matching image registries found/ | "missing required registry"
         new StackroxScannerIntegration() | /no matching image registries found/ | "missing required registry"
 // This is not supported. Scanners get access to previous creds and can pull the images that way.
@@ -535,9 +553,12 @@ class ImageScanningTest extends BaseSpecification {
     @Unroll
     @Tag("BAT")
     @Tag("Integration")
+    // ACR, ECR, GCR don't have MA images to verify the the integrations on P/Z
+    @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
+    @IgnoreIf({ Env.getTestTarget() == "bat-test" && data.testName ==~ /^acr.*/ })
+    @IgnoreIf({ Env.getTestTarget() == "bat-test" && data.testName == "quay-auto" })
     def "Image metadata from registry test - #testName"() {
         Assume.assumeTrue(testName != "ecr-iam" || ClusterService.isEKS())
-        cleanupSetupForRetry()
 
         if (coreImageIntegrationId != null && integration == "quay") {
             // For this test we don't want it
@@ -589,8 +610,8 @@ class ImageScanningTest extends BaseSpecification {
 
         and:
         "validate expected violations based on dockerfile"
-        for (String policy : POLICIES) {
-            assert Services.waitForViolation(deployment.name, policy, WAIT_FOR_VIOLATION_TIMEOUT)
+        for (Policy policy : policiesScopedForTest) {
+            assert Services.waitForViolation(deployment.name, policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
         }
 
         cleanup:
@@ -625,15 +646,13 @@ class ImageScanningTest extends BaseSpecification {
     }
 
     private static String source(String server) {
-        // TODO: append " from .*" once SourcedAutogeneratedIntegrations is enabled.
+        //TODO(ROX-20353): append " from .*" once SourcedAutogeneratedIntegrations is enabled.
         return "Autogenerated ${server} for cluster ${DEFAULT_CLUSTER_NAME}"
     }
 
     @Unroll
     @Tag("Integration")
     def "Image scanning test to check if scan time is not null #image from stackrox"() {
-        cleanupSetupForRetry()
-
         when:
         "Add Stackrox scanner"
         String integrationId = StackroxScannerIntegration.createDefaultIntegration()
@@ -642,7 +661,7 @@ class ImageScanningTest extends BaseSpecification {
 
         and:
         "Image is scanned"
-        Services.scanImage(image)
+        ImageService.scanImage(image, false)
 
         then:
         "get image by name"
@@ -667,8 +686,6 @@ class ImageScanningTest extends BaseSpecification {
     }
 
     def "Validate basic image details across all current images in StackRox"() {
-        cleanupSetupForRetry()
-
         when:
         "get list of all images"
         List<ImageOuterClass.ListImage> images = ImageService.getImages()
@@ -681,16 +698,12 @@ class ImageScanningTest extends BaseSpecification {
 
             if (imageDetails.hasScan()) {
                 assert imageDetails.scan.scanTime
-                for (ImageOuterClass.EmbeddedImageScanComponent component : imageDetails.scan.componentsList) {
-                    for (Vulnerability.EmbeddedVulnerability vuln : component.vulnsList) {
-                        // Removed summary due to GCR's lack of summary
-                        if (0.0 > vuln.cvss || vuln.cvss > 10.0 ||
-                                vuln.link == null || vuln.link == "") {
-                            missingValues.containsKey(imageDetails.name) ?
-                                    missingValues.get(imageDetails.name).add(vuln) :
-                                    missingValues.put(imageDetails.name, [vuln])
-                        }
-                    }
+                imageDetails.scan.componentsList*.vulnsList.flatten().find { Vulnerability.EmbeddedVulnerability vuln ->
+                    0.0 > vuln.cvss || vuln.cvss > 10.0 || vuln.link == null || vuln.link == ""
+                }.each { Vulnerability.EmbeddedVulnerability vuln ->
+                    missingValues.containsKey(imageDetails.name) ?
+                            missingValues.get(imageDetails.name).add(vuln) :
+                            missingValues.put(imageDetails.name, [vuln])
                 }
             }
             if (missingValues.containsKey(imageDetails.name)) {
@@ -702,8 +715,6 @@ class ImageScanningTest extends BaseSpecification {
     }
 
     def "Validate image deletion does not affect other images"() {
-        cleanupSetupForRetry()
-
         given:
         ImageIntegrationService.addStackroxScannerIntegration()
 
@@ -732,8 +743,8 @@ class ImageScanningTest extends BaseSpecification {
     @Unroll
     @Tag("BAT")
     @Tag("Integration")
+    @IgnoreIf({ Env.getTestTarget() == "bat-test" && data.testName ==~ /quay registry\+scanner with token.*/ })
     def "Quay registry and scanner supports token and/or robot credentials - #testName"() {
-        cleanupSetupForRetry()
         if (coreImageIntegrationId != null) {
             // For this test we don't want it
             // This conflicts with the autogenerated quay integration because they use the same creds
@@ -756,22 +767,18 @@ class ImageScanningTest extends BaseSpecification {
 
         then:
         "Validate registry based image metadata"
-        def imageDetail = expectedDigestImageFromScan(QUAY_IMAGE_WITH_CLAIR_SCAN_DATA, integrationName)
+        // ROX-23406 - A retry is needed because quay.io will sometimes return
+        // scan details without vulns.
+        withRetry(5, 60) {
+            def imageDetail = expectedDigestImageFromScan(QUAY_IMAGE_WITH_CLAIR_SCAN_DATA, integrationName)
 
-        and:
-        "Validate image scan details"
-        assert imageDetail.scan.dataSource.id != ""
-        assert imageDetail.scan.dataSource.name == scannerName
+            // Validate image scan details
+            assert imageDetail.scan.dataSource.id != ""
+            assert imageDetail.scan.dataSource.name == scannerName
 
-        try {
             assert imageDetail.scan.componentsCount > 0
             assert imageDetail.scan.componentsList.size() > 0
             assert imageDetail.scan.componentsList.vulnsCount.sum { it as Integer } > 0
-        } catch (Exception e) {
-            if (strictIntegrationTesting) {
-                throw (e)
-            }
-            throw new AssumptionViolatedException("Failed to scan the image using ${scannerName}. Skipping test!", e)
         }
 
         cleanup:
@@ -790,31 +797,30 @@ class ImageScanningTest extends BaseSpecification {
         "quay registry with token"                         | "quay"           | "Stackrox Scanner" |
                 { -> QuayImageIntegration.createCustomIntegration(
                         [oauthToken: Env.mustGet("QUAY_RHACS_ENG_BEARER_TOKEN"), includeScanner: false,]) }
-        "quay with robot creds only"                      | "quay"    |  "Stackrox Scanner" |
+        "quay with robot creds only"                       | "quay"           |  "Stackrox Scanner" |
                 { -> QuayImageIntegration.createCustomIntegration(
                         [oauthToken: "", useRobotCreds: true, includeScanner: false,]) }
 
-        "quay registry+scanner with token"                  | "quay"   | "quay" |
+        "quay registry+scanner with token"                  | "quay"          | "quay" |
                 { -> QuayImageIntegration.createCustomIntegration(
                         [oauthToken: Env.mustGet("QUAY_RHACS_ENG_BEARER_TOKEN"), includeScanner: true,]) }
 
-        "quay registry+scanner with token and robot creds"  | "quay"   | "quay" |
+        "quay registry+scanner with token and robot creds"  | "quay"          | "quay" |
                 { -> QuayImageIntegration.createCustomIntegration(
                         [oauthToken: Env.mustGet("QUAY_RHACS_ENG_BEARER_TOKEN"), useRobotCreds: true,
                          includeScanner: true,]) }
     }
 
-    @SuppressWarnings('LineLength')
     private static String expectAutoGeneratedRegistry(Secret secret) {
         ImageIntegrationOuterClass.ImageIntegration autoGenerated = null
-        withRetry(5, 2) {
-            // TODO: append " from ${secret.namespace}/${secret.name}" once SourcedAutogeneratedIntegrations is enabled.
+        withRetry(5, 5) {
+            //TODO(ROX-20353): append " from ${secret.namespace}/${secret.name}"
+            // once SourcedAutogeneratedIntegrations is enabled.
             autoGenerated = ImageIntegrationService.getImageIntegrationByName(
                 "Autogenerated ${secret.server} for cluster ${DEFAULT_CLUSTER_NAME}"
             )
             assert autoGenerated
         }
-        assert autoGenerated
         assert autoGenerated.categoriesCount == 1
         assert autoGenerated.categoriesList.contains(ImageIntegrationOuterClass.ImageIntegrationCategory.REGISTRY)
         assert autoGenerated.docker.username == secret.username
@@ -829,14 +835,17 @@ class ImageScanningTest extends BaseSpecification {
             imageDigest = images.find { it.name == imageName }
             assert imageDigest?.id, "image ${imageName} not found among ${images*.name}"
         }
-        ImageOuterClass.Image imageDetail = ImageService.getImage(imageDigest?.id)
-        validateImageMetadata(imageDetail, source)
+        ImageOuterClass.Image imageDetail
+        withRetry(10, 20) {
+            imageDetail = ImageService.getImage(imageDigest?.id)
+            validateImageMetadata(imageDetail, source)
+        }
         return imageDetail
     }
 
     private static ImageOuterClass.Image expectedDigestImageFromScan(String imageName, String source) {
         ImageOuterClass.Image imageDetail = null
-        withRetry(30, 2) {
+        withRetry(3, 15) {
             imageDetail = ImageService.scanImage(imageName, false, true)
         }
         validateImageMetadata(imageDetail, source)

@@ -25,6 +25,7 @@ class Env {
     static final BUILD_TAG = System.getenv("BUILD_TAG")
     static final GATHER_QA_TEST_DEBUG_LOGS = (System.getenv("GATHER_QA_TEST_DEBUG_LOGS") == "true")
     static final QA_TEST_DEBUG_LOGS = System.getenv("QA_TEST_DEBUG_LOGS") ?: ""
+    static final HAS_WORKLOAD_IDENTITIES = (System.getenv("SETUP_WORKLOAD_IDENTITIES") == "true")
 
     // REMOTE_CLUSTER_ARCH specifies architecture of a remote cluster on which tests are to be executed
     // the remote cluster arch can be ppc64le or s390x, default is x86_64
@@ -124,7 +125,7 @@ class Env {
         }
         LOG.debug System.getenv().toMapString()
 
-        if (isEnvVarEmpty("ROX_PASSWORD")) {
+        if (isEnvVarEmpty("ROX_ADMIN_PASSWORD")) {
             if (isEnvVarEmpty("CLUSTER")) {
                 envVars.put("CLUSTER", inferOrchestratorType().toString())
             }
@@ -139,7 +140,7 @@ class Env {
             }
 
             if (password != null) {
-                envVars.put("ROX_PASSWORD", password)
+                envVars.put("ROX_ADMIN_PASSWORD", password)
             }
         }
 
@@ -153,7 +154,7 @@ class Env {
     }
 
     static String mustGetPassword() {
-        return mustGet("ROX_PASSWORD")
+        return mustGet("ROX_ADMIN_PASSWORD")
     }
 
     static int mustGetPort() {
@@ -250,20 +251,48 @@ class Env {
         return mustGet("AWS_ECR_DOCKER_PULL_PASSWORD") // aws ecr get-login-password
     }
 
-    static String mustGetGCSBucketName() {
-        return mustGet("GCP_GCS_BACKUP_TEST_BUCKET_NAME") // stackrox-qa-gcs-test
+    static String mustGetCloudflareR2BucketName() {
+        return mustGet("CLOUDFLARE_R2_BACKUP_TEST_BUCKET_NAME") // stackrox-ci-qa-backup-test
     }
 
-    static String mustGetGCSBucketRegion() {
-        return mustGet("GCP_GCS_BACKUP_TEST_BUCKET_REGION") // us-east-1
+    static String mustGetCloudflareR2BucketRegion() {
+        return mustGet("CLOUDFLARE_R2_BACKUP_TEST_REGION") // ENAM
+    }
+
+    static String mustGetCloudflareR2Endpoint() {
+        return "${mustGet("CLOUDFLARE_R2_BACKUP_TEST_ACCOUNT_ID")}.r2.cloudflarestorage.com"
+    }
+
+    static String mustGetCloudflareR2AccessKeyID() {
+        return mustGet("CLOUDFLARE_R2_BACKUP_TEST_ACCESS_KEY_ID")
+    }
+
+    static String mustGetCloudflareR2SecretAccessKey() {
+        return mustGet("CLOUDFLARE_R2_BACKUP_TEST_SECRET_ACCESS_KEY")
+    }
+
+    static String mustGetGCSBucketName() {
+        return mustGet("GCP_GCS_BACKUP_TEST_BUCKET_NAME_V2")
     }
 
     static String mustGetGCPAccessKeyID() {
-        return mustGet("GCP_ACCESS_KEY_ID")
+        return mustGet("GCP_ACCESS_KEY_ID_V2")
     }
 
     static String mustGetGCPAccessKey() {
-        return mustGet("GCP_SECRET_ACCESS_KEY")
+        return mustGet("GCP_SECRET_ACCESS_KEY_V2")
+    }
+
+    static String mustGetGCSServiceAccount() {
+        return mustGet("GOOGLE_GCS_BACKUP_SERVICE_ACCOUNT_V2")
+    }
+
+    static String mustGetGCRServiceAccount() {
+        return mustGet("GOOGLE_CREDENTIALS_GCR_SCANNER_V2")
+    }
+
+    static String mustGetGCRNoAccessServiceAccount() {
+        return mustGet("GOOGLE_CREDENTIALS_GCR_NO_ACCESS_KEY_V2")
     }
 
     static String mustGetPagerdutyToken() {
@@ -280,5 +309,33 @@ class Env {
 
     static String mustGetSlackAltWebhook() {
         return mustGet("SLACK_ALT_WEBHOOK")
+    }
+
+    static String getDisableAuditLogAlertsTest() {
+        return get("DISABLE_AUDIT_LOG_ALERTS_TEST")
+    }
+
+    static String getManagedControlPlane() {
+        return get("MANAGED_CP", "false")
+    }
+
+    static String getSupportsLoadBalancerSvc() {
+        return get("SUPPORTS_LOAD_BALANCER_SVC", "true")
+    }
+
+    static String mustGetOcmOfflineToken() {
+        return get("OCM_OFFLINE_TOKEN")
+    }
+
+    static String mustGetOcmClientId() {
+        return get("CLOUD_SOURCES_TEST_OCM_CLIENT_ID")
+    }
+
+    static String mustGetOcmClientSecret() {
+        return get("CLOUD_SOURCES_TEST_OCM_CLIENT_SECRET")
+    }
+
+    static String getTestTarget() {
+        return get("TEST_TARGET", "")
     }
 }

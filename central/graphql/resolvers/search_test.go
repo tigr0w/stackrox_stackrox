@@ -8,16 +8,15 @@ import (
 	"math"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	alertMocks "github.com/stackrox/rox/central/alert/datastore/mocks"
 	clusterMocks "github.com/stackrox/rox/central/cluster/datastore/mocks"
 	clusterCVEMocks "github.com/stackrox/rox/central/cve/cluster/datastore/mocks"
-	cveMocks "github.com/stackrox/rox/central/cve/datastore/mocks"
 	imageCVEMocks "github.com/stackrox/rox/central/cve/image/datastore/mocks"
 	nodeCVEMocks "github.com/stackrox/rox/central/cve/node/datastore/mocks"
 	deploymentMocks "github.com/stackrox/rox/central/deployment/datastore/mocks"
 	"github.com/stackrox/rox/central/graphql/resolvers/inputtypes"
 	"github.com/stackrox/rox/central/graphql/resolvers/loaders"
+	imageDS "github.com/stackrox/rox/central/image/datastore"
 	imageMocks "github.com/stackrox/rox/central/image/datastore/mocks"
 	imageComponentMocks "github.com/stackrox/rox/central/imagecomponent/datastore/mocks"
 	namespaceMocks "github.com/stackrox/rox/central/namespace/datastore/mocks"
@@ -32,17 +31,19 @@ import (
 	globalSearch "github.com/stackrox/rox/central/search"
 	secretMocks "github.com/stackrox/rox/central/secret/datastore/mocks"
 	serviceAccountMocks "github.com/stackrox/rox/central/serviceaccount/datastore/mocks"
+	imagesView "github.com/stackrox/rox/central/views/images"
 	v1 "github.com/stackrox/rox/generated/api/v1"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/grpc/authz/allow"
 	"github.com/stackrox/rox/pkg/pointers"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/postgres/aggregatefunc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func TestSearchCategories(t *testing.T) {
@@ -59,7 +60,6 @@ func TestSearchCategories(t *testing.T) {
 	serviceAccounts := serviceAccountMocks.NewMockDataStore(ctrl)
 	roles := k8sroleMocks.NewMockDataStore(ctrl)
 	rolebindings := k8srolebindingMocks.NewMockDataStore(ctrl)
-	cves := cveMocks.NewMockDataStore(ctrl)
 	components := imageComponentMocks.NewMockDataStore(ctrl)
 
 	resolver := &Resolver{
@@ -76,16 +76,11 @@ func TestSearchCategories(t *testing.T) {
 		K8sRoleBindingStore:      rolebindings,
 		K8sRoleStore:             roles,
 		ImageComponentDataStore:  components,
-	}
-
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		resolver.CVEDataStore = cves
-	} else {
-		resolver.PolicyCategoryDataStore = policyCategoryMocks.NewMockDataStore(ctrl)
-		resolver.ImageCVEDataStore = imageCVEMocks.NewMockDataStore(ctrl)
-		resolver.NodeCVEDataStore = nodeCVEMocks.NewMockDataStore(ctrl)
-		resolver.ClusterCVEDataStore = clusterCVEMocks.NewMockDataStore(ctrl)
-		resolver.NodeComponentDataStore = nodeComponentMocks.NewMockDataStore(ctrl)
+		PolicyCategoryDataStore:  policyCategoryMocks.NewMockDataStore(ctrl),
+		ImageCVEDataStore:        imageCVEMocks.NewMockDataStore(ctrl),
+		NodeCVEDataStore:         nodeCVEMocks.NewMockDataStore(ctrl),
+		ClusterCVEDataStore:      clusterCVEMocks.NewMockDataStore(ctrl),
+		NodeComponentDataStore:   nodeComponentMocks.NewMockDataStore(ctrl),
 	}
 
 	searchCategories := resolver.getAutoCompleteSearchers()
@@ -353,7 +348,7 @@ func TestAsV1QueryOrEmpty(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			actual, err := tc.arg.AsV1QueryOrEmpty()
 			assert.NoError(t, err)
-			assert.EqualValues(t, tc.expectedQ, actual)
+			protoassert.Equal(t, tc.expectedQ, actual)
 		})
 	}
 }
@@ -365,14 +360,12 @@ func TestSubjectAutocompleteSearch(t *testing.T) {
 	defer pgtest.CloseGormDB(t, testGormDB)
 	defer testDB.Teardown(t)
 
-	roleBindingDatastore, err := k8sRoleBindingDataStore.GetTestPostgresDataStore(t, testDB.DB)
-	require.NoError(t, err)
+	roleBindingDatastore := k8sRoleBindingDataStore.GetTestPostgresDataStore(t, testDB.DB)
 
 	ctx := loaders.WithLoaderContext(sac.WithAllAccess(context.Background()))
 	roleBindings := fixtures.GetMultipleK8sRoleBindings(2, 3)
 	for _, roleBinding := range roleBindings {
-		err = roleBindingDatastore.UpsertRoleBinding(ctx, roleBinding)
-		require.NoError(t, err)
+		require.NoError(t, roleBindingDatastore.UpsertRoleBinding(ctx, roleBinding))
 	}
 
 	resolver, _ := SetupTestResolver(t, roleBindingDatastore)
@@ -440,4 +433,47 @@ func TestSubjectAutocompleteSearch(t *testing.T) {
 			require.ElementsMatch(t, tc.expected, results)
 		})
 	}
+}
+
+func TestImageLabelAutoCompleteSearch(t *testing.T) {
+	testDB := pgtest.ForT(t)
+	testGormDB := testDB.GetGormDB(t)
+	defer pgtest.CloseGormDB(t, testGormDB)
+	defer testDB.Teardown(t)
+
+	imageDatastore := imageDS.GetTestPostgresDataStore(t, testDB.DB)
+	ctx := loaders.WithLoaderContext(sac.WithAllAccess(context.Background()))
+
+	resolver, _ := SetupTestResolver(t, imageDatastore, imagesView.NewImageView(testDB.DB))
+	allowAllCtx := SetAuthorizerOverride(ctx, allow.Anonymous())
+
+	// Case: nil labels
+	image := fixtures.GetImage()
+	image.GetMetadata().GetV1().Labels = nil
+
+	require.NoError(t, imageDatastore.UpsertImage(ctx, image))
+
+	request := searchRequest{
+		Query:      "Image Label:",
+		Categories: &[]string{"IMAGES"},
+	}
+	results, err := resolver.SearchAutocomplete(allowAllCtx, request)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{}, results)
+
+	// Case: Non-empty labels
+	image.GetMetadata().GetV1().Labels = map[string]string{
+		"k1": "v1",
+		"k2": "v2",
+	}
+
+	require.NoError(t, imageDatastore.UpsertImage(ctx, image))
+
+	request = searchRequest{
+		Query:      "Image Label:",
+		Categories: &[]string{"IMAGES"},
+	}
+	results, err = resolver.SearchAutocomplete(allowAllCtx, request)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"k1=v1", "k2=v2"}, results)
 }

@@ -6,29 +6,21 @@ import (
 	"context"
 	"testing"
 
-	"github.com/blevesearch/bleve"
-	"github.com/golang/mock/gomock"
-	"github.com/stackrox/rox/central/globalindex"
-	"github.com/stackrox/rox/central/imageintegration/index"
-	indexMocks "github.com/stackrox/rox/central/imageintegration/index/mocks"
 	"github.com/stackrox/rox/central/imageintegration/search"
 	searchMocks "github.com/stackrox/rox/central/imageintegration/search/mocks"
 	"github.com/stackrox/rox/central/imageintegration/store"
-	boltStore "github.com/stackrox/rox/central/imageintegration/store/bolt"
 	postgresStore "github.com/stackrox/rox/central/imageintegration/store/postgres"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/bolthelper"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
-	bolt "go.etcd.io/bbolt"
+	"go.uber.org/mock/gomock"
 )
 
 const (
@@ -47,18 +39,12 @@ type ImageIntegrationDataStoreTestSuite struct {
 	hasReadCtx  context.Context
 	hasWriteCtx context.Context
 
-	mockIndexer  *indexMocks.MockIndexer
 	mockSearcher *searchMocks.MockSearcher
 
 	datastore DataStore
 
 	testDB *pgtest.TestPostgres
 	store  store.Store
-
-	// Can be removed once rocksdb is removed
-	db         *bolt.DB
-	bleveIndex bleve.Index
-	indexer    index.Indexer
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) SetupTest() {
@@ -73,40 +59,19 @@ func (suite *ImageIntegrationDataStoreTestSuite) SetupTest() {
 			sac.ResourceScopeKeys(resources.Integration)))
 
 	suite.mockCtrl = gomock.NewController(suite.T())
-	suite.mockIndexer = indexMocks.NewMockIndexer(suite.mockCtrl)
 	suite.mockSearcher = searchMocks.NewMockSearcher(suite.mockCtrl)
 
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		suite.testDB = pgtest.ForT(suite.T())
-		suite.NotNil(suite.testDB)
+	suite.testDB = pgtest.ForT(suite.T())
+	suite.NotNil(suite.testDB)
 
-		suite.store = postgresStore.New(suite.testDB.DB)
-		suite.indexer = postgresStore.NewIndexer(suite.testDB.DB)
-	} else {
-		db, err := bolthelper.NewTemp(testutils.DBFileName(suite))
-		if err != nil {
-			suite.FailNow("Failed to make BoltDB", err.Error())
-		}
-		suite.db = db
-		suite.store = boltStore.New(db)
-
-		// test bleveIndex and search
-		suite.bleveIndex, err = globalindex.MemOnlyIndex()
-		suite.NoError(err)
-		suite.indexer = index.New(suite.bleveIndex)
-	}
+	suite.store = postgresStore.New(suite.testDB.DB)
 
 	// test formattedSearcher
-	suite.datastore = NewForTestOnly(suite.store, suite.mockIndexer, suite.mockSearcher)
+	suite.datastore = NewForTestOnly(suite.store, suite.mockSearcher)
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) TearDownTest() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		suite.testDB.Teardown(suite.T())
-	} else {
-		testutils.TearDownDB(suite.db)
-		suite.NoError(suite.bleveIndex.Close())
-	}
+	suite.testDB.Teardown(suite.T())
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) TestIntegrationsPersistence() {
@@ -138,7 +103,6 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestIntegrationsFiltering() {
 			},
 		},
 	}
-	suite.mockIndexer.EXPECT().AddImageIntegration(gomock.Any()).AnyTimes().Return(nil)
 	// Test Add
 	for _, r := range integrations {
 		id, err := suite.datastore.AddImageIntegration(suite.hasWriteCtx, r)
@@ -148,7 +112,7 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestIntegrationsFiltering() {
 
 	actualIntegrations, err := suite.datastore.GetImageIntegrations(suite.hasWriteCtx, &v1.GetImageIntegrationsRequest{})
 	suite.NoError(err)
-	suite.ElementsMatch(integrations, actualIntegrations)
+	protoassert.ElementsMatch(suite.T(), integrations, actualIntegrations)
 }
 
 func testIntegrations(t *testing.T, insertStorage store.Store, retrievalStorage DataStore) {
@@ -185,7 +149,7 @@ func testIntegrations(t *testing.T, insertStorage store.Store, retrievalStorage 
 		got, exists, err := retrievalStorage.GetImageIntegration(ctx, r.GetId())
 		assert.NoError(t, err)
 		assert.True(t, exists)
-		assert.Equal(t, got, r)
+		protoassert.Equal(t, got, r)
 	}
 
 	// Test Update
@@ -201,7 +165,7 @@ func testIntegrations(t *testing.T, insertStorage store.Store, retrievalStorage 
 		got, exists, err := retrievalStorage.GetImageIntegration(ctx, r.GetId())
 		assert.NoError(t, err)
 		assert.True(t, exists)
-		assert.Equal(t, got, r)
+		protoassert.Equal(t, got, r)
 	}
 
 	// Test Remove
@@ -247,12 +211,12 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestAllowsGet() {
 
 	gotInt, exists, err := suite.datastore.GetImageIntegration(suite.hasReadCtx, integration.GetId())
 	suite.NoError(err, "expected no error trying to read with permissions")
-	suite.Equal(integration, gotInt)
+	protoassert.Equal(suite.T(), integration, gotInt)
 	suite.True(exists)
 
 	gotInt, exists, err = suite.datastore.GetImageIntegration(suite.hasWriteCtx, integration.GetId())
 	suite.NoError(err, "expected no error trying to read with permissions")
-	suite.Equal(integration, gotInt)
+	protoassert.Equal(suite.T(), integration, gotInt)
 	suite.True(exists)
 }
 
@@ -270,11 +234,11 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestAllowsGetBatch() {
 
 	gotImages, err := suite.datastore.GetImageIntegrations(suite.hasReadCtx, getRequest)
 	suite.NoError(err, "expected no error trying to read with permissions")
-	suite.ElementsMatch(integrationList, gotImages)
+	protoassert.ElementsMatch(suite.T(), integrationList, gotImages)
 
 	gotImages, err = suite.datastore.GetImageIntegrations(suite.hasWriteCtx, getRequest)
 	suite.NoError(err, "expected no error trying to read with permissions")
-	suite.ElementsMatch(integrationList, gotImages)
+	protoassert.ElementsMatch(suite.T(), integrationList, gotImages)
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) TestEnforcesAdd() {
@@ -290,7 +254,6 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestEnforcesAdd() {
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) TestAllowsAdd() {
-	suite.mockIndexer.EXPECT().AddImageIntegration(gomock.Any()).Return(nil)
 	id, err := suite.datastore.AddImageIntegration(suite.hasWriteCtx, getIntegration("namenamenamename"))
 	suite.NoError(err, "expected no error trying to write with permissions")
 	suite.NotEmpty(id)
@@ -307,7 +270,6 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestEnforcesUpdate() {
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) TestAllowsUpdate() {
-	suite.mockIndexer.EXPECT().AddImageIntegration(gomock.Any()).Return(nil)
 	integration := suite.storeIntegration("joseph is the best")
 
 	err := suite.datastore.UpdateImageIntegration(suite.hasWriteCtx, integration)
@@ -323,7 +285,6 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestEnforcesRemove() {
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) TestAllowsRemove() {
-	suite.mockIndexer.EXPECT().DeleteImageIntegration(gomock.Any()).Return(nil)
 	integration := suite.storeIntegration("jdgbfdkjh")
 
 	err := suite.datastore.RemoveImageIntegration(suite.hasWriteCtx, integration.GetId())
@@ -338,18 +299,16 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestSearch() {
 }
 
 func (suite *ImageIntegrationDataStoreTestSuite) TestIndexing() {
-	pgtest.SkipIfPostgresEnabled(suite.T())
-
 	ii := &storage.ImageIntegration{
-		Id:        "id1",
+		Id:        uuid.NewV4().String(),
 		ClusterId: clusterID,
 		Name:      "imageIntegration1",
 	}
 
-	suite.NoError(suite.indexer.AddImageIntegration(ii))
+	suite.NoError(suite.store.Upsert(sac.WithAllAccess(context.Background()), ii))
 
 	q := pkgSearch.NewQueryBuilder().AddStrings(pkgSearch.ClusterID, clusterID).ProtoQuery()
-	results, err := suite.indexer.Search(suite.hasWriteCtx, q)
+	results, err := suite.store.Search(suite.hasWriteCtx, q)
 	suite.NoError(err)
 	suite.Len(results, 1)
 }
@@ -362,7 +321,7 @@ func (suite *ImageIntegrationDataStoreTestSuite) TestDataStoreSearch() {
 	}
 
 	// Create a new datastore since the one in suite uses mocks
-	ds := New(suite.store, suite.indexer, search.New(suite.store, suite.indexer))
+	ds := New(suite.store, search.New(suite.store))
 
 	ctx := sac.WithGlobalAccessScopeChecker(context.Background(), sac.AllowAllAccessScopeChecker())
 	_, err := ds.AddImageIntegration(ctx, ii)

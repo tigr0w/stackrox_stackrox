@@ -1,15 +1,28 @@
 import React, { useEffect, useMemo, useState, ReactElement } from 'react';
-import { PageSection, Bullseye, Alert, Divider, Title } from '@patternfly/react-core';
+import {
+    PageSection,
+    Bullseye,
+    Alert,
+    Title,
+    Tabs,
+    Tab,
+    TabTitleText,
+    Spinner,
+} from '@patternfly/react-core';
 
 import { fetchAlerts, fetchAlertCount } from 'services/AlertsService';
-import { getSearchOptionsForCategory } from 'services/SearchService';
 import { CancelledPromiseError } from 'services/cancellationUtils';
-
+import useAnalytics from 'hooks/useAnalytics';
 import useEntitiesByIdsCache from 'hooks/useEntitiesByIdsCache';
 import LIFECYCLE_STAGES from 'constants/lifecycleStages';
-import VIOLATION_STATES from 'constants/violationStates';
+import { VIOLATION_STATES } from 'constants/violationStates';
 import { ENFORCEMENT_ACTIONS } from 'constants/enforcementActions';
-
+import { OnSearchPayload } from 'Components/CompoundSearchFilter/types';
+import { onURLSearch } from 'Components/CompoundSearchFilter/utils/utils';
+import { FilteredWorkflowView } from 'Components/FilteredWorkflowViewSelector/types';
+import { SearchFilter } from 'types/search';
+import useFeatureFlags from 'hooks/useFeatureFlags';
+import useURLStringUnion from 'hooks/useURLStringUnion';
 import useEffectAfterFirstRender from 'hooks/useEffectAfterFirstRender';
 import useURLSort from 'hooks/useURLSort';
 import { SortOption } from 'types/table';
@@ -17,18 +30,47 @@ import useURLSearch from 'hooks/useURLSearch';
 import useURLPagination from 'hooks/useURLPagination';
 import useInterval from 'hooks/useInterval';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
-import SearchFilterInput from 'Components/SearchFilterInput';
+import FilteredWorkflowViewSelector from 'Components/FilteredWorkflowViewSelector/FilteredWorkflowViewSelector';
+import useFilteredWorkflowViewURLState from 'Components/FilteredWorkflowViewSelector/useFilteredWorkflowViewURLState';
 import ViolationsTablePanel from './ViolationsTablePanel';
 import tableColumnDescriptor from './violationTableColumnDescriptors';
+import { violationStateTabs } from './types';
 
 import './ViolationsTablePage.css';
 
-const searchCategory = 'ALERTS';
+const tabContentId = 'ViolationsTable';
+
+function getFilteredWorkflowViewSearchFilter(
+    filteredWorkflowView: FilteredWorkflowView
+): SearchFilter {
+    switch (filteredWorkflowView) {
+        case 'Applications view':
+            return {
+                'Platform Component': 'false',
+                'Entity Type': 'DEPLOYMENT',
+            };
+        case 'Platform view':
+            return {
+                'Platform Component': 'true',
+                'Entity Type': 'DEPLOYMENT',
+            };
+        case 'Full view':
+        default:
+            return {};
+    }
+}
 
 function ViolationsTablePage(): ReactElement {
-    // Handle changes to applied search options.
-    const [searchOptions, setSearchOptions] = useState<string[]>([]);
+    const { analyticsTrack } = useAnalytics();
     const { searchFilter, setSearchFilter } = useURLSearch();
+    const { isFeatureFlagEnabled } = useFeatureFlags();
+    const isPlatformComponentsEnabled = isFeatureFlagEnabled('ROX_PLATFORM_COMPONENTS');
+
+    const [selectedViolationStateTab, setSelectedViolationStateTab] = useURLStringUnion(
+        'violationState',
+        violationStateTabs
+    );
+    const { filteredWorkflowView, setFilteredWorkflowView } = useFilteredWorkflowViewURLState();
 
     const hasExecutableFilter =
         Object.keys(searchFilter).length &&
@@ -40,6 +82,7 @@ function ViolationsTablePage(): ReactElement {
     const { page, perPage, setPage, setPerPage } = useURLPagination(50);
 
     // Handle changes in the currently displayed violations.
+    const [isLoadingAlerts, setIsLoadingAlerts] = useState(false);
     const [currentPageAlerts, setCurrentPageAlerts] = useEntitiesByIdsCache();
     const [currentPageAlertsErrorMessage, setCurrentPageAlertsErrorMessage] = useState('');
     const [alertCount, setAlertCount] = useState(0);
@@ -62,6 +105,19 @@ function ViolationsTablePage(): ReactElement {
         sortFields,
         defaultSortOption,
     });
+
+    const additionalContextFilter = getFilteredWorkflowViewSearchFilter(filteredWorkflowView);
+
+    const onSearch = (payload: OnSearchPayload) => {
+        onURLSearch(searchFilter, setSearchFilter, payload);
+    };
+
+    const onChangeFilteredWorkflowView = (value) => {
+        setFilteredWorkflowView(value);
+        setSearchFilter({});
+        setPage(1);
+        analyticsTrack({ event: 'Filtered Workflow View Selected', properties: { value } });
+    };
 
     useEffectAfterFirstRender(() => {
         if (hasExecutableFilter && !isViewFiltered) {
@@ -89,21 +145,33 @@ function ViolationsTablePage(): ReactElement {
 
     // When any of the deps to this effect change, we want to reload the alerts and count.
     useEffect(() => {
-        const { request: alertRequest, cancel: cancelAlertRequest } = fetchAlerts(
-            searchFilter,
+        const filteredWorkflowFilter = isPlatformComponentsEnabled
+            ? getFilteredWorkflowViewSearchFilter(filteredWorkflowView)
+            : {};
+
+        const alertSearchFilter: SearchFilter = {
+            ...searchFilter,
+            ...filteredWorkflowFilter,
+            'Violation State': selectedViolationStateTab,
+        };
+
+        const { request: alertRequest, cancel: cancelAlertRequest } = fetchAlerts({
+            alertSearchFilter,
             sortOption,
-            page - 1,
-            perPage
-        );
+            page,
+            perPage,
+        });
 
         // Get the total count of alerts that match the search request.
-        const { request: countRequest, cancel: cancelCountRequest } = fetchAlertCount(searchFilter);
+        const { request: countRequest, cancel: cancelCountRequest } =
+            fetchAlertCount(alertSearchFilter);
 
         Promise.all([alertRequest, countRequest])
             .then(([alerts, counts]) => {
                 setCurrentPageAlerts(alerts);
                 setAlertCount(counts);
                 setCurrentPageAlertsErrorMessage('');
+                setIsLoadingAlerts(false);
             })
             .catch((error) => {
                 if (error instanceof CancelledPromiseError) {
@@ -113,6 +181,7 @@ function ViolationsTablePage(): ReactElement {
                 setAlertCount(0);
                 const parsedMessage = getAxiosErrorMessage(error);
                 setCurrentPageAlertsErrorMessage(parsedMessage);
+                setIsLoadingAlerts(false);
             });
 
         return () => {
@@ -128,16 +197,10 @@ function ViolationsTablePage(): ReactElement {
         setCurrentPageAlertsErrorMessage,
         setAlertCount,
         perPage,
+        selectedViolationStateTab,
+        filteredWorkflowView,
+        isPlatformComponentsEnabled,
     ]);
-
-    useEffect(() => {
-        const { request, cancel } = getSearchOptionsForCategory(searchCategory);
-        request.then(setSearchOptions).catch(() => {
-            // A request error will disable the search filter.
-        });
-
-        return cancel;
-    }, [setSearchOptions]);
 
     // We need to be able to identify which alerts are runtime or attempted, and which are not by id.
     const resolvableAlerts: Set<string> = new Set(
@@ -159,22 +222,60 @@ function ViolationsTablePage(): ReactElement {
         <>
             <PageSection variant="light" id="violations-table">
                 <Title headingLevel="h1">Violations</Title>
-                <Divider className="pf-u-py-md" />
-                <SearchFilterInput
-                    className="theme-light pf-search-shim"
-                    handleChangeSearchFilter={setSearchFilter}
-                    placeholder="Filter violations"
-                    searchCategory={searchCategory}
-                    searchFilter={searchFilter}
-                    searchOptions={searchOptions}
-                />
             </PageSection>
-            <PageSection variant="default">
-                {currentPageAlertsErrorMessage ? (
+            <PageSection variant="light" className="pf-v5-u-py-0">
+                <Tabs
+                    activeKey={selectedViolationStateTab}
+                    onSelect={(_e, tab) => {
+                        setIsLoadingAlerts(true);
+                        setSearchFilter({});
+                        setPage(1);
+                        setFilteredWorkflowView('Applications view');
+                        setSelectedViolationStateTab(tab);
+                    }}
+                    aria-label="Violation state tabs"
+                >
+                    <Tab
+                        eventKey="ACTIVE"
+                        tabContentId={tabContentId}
+                        title={<TabTitleText>Active</TabTitleText>}
+                    />
+                    <Tab
+                        eventKey="RESOLVED"
+                        tabContentId={tabContentId}
+                        title={<TabTitleText>Resolved</TabTitleText>}
+                    />
+                    <Tab
+                        eventKey="ATTEMPTED"
+                        tabContentId={tabContentId}
+                        title={<TabTitleText>Attempted</TabTitleText>}
+                    />
+                </Tabs>
+            </PageSection>
+            {isPlatformComponentsEnabled && (
+                <PageSection className="pf-v5-u-py-md" component="div" variant="light">
+                    <FilteredWorkflowViewSelector
+                        filteredWorkflowView={filteredWorkflowView}
+                        onChangeFilteredWorkflowView={onChangeFilteredWorkflowView}
+                    />
+                </PageSection>
+            )}
+            <PageSection variant="default" id={tabContentId}>
+                {isLoadingAlerts && (
                     <Bullseye>
-                        <Alert variant="danger" title={currentPageAlertsErrorMessage} />
+                        <Spinner size="xl" />
                     </Bullseye>
-                ) : (
+                )}
+                {!isLoadingAlerts && currentPageAlertsErrorMessage && (
+                    <Bullseye>
+                        <Alert
+                            variant="danger"
+                            title={currentPageAlertsErrorMessage}
+                            component="p"
+                        />
+                    </Bullseye>
+                )}
+                {!isLoadingAlerts && !currentPageAlertsErrorMessage && (
                     <PageSection variant="light">
                         <ViolationsTablePanel
                             violations={currentPageAlerts}
@@ -187,6 +288,11 @@ function ViolationsTablePage(): ReactElement {
                             setPerPage={setPerPage}
                             getSortParams={getSortParams}
                             columns={columns}
+                            searchFilter={searchFilter}
+                            onFilterChange={setSearchFilter}
+                            onSearch={onSearch}
+                            additionalContextFilter={additionalContextFilter}
+                            hasActiveViolations={selectedViolationStateTab === 'ACTIVE'}
                         />
                     </PageSection>
                 )}

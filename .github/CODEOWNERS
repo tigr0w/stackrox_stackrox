@@ -2,38 +2,51 @@
 # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners#about-code-owners
 # This will automatically assign a team / people as reviewers for PRs based on the files changed within the PR.
 
-# Core Workflows team's main responsibilities include policies including default policies and policy management workflows,
-# detection and alerting, integrations and notifiers, risk, vulnerability management and reporting.
+# Core team's main responsibilities include policies including default policies and policy management workflows,
+# detection and alerting, integrations and notifiers, risk, vulnerability management and reporting, migrator and
+# interactions with Postgres.
 pkg/detection/**/*                  @stackrox/core-workflows
 pkg/booleanpolicy/**/*              @stackrox/core-workflows
 pkg/defaults/policies/**/*          @stackrox/core-workflows
 central/policy/**/*                 @stackrox/core-workflows
 central/reports/**/*                @stackrox/core-workflows
 central/reportconfiguration/**/*    @stackrox/core-workflows
-central/vulnerabilityrequest/**/*   @stackrox/core-workflows
-proto/storage/policy.proto          @stackrox/core-workflows
-proto/storage/image.proto           @stackrox/core-workflows
-proto/storage/cve.proto             @stackrox/core-workflows
-proto/storage/alert.proto           @stackrox/core-workflows
-proto/storage/risk.proto            @stackrox/core-workflows
+central/vulnmgmt/**/*               @stackrox/core-workflows
+proto/storage/*                     @stackrox/core-workflows
+migrator/**/*                       @stackrox/core-workflows
+pkg/postgres/**/*                   @stackrox/core-workflows
+tests/upgrade/*                     @stackrox/core-workflows
 
-# Merlin's main responsibilities include roxctl, authN (authproviders), authZ (SAC).
-roxctl/**/*     @stackrox/merlin
-pkg/auth/**/*   @stackrox/merlin
-pkg/sac/**/*    @stackrox/merlin
-*/declarativeconfig/**/* @stackrox/merlin
+# Merlin's main responsibilities include roxctl, authN (authproviders), authZ (SAC), declarative config,
+# performance testing, administration events, cloud sources, and image signatures.
+*/administration/**/*       @stackrox/merlin
+*/auth/**/*                 @stackrox/merlin
+*/cloudsources/**/*         @stackrox/merlin
+*/declarativeconfig/**/*    @stackrox/merlin
+*/discoveredclusters/**/    @stackrox/merlin
+*/signatureintegration/**/* @stackrox/merlin
+pkg/features/**/*           @stackrox/merlin
+pkg/sac/**/*                @stackrox/merlin
+pkg/signatures/**/*         @stackrox/merlin
+roxctl/**/*                 @stackrox/merlin
+tests/performance           @stackrox/merlin
+
+/ui/**/* @stackrox/ui
+
+# Listing all users as "Outside collaborators cannot be added to a team"
+roxctl/netpol/**/*                             @zivnevo @adisos @shireenf-ibm @stackrox/maple
+tests/roxctl/bats-tests/local/roxctl-netpol-*  @zivnevo @adisos @shireenf-ibm @stackrox/maple
+tests/roxctl/bats-tests/test-data/np-guard/    @zivnevo @adisos @shireenf-ibm @stackrox/maple
 
 pkg/images/defaults/**/* @stackrox/maple
+sensor/**/*              @stackrox/maple
 
-# Data Shepherds team's responsibilities include migrator and interactions with Postgres
-migrator/**/*       @stackrox/data-shepherds
-pkg/postgres/**/*   @stackrox/data-shepherds
-tests/upgrade/*     @stackrox/data-shepherds
-
-operator/**/* @stackrox/draco
+operator/**/* @stackrox/install
 
 # Scanner team's responsibilities include anything related to the scanner itself and scanning utilities
 # such as vulnerability uploading and image integrations.
+/.github/workflows/scanner*                           @stackrox/scanner
+/.github/workflows/update_scanner_periodic.yaml       @stackrox/scanner
 /central/scannerdefinitions/                          @stackrox/scanner
 /central/sensor/service/pipeline/imageintegrations/   @stackrox/scanner
 /pkg/images/enricher/                                 @stackrox/scanner
@@ -46,3 +59,7 @@ operator/**/* @stackrox/draco
 /sensor/kubernetes/listener/resources/secrets.go      @stackrox/scanner
 /sensor/kubernetes/listener/resources/secrets_test.go @stackrox/scanner
 /SCANNER_VERSION                                      @stackrox/scanner
+
+# The RHTAP maintainers for ACS review all changes related to the RHTAP pipelines, such as new pipelines,
+# parameter changes or automated task updates.
+/.tekton/   @stackrox/rhtap-maintainers

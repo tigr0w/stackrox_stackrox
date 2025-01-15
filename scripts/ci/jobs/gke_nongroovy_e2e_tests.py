@@ -13,8 +13,10 @@ from post_tests import PostClusterTest, FinalPost
 # set required test parameters
 os.environ["ORCHESTRATOR_FLAVOR"] = "k8s"
 
-os.environ["ROX_POSTGRES_DATASTORE"] = "true"
 os.environ["ROX_ACTIVE_VULN_MGMT"] = "true"
+
+# delegated scanning support in the secured cluster
+os.environ["SENSOR_SCANNER_SUPPORT"] = "true"
 
 ClusterTestRunner(
     cluster=GKECluster("nongroovy-test"),
@@ -24,7 +26,6 @@ ClusterTestRunner(
         check_stackrox_logs=False,
     ),
     final_post=FinalPost(
-        store_qa_test_debug_logs=False,
-        store_qa_spock_results=False,
+        store_qa_tests_data=False,
     ),
 ).run()

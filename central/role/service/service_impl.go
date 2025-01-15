@@ -4,13 +4,12 @@ import (
 	"context"
 	"sort"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	clusterDS "github.com/stackrox/rox/central/cluster/datastore"
 	namespaceDS "github.com/stackrox/rox/central/namespace/datastore"
 	rolePkg "github.com/stackrox/rox/central/role"
 	"github.com/stackrox/rox/central/role/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/role/sachelper"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
@@ -19,11 +18,10 @@ import (
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/grpc/authn"
 	"github.com/stackrox/rox/pkg/grpc/authz"
-	"github.com/stackrox/rox/pkg/grpc/authz/allow"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
-	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/sac/effectiveaccessscope"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"google.golang.org/grpc"
 )
 
@@ -52,19 +50,13 @@ var (
 			"/v1.RoleService/PutSimpleAccessScope",
 			"/v1.RoleService/DeleteSimpleAccessScope",
 		},
-		user.With(): {
+		user.Authenticated(): {
+			"/v1.RoleService/GetMyPermissions",
+			"/v1.RoleService/GetResources",
 			"/v1.RoleService/GetClustersForPermissions",
 			"/v1.RoleService/GetNamespacesForClusterAndPermissions",
 		},
-		allow.Anonymous(): {
-			"/v1.RoleService/GetResources",
-			"/v1.RoleService/GetMyPermissions",
-		},
 	})
-)
-
-var (
-	log = logging.LoggerForModule()
 )
 
 type serviceImpl struct {
@@ -127,12 +119,6 @@ func (s *serviceImpl) CreateRole(ctx context.Context, roleRequest *v1.CreateRole
 	}
 	role.Name = roleRequest.GetName()
 
-	// Empty access scope ID is deprecated. Fill the default during the adoption
-	// period.
-	// TODO(ROX-9510): remove this block.
-	if role.GetAccessScopeId() == "" {
-		role.AccessScopeId = rolePkg.AccessScopeIncludeAll.GetId()
-	}
 	err := s.roleDataStore.AddRole(ctx, role)
 	if err != nil {
 		return nil, err
@@ -141,12 +127,6 @@ func (s *serviceImpl) CreateRole(ctx context.Context, roleRequest *v1.CreateRole
 }
 
 func (s *serviceImpl) UpdateRole(ctx context.Context, role *storage.Role) (*v1.Empty, error) {
-	// Empty access scope ID is deprecated. Fill the default during the adoption
-	// period.
-	// TODO(ROX-9510): remove this block.
-	if role.GetAccessScopeId() == "" {
-		role.AccessScopeId = rolePkg.AccessScopeIncludeAll.GetId()
-	}
 	err := s.roleDataStore.UpdateRole(ctx, role)
 	if err != nil {
 		return nil, err

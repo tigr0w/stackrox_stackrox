@@ -35,14 +35,14 @@ function DefaultCIDRToggle({ updateNetworkNodes = () => {} }): ReactElement {
     }
 
     return (
-        <Flex className="pf-u-mb-md">
+        <Flex className="pf-v5-u-mb-md">
             <Switch
                 id="default-cidr-toggle"
                 isChecked={showDefaultExternalSrcs}
                 onChange={toggleHandler}
                 label="Auto-discovered CIDR blocks"
             />
-            {errorMessage && <Alert variant="danger" title={errorMessage} />}
+            {errorMessage && <Alert variant="danger" title={errorMessage} component="p" />}
         </Flex>
     );
 }

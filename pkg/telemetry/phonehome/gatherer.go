@@ -2,7 +2,6 @@ package phonehome
 
 import (
 	"context"
-	"reflect"
 	"time"
 
 	"github.com/pkg/errors"
@@ -36,8 +35,10 @@ type gatherer struct {
 	mu          sync.Mutex
 	gathering   sync.Mutex
 	gatherFuncs []GatherFunc
-	lastData    map[string]any
 	opts        []telemeter.Option
+
+	// tickerFactory allows for setting a custom ticker for ad-hoc gathering.
+	tickerFactory func(time.Duration) *time.Ticker
 }
 
 func newGatherer(clientType string, t telemeter.Telemeter, p time.Duration) *gatherer {
@@ -45,6 +46,8 @@ func newGatherer(clientType string, t telemeter.Telemeter, p time.Duration) *gat
 		clientType: clientType,
 		telemeter:  t,
 		period:     p,
+
+		tickerFactory: time.NewTicker,
 	}
 }
 
@@ -75,23 +78,25 @@ func (g *gatherer) identify() {
 	g.gathering.Lock()
 	defer g.gathering.Unlock()
 	data := g.gather()
-	if !reflect.DeepEqual(g.lastData, data) {
-		// Issue an event so that the new data become visible on analytics:
-		g.telemeter.Track("Updated "+g.clientType+" Identity", nil, append(g.opts, telemeter.WithTraits(data))...)
-	}
-	g.lastData = data
+	// Track event makes the properties effective for the user on analytics.
+	// Duplicates are dropped during a day. The daily potential duplicate event
+	// serves as a heartbeat.
+	g.telemeter.Track("Updated "+g.clientType+" Identity", nil, append(g.opts,
+		telemeter.WithTraits(data))...)
 }
 
 func (g *gatherer) loop() {
 	// Send initial data on start:
 	g.identify()
-	ticker := time.NewTicker(g.period)
+	ticker := g.tickerFactory(g.period)
+	defer ticker.Stop()
 	for !g.stopSig.IsDone() {
 		select {
-		case <-ticker.C:
-			go g.identify()
+		case _, ok := <-ticker.C:
+			if ok {
+				go g.identify()
+			}
 		case <-g.stopSig.Done():
-			ticker.Stop()
 			return
 		}
 	}
@@ -105,11 +110,9 @@ func (g *gatherer) Start(opts ...telemeter.Option) {
 	defer g.mu.Unlock()
 	if g.stopSig.IsDone() {
 		g.reset()
-		{
-			g.gathering.Lock()
+		concurrency.WithLock(&g.gathering, func() {
 			g.opts = opts
-			g.gathering.Unlock()
-		}
+		})
 		go g.loop()
 	}
 }

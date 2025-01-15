@@ -1,8 +1,14 @@
-import { useState, useEffect } from 'react';
-import { gql, useQuery, ApolloError } from '@apollo/client';
+import { gql, useQuery, ApolloError, QueryHookOptions } from '@apollo/client';
+
+import { SearchFilter } from 'types/search';
+import { getRequestQueryStringForSearchFilter } from 'utils/searchUtils';
 
 type DeploymentCountResponse = {
     count: number;
+};
+
+type DeploymentCountParameters = {
+    query: string;
 };
 
 type UseFetchDeploymentCount = {
@@ -11,37 +17,30 @@ type UseFetchDeploymentCount = {
     deploymentCount: number | undefined;
 };
 
-const DEPLOYMENT_COUNT_FOR_CLUSTER = gql`
-    query deployments($query: String) {
+const DEPLOYMENT_COUNT_QUERY = gql`
+    query getDeploymentCount($query: String) {
         count: deploymentCount(query: $query)
     }
 `;
 
-function useFetchDeploymentCount(selectedClusterId: string): UseFetchDeploymentCount {
-    const [deploymentCount, setDeploymentCount] = useState<number>();
-
-    // If the selectedClusterId has not been set yet, do not run the gql query
-    const queryOptions = selectedClusterId
-        ? { variables: { id: selectedClusterId } }
-        : { skip: true };
-
-    const { loading, error, data } = useQuery<DeploymentCountResponse, { id: string }>(
-        DEPLOYMENT_COUNT_FOR_CLUSTER,
-        queryOptions
+function useFetchDeploymentCount(
+    searchFilter: SearchFilter,
+    queryOptions: Omit<
+        QueryHookOptions<DeploymentCountResponse, DeploymentCountParameters>,
+        'variables'
+    > = {}
+): UseFetchDeploymentCount {
+    const query = getRequestQueryStringForSearchFilter(searchFilter);
+    const options = { ...queryOptions, variables: { query } };
+    const { loading, error, data } = useQuery<DeploymentCountResponse, { query: string }>(
+        DEPLOYMENT_COUNT_QUERY,
+        options
     );
-
-    useEffect(() => {
-        if (!data || !data.count) {
-            return;
-        }
-
-        setDeploymentCount(data.count);
-    }, [data]);
 
     return {
         loading,
         error,
-        deploymentCount,
+        deploymentCount: data?.count,
     };
 }
 

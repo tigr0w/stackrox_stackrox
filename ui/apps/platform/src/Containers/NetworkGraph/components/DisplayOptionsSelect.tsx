@@ -1,12 +1,6 @@
 import React, { useState } from 'react';
-import {
-    Select,
-    SelectVariant,
-    SelectGroup,
-    SelectOption,
-    Split,
-    SplitItem,
-} from '@patternfly/react-core';
+import { Split, SplitItem } from '@patternfly/react-core';
+import { Select, SelectGroup, SelectOption } from '@patternfly/react-core/deprecated';
 import { PficonNetworkRangeIcon } from '@patternfly/react-icons';
 
 import { ReactComponent as NoPolicyRules } from 'images/network-graph/no-policy-rules.svg';
@@ -51,7 +45,7 @@ function DisplayOptionsSelect({
 
     return (
         <Select
-            variant={SelectVariant.checkbox}
+            variant="checkbox"
             isOpen={isOpen}
             onToggle={onToggle}
             onSelect={onSelect}
@@ -64,29 +58,29 @@ function DisplayOptionsSelect({
         >
             <SelectGroup label="Deployment visuals" key="deployment">
                 <SelectOption key={0} value="policyStatusBadge">
-                    <NoPolicyRules width="22px" height="22px" className="pf-u-mr-xs" />
+                    <NoPolicyRules width="22px" height="22px" className="pf-v5-u-mr-xs" />
                     Network policy status badge
                 </SelectOption>
                 <SelectOption key={1} value="externalBadge">
-                    <PficonNetworkRangeIcon className="pf-u-ml-xs pf-u-mr-sm" /> Active external
-                    traffic badge
+                    <PficonNetworkRangeIcon className="pf-v5-u-ml-xs pf-v5-u-mr-sm" /> Active
+                    external traffic badge
                 </SelectOption>
             </SelectGroup>
             <SelectGroup label="Edge visuals" key="edge">
                 <SelectOption key={2} value="edgeLabel">
-                    <PortLabel width="22px" height="22px" className="pf-u-mr-xs" />
+                    <PortLabel width="22px" height="22px" className="pf-v5-u-mr-xs" />
                     Port and protocol label
                 </SelectOption>
             </SelectGroup>
             <SelectGroup label="Selection indicators" key="selection-indicator">
                 <SelectOption key={2} value="selectionIndicator">
                     <Split>
-                        <SplitItem className="pf-u-mr-xs">
+                        <SplitItem className="pf-v5-u-mr-xs">
                             <FilteredEntity width="24px" height="24px" />
                         </SplitItem>
                         <SplitItem>Filtered</SplitItem>
-                        <SplitItem className="pf-u-mx-sm">&</SplitItem>
-                        <SplitItem className="pf-u-mr-xs">
+                        <SplitItem className="pf-v5-u-mx-sm">&</SplitItem>
+                        <SplitItem className="pf-v5-u-mr-xs">
                             <RelatedEntity width="18px" height="18px" />
                         </SplitItem>
                         <SplitItem>Related entities</SplitItem>
@@ -96,13 +90,13 @@ function DisplayOptionsSelect({
             <SelectGroup label="Object type labels" key="object-type-labels">
                 <SelectOption key={2} value="objectTypeLabel">
                     <Split>
-                        <SplitItem className="pf-u-mr-xs">
+                        <SplitItem className="pf-v5-u-mr-xs">
                             <NamespaceIcon screenReaderText="namespace" />
                         </SplitItem>
-                        <SplitItem className="pf-u-mr-xs">
+                        <SplitItem className="pf-v5-u-mr-xs">
                             <DeploymentIcon screenReaderText="deployment" />
                         </SplitItem>
-                        <SplitItem className="pf-u-mr-xs">
+                        <SplitItem className="pf-v5-u-mr-xs">
                             <CidrBlockIcon screenReaderText="cidr block" />
                         </SplitItem>
                         <SplitItem>Labels</SplitItem>

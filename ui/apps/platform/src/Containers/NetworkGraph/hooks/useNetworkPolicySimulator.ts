@@ -1,16 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
-import { NetworkPolicyModification } from 'Containers/Network/networkTypes';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 import * as networkService from 'services/NetworkService';
 import { ensureExhaustive } from 'utils/type.utils';
-import { NetworkPolicy } from 'types/networkPolicy.proto';
+import { NetworkPolicyModification } from 'types/networkPolicy.proto';
+import { getRequestQueryStringForSearchFilter } from 'utils/searchUtils';
+import useDeepCompareEffect from 'use-deep-compare-effect';
 import { Simulation } from '../utils/getSimulation';
+import { getSearchFilterFromScopeHierarchy } from '../utils/simulatorUtils';
+import { NetworkScopeHierarchy } from '../types/networkScopeHierarchy';
 
 export type NetworkPolicySimulator =
     | {
           state: 'ACTIVE';
-          networkPolicies: NetworkPolicy[];
           isLoading: boolean;
           error: string;
       }
@@ -27,15 +29,13 @@ type SetNetworkPolicyModificationAction =
     | {
           state: 'ACTIVE';
           options: {
-              clusterId: string;
-              searchQuery: string;
+              scopeHierarchy: NetworkScopeHierarchy;
           };
       }
     | {
           state: 'GENERATED';
           options: {
-              clusterId: string;
-              searchQuery: string;
+              scopeHierarchy: NetworkScopeHierarchy;
               networkDataSince: string;
               excludePortsAndProtocols: boolean;
           };
@@ -56,7 +56,7 @@ type SetNetworkPolicyModificationAction =
 
 type UseNetworkPolicySimulatorParams = {
     simulation: Simulation;
-    clusterId: string;
+    scopeHierarchy: NetworkScopeHierarchy;
 };
 
 const defaultResultState = {
@@ -66,28 +66,27 @@ const defaultResultState = {
     isLoading: true,
 } as NetworkPolicySimulator;
 
-function useNetworkPolicySimulator({ simulation, clusterId }: UseNetworkPolicySimulatorParams): {
+function useNetworkPolicySimulator({
+    simulation,
+    scopeHierarchy,
+}: UseNetworkPolicySimulatorParams): {
     simulator: NetworkPolicySimulator;
     setNetworkPolicyModification: SetNetworkPolicyModification;
 } {
     const [simulator, setSimulator] = useState<NetworkPolicySimulator>(defaultResultState);
 
-    useEffect(() => {
+    useDeepCompareEffect(() => {
         setNetworkPolicyModification({
             state: 'ACTIVE',
-            options: {
-                clusterId,
-                searchQuery: '',
-            },
+            options: { scopeHierarchy },
         });
-    }, [clusterId, simulation.isOn]);
+    }, [scopeHierarchy, simulation.isOn]);
 
     function setNetworkPolicyModification(action: SetNetworkPolicyModificationAction): void {
         const { state, options } = action;
         if (state === 'ACTIVE') {
             setSimulator({
                 state: 'ACTIVE',
-                networkPolicies: [],
                 error: '',
                 isLoading: true,
             });
@@ -101,36 +100,19 @@ function useNetworkPolicySimulator({ simulation, clusterId }: UseNetworkPolicySi
         }
         switch (state) {
             case 'ACTIVE':
-                // @TODO: Add the network search query as a second argument
-                networkService
-                    .fetchNetworkPoliciesByClusterId(options.clusterId)
-                    .then((data: NetworkPolicy[]) => {
-                        setSimulator({
-                            state,
-                            networkPolicies: data,
-                            error: '',
-                            isLoading: false,
-                        });
-                    })
-                    .catch((error) => {
-                        const message = getAxiosErrorMessage(error);
-                        const errorMessage =
-                            message ||
-                            'An unknown error occurred while getting the list of clusters';
-
-                        setSimulator({
-                            state,
-                            networkPolicies: [],
-                            error: errorMessage,
-                            isLoading: false,
-                        });
-                    });
+                setSimulator({
+                    state,
+                    error: '',
+                    isLoading: false,
+                });
                 break;
             case 'GENERATED':
                 networkService
                     .generateNetworkModification(
-                        options.clusterId,
-                        options.searchQuery,
+                        options.scopeHierarchy.cluster.id,
+                        getRequestQueryStringForSearchFilter(
+                            getSearchFilterFromScopeHierarchy(scopeHierarchy)
+                        ),
                         options.networkDataSince,
                         options.excludePortsAndProtocols
                     )

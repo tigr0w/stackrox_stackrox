@@ -4,13 +4,12 @@ import (
 	"context"
 	"sort"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	deploymentStore "github.com/stackrox/rox/central/deployment/datastore"
 	"github.com/stackrox/rox/central/processbaseline"
 	baselineStore "github.com/stackrox/rox/central/processbaseline/datastore"
 	processIndicatorStore "github.com/stackrox/rox/central/processindicator/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
@@ -19,6 +18,8 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	processBaselinePkg "github.com/stackrox/rox/pkg/processbaseline"
+	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"google.golang.org/grpc"
@@ -100,7 +101,7 @@ func (s *serviceImpl) GetProcessesByDeployment(ctx context.Context, req *v1.GetP
 
 func sortIndicators(indicators []*storage.ProcessIndicator) {
 	sort.SliceStable(indicators, func(i, j int) bool {
-		return indicators[i].GetSignal().GetTime().Compare(indicators[j].GetSignal().GetTime()) == -1
+		return protocompat.CompareTimestamps(indicators[i].GetSignal().GetTime(), indicators[j].GetSignal().GetTime()) == -1
 	})
 }
 

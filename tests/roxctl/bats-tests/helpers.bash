@@ -19,6 +19,22 @@ test_data="$BATS_TEST_DIRNAME/../test-data"
 
 any_version='[0-9]+\.[0-9]+\.'
 
+delete-outdated-binaries() {
+    local roxctl_ver="${1}"
+    current_tag="$(git describe --tags --abbrev=10 --dirty --long --exclude '*-nightly-*')"
+    echo "Roxctl version='${roxctl_ver}'" >&3
+    echo "Current tag   ='${current_tag}'" >&3
+    if [[ "${current_tag}" != "${roxctl_ver}" ]]; then
+        echo "Roxctl version does not match current tag" >&3
+        if [[ -n "$NO_BATS_ROXCTL_REBUILD" ]]; then
+                echo "Doing nothing as NO_BATS_ROXCTL_REBUILD is set" >&3
+        else
+            echo "Deleting all roxctl binaries" >&3
+            rm -f "${tmp_roxctl}"/roxctl*
+        fi
+    fi
+}
+
 # roxctl-development-cmd prints the path to roxctl built with GOTAGS=''. It builds the binary if needed
 roxctl-development-cmd() {
   if [[ ! -x "${tmp_roxctl}/roxctl-dev" ]]; then
@@ -35,7 +51,7 @@ roxctl-development() {
    "$(roxctl-development-cmd)" "$@"
 }
 
-# roxctl-development-cmd prints the path to roxctl built with GOTAGS='release'. It builds the binary if needed
+# roxctl-release-cmd prints the path to roxctl built with GOTAGS='release'. It builds the binary if needed
 roxctl-release-cmd() {
   if [[ ! -x "${tmp_roxctl}/roxctl-release" ]]; then
     _uname="$(luname)"
@@ -56,8 +72,7 @@ helm_template_central() {
   run helm template stackrox-central-services "$out_dir" \
     -n stackrox \
     --set imagePullSecrets.allowNone=true \
-    --output-dir="$out_dir/rendered" \
-    --set central.persistence.none=true
+    --output-dir="$out_dir/rendered"
   assert_success
   assert_output --partial "wrote $out_dir/rendered/stackrox-central-services/templates/01-central-13-deployment.yaml"
   assert_output --partial "wrote $out_dir/rendered/stackrox-central-services/templates/02-scanner-06-deployment.yaml"
@@ -235,13 +250,6 @@ image_reference_regex() {
     quay.io/stackrox-io)
       echo "quay\.io/stackrox-io/$component:$version"
       ;;
-    stackrox.io)
-      if [[ "$component" == "collector" ]]; then
-        echo "collector.stackrox\.io/$component:$version"
-      else
-        echo "stackrox\.io/$component:$version"
-      fi
-      ;;
     registry.redhat.io)
       echo "registry\.redhat\.io/advanced-cluster-security/rhacs-$component-rhel8:$version"
       ;;
@@ -335,7 +343,7 @@ has_flag_collision_warning() {
 }
 
 roxctl_authenticated() {
-  roxctl-development --insecure-skip-tls-verify -e "$API_ENDPOINT" -p "$ROX_PASSWORD" "$@"
+  roxctl-development --insecure-skip-tls-verify -e "$API_ENDPOINT" "$@"
 }
 
 yaml_valid() {

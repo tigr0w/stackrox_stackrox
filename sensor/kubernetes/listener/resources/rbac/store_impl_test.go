@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stackrox/rox/sensor/common/store/mocks"
 	"github.com/stackrox/rox/sensor/common/store/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	v1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -21,8 +22,6 @@ import (
 )
 
 func TestStore_DispatcherEvents(t *testing.T) {
-	// Run these tests only with feature flag enabled. Changes to the old path should be avoided whenever possible.
-	t.Setenv("ROX_RESYNC_DISABLED", "true")
 	// Namespace: n1
 	// Role: r1
 	// Bindings:
@@ -420,13 +419,11 @@ func TestStore_DispatcherEvents(t *testing.T) {
 	for _, event := range eventsInOrder {
 		require.NoError(t, event.createK8sResource())
 		actual := dispatcher.ProcessEvent(event.k8sEvent, nil, event.action)
-		assert.ElementsMatch(t, event.unorderedMessages, actual.ForwardMessages)
+		protoassert.ElementsMatch(t, event.unorderedMessages, actual.ForwardMessages)
 	}
 }
 
 func TestStore_DeploymentRelationship(t *testing.T) {
-	// Run these tests only with feature flag enabled. Changes to the old path should be avoided whenever possible.
-	t.Setenv("ROX_RESYNC_DISABLED", "true")
 	roles := []*v1.Role{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -522,7 +519,7 @@ func TestStore_DeploymentRelationship(t *testing.T) {
 			tested := NewStore().(*storeImpl)
 			fakeClient := fake.NewSimpleClientset()
 			dispatcher := NewDispatcher(tested, fakeClient)
-			var ref []resolver.DeploymentReference
+			var ref []resolver.DeploymentResolution
 			for _, update := range testCase.orderedUpdates {
 				event := dispatcher.ProcessEvent(update, nil, central.ResourceAction_CREATE_RESOURCE)
 				if len(event.DeploymentReferences) == 1 {

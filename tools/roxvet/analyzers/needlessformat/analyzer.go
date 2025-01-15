@@ -13,12 +13,10 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-const doc = `check for use of format methodsToReplacementByPackage without format arguments`
-
 // Analyzer is the analyzer.
 var Analyzer = &analysis.Analyzer{
 	Name:     "needlessformat",
-	Doc:      doc,
+	Doc:      "check for use of format methodsToReplacementByPackage without format arguments",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
@@ -102,7 +100,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		(*ast.CallExpr)(nil),
 	}
 
-	common.FilteredPreorder(inspectResult, common.Not(common.IsGeneratedFile), nodeFilter, func(n ast.Node) {
+	common.FilteredPreorder(inspectResult, common.Not(ast.IsGenerated), nodeFilter, func(n ast.Node) {
 		checkCall(pass, n.(*ast.CallExpr))
 	})
 	return nil, nil

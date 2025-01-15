@@ -5,15 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	processBaselineMocks "github.com/stackrox/rox/central/processbaseline/datastore/mocks"
 	processBaselineResultMocks "github.com/stackrox/rox/central/processbaselineresults/datastore/mocks"
 	processIndicatorMocks "github.com/stackrox/rox/central/processindicator/datastore/mocks"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/fixtures"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/protoconv"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func makeBaselineStatuses(t *testing.T, statuses ...string) (protoStatuses []storage.ContainerNameAndBaselineStatus_BaselineStatus) {
@@ -51,17 +51,8 @@ func TestProcessBaselineEvaluator(t *testing.T) {
 			shouldBePersisted:          true,
 		},
 		{
-			name:     "Process Baseline exists, but not locked",
-			baseline: &storage.ProcessBaseline{},
-			indicators: []*storage.ProcessIndicator{
-				{
-					Signal: &storage.ProcessSignal{
-						Name: "apt-get",
-						Args: "install nmap",
-					},
-					ContainerName: deployment.GetContainers()[0].GetName(),
-				},
-			},
+			name:                       "Process Baseline exists, but not locked",
+			baseline:                   &storage.ProcessBaseline{},
 			baselineStatuses:           makeBaselineStatuses(t, "UNLOCKED", "UNLOCKED"),
 			anomalousProcessesExecuted: []bool{false, false},
 			currentBaselineResults:     nil,
@@ -277,7 +268,9 @@ func TestProcessBaselineEvaluator(t *testing.T) {
 			mockResults := processBaselineResultMocks.NewMockDataStore(mockCtrl)
 
 			mockBaselines.EXPECT().GetProcessBaseline(gomock.Any(), gomock.Any()).MaxTimes(len(deployment.GetContainers())).Return(c.baseline, c.baseline != nil, c.baselineErr)
-			mockIndicators.EXPECT().SearchRawProcessIndicators(gomock.Any(), gomock.Any()).Return(c.indicators, c.indicatorErr)
+			if c.indicators != nil {
+				mockIndicators.EXPECT().SearchRawProcessIndicators(gomock.Any(), gomock.Any()).Return(c.indicators, c.indicatorErr)
+			}
 
 			expectedBaselineResult := &storage.ProcessBaselineResults{
 				DeploymentId: deployment.GetId(),
@@ -303,7 +296,7 @@ func TestProcessBaselineEvaluator(t *testing.T) {
 			for _, idx := range c.expectedIndicatorIndices {
 				expectedIndicators = append(expectedIndicators, c.indicators[idx])
 			}
-			assert.ElementsMatch(t, results, expectedIndicators)
+			protoassert.ElementsMatch(t, results, expectedIndicators)
 		})
 	}
 }

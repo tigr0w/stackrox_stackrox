@@ -1,11 +1,13 @@
 package clairify
 
 import (
-	gogoProto "github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/clair"
 	"github.com/stackrox/rox/pkg/cvss/cvssv2"
 	"github.com/stackrox/rox/pkg/cvss/cvssv3"
+	"github.com/stackrox/rox/pkg/features"
+	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	"github.com/stackrox/rox/pkg/scans"
 	"github.com/stackrox/rox/pkg/stringutils"
@@ -89,9 +91,10 @@ func convertContainerRuntime(containerRuntime *storage.ContainerRuntimeInfo) *v1
 
 func convertVulnResponseToNodeScan(req *v1.GetNodeVulnerabilitiesRequest, resp *v1.GetNodeVulnerabilitiesResponse) *storage.NodeScan {
 	scan := &storage.NodeScan{
-		ScanTime:        gogoProto.TimestampNow(),
+		ScanTime:        protocompat.TimestampNow(),
 		OperatingSystem: resp.GetOperatingSystem(),
 		Notes:           convertNodeNotes(resp.GetNodeNotes()),
+		ScannerVersion:  storage.NodeScan_SCANNER,
 	}
 	if resp.GetFeatures() == nil {
 		scan.Components = []*storage.EmbeddedNodeScanComponent{
@@ -189,8 +192,8 @@ func convertVulnerability(v *v1.Vulnerability, vulnType storage.EmbeddedVulnerab
 	if v.GetMetadataV2() != nil {
 		m := v.GetMetadataV2()
 
-		vuln.PublishedOn = clair.ConvertTime(m.GetPublishedDateTime())
-		vuln.LastModified = clair.ConvertTime(m.GetLastModifiedDateTime())
+		vuln.PublishedOn = protoconv.ConvertTimeString(m.GetPublishedDateTime())
+		vuln.LastModified = protoconv.ConvertTimeString(m.GetLastModifiedDateTime())
 		if m.GetCvssV2() != nil && m.GetCvssV2().Vector != "" {
 			if cvssV2, err := cvssv2.ParseCVSSV2(m.GetCvssV2().GetVector()); err == nil {
 				cvssV2.ExploitabilityScore = m.GetCvssV2().GetExploitabilityScore()
@@ -230,7 +233,7 @@ func convertVulnerability(v *v1.Vulnerability, vulnType storage.EmbeddedVulnerab
 func convertImageToImageScan(metadata *storage.ImageMetadata, image *v1.Image) *storage.ImageScan {
 	components := convertFeatures(metadata, image.GetFeatures(), image.Namespace)
 	return &storage.ImageScan{
-		ScanTime:        gogoProto.TimestampNow(),
+		ScanTime:        protocompat.TimestampNow(),
 		Components:      components,
 		OperatingSystem: image.GetNamespace(),
 	}
@@ -265,16 +268,18 @@ func convertFeature(feature *v1.Feature, os string) *storage.EmbeddedImageScanCo
 		component.Source = source
 	}
 	component.Vulns = convertVulnerabilities(feature.GetVulnerabilities(), storage.EmbeddedVulnerability_IMAGE_VULNERABILITY)
-	executables := make([]*storage.EmbeddedImageScanComponent_Executable, 0, len(feature.GetProvidedExecutables()))
-	for _, executable := range feature.GetProvidedExecutables() {
-		imageComponentIds := make([]string, 0, len(executable.GetRequiredFeatures()))
-		for _, f := range executable.GetRequiredFeatures() {
-			imageComponentIds = append(imageComponentIds, scancomponent.ComponentID(f.GetName(), f.GetVersion(), os))
+	if features.ActiveVulnMgmt.Enabled() {
+		executables := make([]*storage.EmbeddedImageScanComponent_Executable, 0, len(feature.GetProvidedExecutables()))
+		for _, executable := range feature.GetProvidedExecutables() {
+			imageComponentIds := make([]string, 0, len(executable.GetRequiredFeatures()))
+			for _, f := range executable.GetRequiredFeatures() {
+				imageComponentIds = append(imageComponentIds, scancomponent.ComponentID(f.GetName(), f.GetVersion(), os))
+			}
+			exec := &storage.EmbeddedImageScanComponent_Executable{Path: executable.GetPath(), Dependencies: imageComponentIds}
+			executables = append(executables, exec)
 		}
-		exec := &storage.EmbeddedImageScanComponent_Executable{Path: executable.GetPath(), Dependencies: imageComponentIds}
-		executables = append(executables, exec)
+		component.Executables = executables
 	}
-	component.Executables = executables
 
 	return component
 }

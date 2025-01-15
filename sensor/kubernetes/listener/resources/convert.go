@@ -6,11 +6,12 @@ import (
 	"sort"
 
 	"github.com/mitchellh/hashstructure/v2"
-	openshift_appsv1 "github.com/openshift/api/apps/v1"
+	openshiftAppsV1 "github.com/openshift/api/apps/v1"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/containers"
+	"github.com/stackrox/rox/pkg/features"
 	imageUtils "github.com/stackrox/rox/pkg/images/utils"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/protoconv/k8s"
@@ -19,7 +20,6 @@ import (
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/pkg/uuid"
-	"github.com/stackrox/rox/sensor/common/registry"
 	"github.com/stackrox/rox/sensor/common/service"
 	"github.com/stackrox/rox/sensor/kubernetes/listener/resources/references"
 	"github.com/stackrox/rox/sensor/kubernetes/orchestratornamespaces"
@@ -64,8 +64,6 @@ type deploymentWrap struct {
 	original         interface{}
 	portConfigs      map[service.PortRef]*storage.PortConfig
 	pods             []*v1.Pod
-	// registryStore is the image registry store to use when determining if an image is cluster-local.
-	registryStore *registry.Store
 	// TODO(ROX-9984): we could have the networkPoliciesApplied stored here. This would require changes in the ProcessDeployment functions of the detector.
 	// networkPoliciesApplied augmentedobjs.NetworkPoliciesApplied
 
@@ -87,8 +85,8 @@ func doesFieldExist(value reflect.Value) bool {
 
 func newDeploymentEventFromResource(obj interface{}, action *central.ResourceAction, deploymentType, clusterID string,
 	lister v1listers.PodLister, namespaceStore *namespaceStore, hierarchy references.ParentHierarchy, registryOverride string,
-	namespaces *orchestratornamespaces.OrchestratorNamespaces, registryStore *registry.Store) *deploymentWrap {
-	wrap := newWrap(obj, deploymentType, clusterID, registryOverride, registryStore)
+	namespaces *orchestratornamespaces.OrchestratorNamespaces) *deploymentWrap {
+	wrap := newWrap(obj, deploymentType, clusterID, registryOverride)
 	if wrap == nil {
 		return nil
 	}
@@ -102,7 +100,7 @@ func newDeploymentEventFromResource(obj interface{}, action *central.ResourceAct
 	return wrap
 }
 
-func newWrap(obj interface{}, kind, clusterID, registryOverride string, registryStore *registry.Store) *deploymentWrap {
+func newWrap(obj interface{}, kind, clusterID, registryOverride string) *deploymentWrap {
 	deployment, err := resources.NewDeploymentFromStaticResource(obj, kind, clusterID, registryOverride)
 	if err != nil || deployment == nil {
 		return nil
@@ -110,7 +108,6 @@ func newWrap(obj interface{}, kind, clusterID, registryOverride string, registry
 	return &deploymentWrap{
 		Deployment:       deployment,
 		registryOverride: registryOverride,
-		registryStore:    registryStore,
 		isBuilt:          false,
 	}
 }
@@ -176,7 +173,7 @@ func (w *deploymentWrap) populateNonStaticFields(obj interface{}, action *centra
 	)
 
 	switch o := obj.(type) {
-	case *openshift_appsv1.DeploymentConfig:
+	case *openshiftAppsV1.DeploymentConfig:
 		if o.Spec.Template == nil {
 			return false, fmt.Errorf("spec obj %+v does not have a Template field or is not a pointer pod spec", spec)
 		}
@@ -247,7 +244,7 @@ func (w *deploymentWrap) populateNonStaticFields(obj interface{}, action *centra
 		// If we have a standalone pod, we cannot use the labels to try and select that pod so we must directly populate the pod data
 		// We need to special case kube-proxy because we are consolidating it into a deployment
 		if pod, ok := obj.(*v1.Pod); ok && w.Type != k8sStandalonePodType {
-			w.populateDataFromPods(pod)
+			w.populateDataFromPods(set.StringSet{}, pod)
 		} else {
 			pods, err := w.getPods(hierarchy, labelSelector, lister)
 			if err != nil {
@@ -256,7 +253,7 @@ func (w *deploymentWrap) populateNonStaticFields(obj interface{}, action *centra
 			if updated := checkIfNewPodSpecRequired(&podSpec, pods); updated {
 				resources.NewDeploymentWrap(w.Deployment, w.registryOverride).PopulateDeploymentFromPodSpec(podSpec)
 			}
-			w.populateDataFromPods(pods...)
+			w.populateDataFromPods(set.StringSet{}, pods...)
 		}
 	}
 
@@ -295,17 +292,17 @@ func (w *deploymentWrap) getPods(hierarchy references.ParentHierarchy, labelSele
 	return filterOnOwners(hierarchy, w.Id, pods), nil
 }
 
-func (w *deploymentWrap) populateDataFromPods(pods ...*v1.Pod) {
+func (w *deploymentWrap) populateDataFromPods(localImages set.StringSet, pods ...*v1.Pod) {
 	w.pods = pods
 	// Sensor must already know about the OpenShift internal registries to determine if an image is cluster-local,
 	// which is ok because Sensor listens for Secrets before it starts listening for Deployment-like resources.
-	w.populateImageMetadata(pods...)
+	w.populateImageMetadata(localImages, pods...)
 }
 
 // populateImageMetadata populates metadata for each image in the deployment.
 // This metadata includes: ImageID, NotPullable, and IsClusterLocal.
 // Note: NotPullable and IsClusterLocal are only determined if the image's ID can be determined.
-func (w *deploymentWrap) populateImageMetadata(pods ...*v1.Pod) {
+func (w *deploymentWrap) populateImageMetadata(localImages set.StringSet, pods ...*v1.Pod) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -340,13 +337,23 @@ func (w *deploymentWrap) populateImageMetadata(pods ...*v1.Pod) {
 
 			image := w.Deployment.Containers[i].Image
 
-			// If there already is an image ID for the image then that implies that the name of the image was fully qualified
-			// with an image digest. e.g. stackrox.io/main@sha256:xyz
-			// If the ID already exists, populate NotPullable and IsClusterLocal.
+			var runtimeImageName *storage.ImageName
+			if features.UnqualifiedSearchRegistries.Enabled() && c.ImageID != "" {
+				var err error
+				if runtimeImageName, _, err = imageUtils.GenerateImageNameFromString(imageUtils.RemoveScheme(c.ImageID)); err != nil {
+					log.Warnf("Error parsing image ID %q, will not sync image names with runtime for deploy %q, pod %q: %v", c.ImageID, w.Deployment.GetName(), p.GetName(), err)
+				}
+			}
+
+			// If there already is an image ID for the image then that implies that the name of the image
+			// had a digest. e.g. quay.io/stackrox-io/main@sha256:xyz or main@sha256:xyz
+			// If the ID already exists populate NotPullable, IsClusterLocal, and sync the registry
+			// and remote with the container runtime.
 			if image.GetId() != "" {
 				// Use the image ID from the pod's ContainerStatus.
 				image.NotPullable = !imageUtils.IsPullable(c.ImageID)
-				image.IsClusterLocal = w.registryStore.IsLocal(image.GetName())
+				image.IsClusterLocal = localImages.Contains(image.GetName().GetFullName())
+				updateImageWithNewerImageName(image, runtimeImageName, true)
 				continue
 			}
 
@@ -365,9 +372,43 @@ func (w *deploymentWrap) populateImageMetadata(pods ...*v1.Pod) {
 			if digest := imageUtils.ExtractImageDigest(c.ImageID); digest != "" {
 				image.Id = digest
 				image.NotPullable = !imageUtils.IsPullable(c.ImageID)
-				image.IsClusterLocal = w.registryStore.IsLocal(image.GetName())
+				image.IsClusterLocal = localImages.Contains(image.GetName().GetFullName())
+				updateImageWithNewerImageName(image, runtimeImageName, false)
 			}
 		}
+	}
+}
+
+// updateImageWithNewerImageName will update the registry, remote, and full name
+// of image from a newer image name, such as the one provided by the container
+// runtime. This is needed in order to support CRI-O's unqualified search registries
+// and short name aliases, for more details refer to:
+// https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md
+//
+// The image in a workload's spec may differ from what the container runtime pulls,
+// therefore the image name must be updated to accurately reflect the pulled image
+// to give downstream processes (like scanning) a better chance at completing.
+//
+// Note: at this time CRI-O does not indicate if a registry mirror was used,
+// therefore the mirror store (`pkg/registrymirror`) and mirror processing logic in
+// `sensor/common/scan` are still required to scan images from registry mirrors.
+func updateImageWithNewerImageName(image *storage.ContainerImage, newerImageName *storage.ImageName, updateDigest bool) {
+	if !features.UnqualifiedSearchRegistries.Enabled() || image.GetName() == nil || newerImageName == nil {
+		return
+	}
+
+	imageName := image.GetName()
+	origFullName := imageName.GetFullName()
+	if imageName.GetRegistry() != newerImageName.GetRegistry() || imageName.GetRemote() != newerImageName.GetRemote() {
+		imageName.Registry = newerImageName.GetRegistry()
+		imageName.Remote = newerImageName.GetRemote()
+
+		if updateDigest {
+			imageUtils.NormalizeImageFullName(imageName, image.GetId())
+		} else {
+			imageUtils.NormalizeImageFullNameNoSha(imageName)
+		}
+		log.Debugf("Updated image name from %q to %q", origFullName, imageName.GetFullName())
 	}
 }
 
@@ -425,7 +466,7 @@ func (w *deploymentWrap) toEvent(action central.ResourceAction) *central.SensorE
 		Id:     w.GetId(),
 		Action: action,
 		Resource: &central.SensorEvent_Deployment{
-			Deployment: w.Deployment.Clone(),
+			Deployment: w.Deployment.CloneVT(),
 		},
 	}
 }
@@ -473,18 +514,22 @@ func (w *deploymentWrap) updatePortExposure(portExposure map[service.PortRef][]*
 	w.updatePortExposureUncheckedNoLock(portExposure)
 }
 
-func (w *deploymentWrap) updatePortExposureSlice(portExposures []map[service.PortRef][]*storage.PortConfig_ExposureInfo) {
+func (w *deploymentWrap) updatePortExposureSlice(portExposures []map[service.PortRef][]*storage.PortConfig_ExposureInfo) bool {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
 	w.resetPortExposureNoLock()
 
+	changed := false
 	for _, exposureInfo := range portExposures {
-		w.updatePortExposureUncheckedNoLock(exposureInfo)
+		if w.updatePortExposureUncheckedNoLock(exposureInfo) {
+			changed = true
+		}
 	}
+	return changed
 }
 
-func (w *deploymentWrap) updatePortExposureUncheckedNoLock(portExposure map[service.PortRef][]*storage.PortConfig_ExposureInfo) {
+func (w *deploymentWrap) updatePortExposureUncheckedNoLock(portExposure map[service.PortRef][]*storage.PortConfig_ExposureInfo) bool {
 	for ref, exposureInfos := range portExposure {
 		portCfg := w.portConfigs[ref]
 		if portCfg == nil {
@@ -517,13 +562,18 @@ func (w *deploymentWrap) updatePortExposureUncheckedNoLock(portExposure map[serv
 	sort.Slice(w.Ports, func(i, j int) bool {
 		return w.Ports[i].ContainerPort < w.Ports[j].ContainerPort
 	})
+	return false
 }
 
-func (w *deploymentWrap) updateServiceAccountPermissionLevel(permissionLevel storage.PermissionLevel) {
+func (w *deploymentWrap) updateServiceAccountPermissionLevel(permissionLevel storage.PermissionLevel) bool {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	w.ServiceAccountPermissionLevel = permissionLevel
+	if w.ServiceAccountPermissionLevel != permissionLevel {
+		w.ServiceAccountPermissionLevel = permissionLevel
+		return true
+	}
+	return false
 }
 
 // Clone clones a deploymentWrap. Note: `original` field is not cloned.
@@ -534,7 +584,7 @@ func (w *deploymentWrap) Clone() *deploymentWrap {
 	ret := &deploymentWrap{
 		original:         w.original, // original is only always read
 		registryOverride: w.registryOverride,
-		Deployment:       w.GetDeployment().Clone(),
+		Deployment:       w.GetDeployment().CloneVT(),
 	}
 	if w.pods != nil {
 		ret.pods = make([]*v1.Pod, len(w.pods))
@@ -545,7 +595,7 @@ func (w *deploymentWrap) Clone() *deploymentWrap {
 	if w.portConfigs != nil {
 		ret.portConfigs = make(map[service.PortRef]*storage.PortConfig)
 		for k, v := range w.portConfigs {
-			ret.portConfigs[k] = v.Clone()
+			ret.portConfigs[k] = v.CloneVT()
 		}
 	}
 

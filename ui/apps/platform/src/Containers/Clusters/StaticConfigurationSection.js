@@ -1,7 +1,8 @@
 import React from 'react';
-import { Message } from '@stackrox/ui-components';
+import { Alert, Text } from '@patternfly/react-core';
 
 import CollapsibleSection from 'Components/CollapsibleSection';
+import ExternalLink from 'Components/PatternFly/IconText/ExternalLink';
 import ToggleSwitch from 'Components/ToggleSwitch';
 import Select from 'Components/Select';
 import {
@@ -44,9 +45,18 @@ const StaticConfigurationSection = ({
     isManagerTypeNonConfigurable,
     handleChange,
 }) => {
+    const filteredRuntimeOptions = runtimeOptions.filter((option) => {
+        // EBPF has been removed for secured clusters >= 4.5, but
+        // needs to be displayed for clusters on older versions.
+        //
+        // If the manager type is configurable (i.e. not helm or operator)
+        // we don't want EBPF as a selectable option, so filter it out,
+        // otherwise include all options so it is displayed correctly.
+        return isManagerTypeNonConfigurable || option.value !== 'EBPF';
+    });
     // curry the change handlers for the select inputs
     const onCollectionMethodChange = getSelectComparison(
-        runtimeOptions,
+        filteredRuntimeOptions,
         'collectionMethod',
         selectedCluster,
         handleChange
@@ -80,10 +90,7 @@ const StaticConfigurationSection = ({
     const isTypeOpenShift3 = selectedCluster?.type === clusterTypes.OPENSHIFT_3;
 
     return (
-        <CollapsibleSection
-            title="Static Configuration (requires deployment)"
-            titleClassName="text-xl"
-        >
+        <CollapsibleSection title="Static Configuration (requires deployment)">
             <div className="bg-base-100 pb-3 pt-1 px-3 rounded shadow">
                 <div className={wrapperMarginClassName}>
                     <label htmlFor="name" className={labelClassName}>
@@ -170,7 +177,7 @@ const StaticConfigurationSection = ({
                         Collection Method
                     </label>
                     <Select
-                        options={runtimeOptions}
+                        options={filteredRuntimeOptions}
                         placeholder="Select a runtime option"
                         onChange={onCollectionMethodChange}
                         className={selectElementClassName}
@@ -228,10 +235,15 @@ const StaticConfigurationSection = ({
                         />
                     )}
                     {isTypeOpenShift3 && (
-                        <div className="border border-alert-200 bg-alert-200 p-2 rounded-b">
+                        <Alert
+                            variant="warning"
+                            isInline
+                            title="Openshift compatibility"
+                            component="p"
+                        >
                             This setting will not work for OpenShift 3.11. To use this webhook, you
                             must upgrade your cluster to OpenShift 4.1 or higher.
-                        </div>
+                        </Alert>
                     )}
                 </div>
                 <div className={wrapperMarginClassName}>
@@ -330,26 +342,35 @@ const StaticConfigurationSection = ({
                         />
                     </div>
                     {!centralEnv?.successfullyFetched && (
-                        <Message type="warn">
-                            Failed to check if Central has kernel support packages available
-                        </Message>
+                        <Alert
+                            variant="warning"
+                            isInline
+                            title="Failed to check if Central has kernel support packages available"
+                            component="p"
+                        />
                     )}
                     {showSlimCollectorWarning && (
-                        <Message type="warn">
-                            <span>
-                                Central doesn’t have the required Kernel support package. Retrieve
-                                it from{' '}
-                                <a
-                                    href="https://install.stackrox.io/collector/support-packages/index.html"
-                                    className="underline text-primary-900"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                >
-                                    stackrox.io
-                                </a>{' '}
-                                and upload it to Central using roxctl.
-                            </span>
-                        </Message>
+                        <Alert
+                            variant="warning"
+                            isInline
+                            title="Kernel support package"
+                            component="p"
+                        >
+                            <Text>Central does not have the required Kernel support package.</Text>
+                            <Text>
+                                Retrieve it from{' '}
+                                <ExternalLink>
+                                    <a
+                                        href="https://install.stackrox.io/collector/support-packages/index.html"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                    >
+                                        stackrox.io
+                                    </a>
+                                </ExternalLink>
+                            </Text>
+                            <Text>Upload it to Central using roxctl</Text>
+                        </Alert>
                     )}
                 </div>
             </div>

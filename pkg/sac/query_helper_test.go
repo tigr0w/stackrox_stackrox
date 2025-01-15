@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	v1 "github.com/stackrox/rox/generated/api/v1"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac/effectiveaccessscope"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stretchr/testify/assert"
@@ -73,14 +74,20 @@ func TestClusterScopeFilterGeneration(topLevelTest *testing.T) {
 			expected:       clusterVerboseMatch(topLevelTest, planetArrakis),
 		},
 		{
-			description:    "Scope tree with only partial cluster nodes generates a MatchNone query filter",
+			description:    "Scope tree with only partial cluster nodes generates a Conjunction of Match query filter",
 			scopeGenerator: effectiveaccessscope.TestTreeClusterNamespaceMixIncluded,
-			expected:       getMatchNoneQuery(),
+			expected: search.DisjunctionQuery(
+				clusterVerboseMatch(topLevelTest, planetArrakis),
+				clusterVerboseMatch(topLevelTest, planetEarth),
+			),
 		},
 		{
-			description:    "Scope tree with one included cluster tree and partial clusters generate only a Match for the included cluster",
+			description:    "Scope tree with one included cluster tree and partial clusters generate a Disjunction of Match for the included clusters",
 			scopeGenerator: effectiveaccessscope.TestTreeClusterNamespaceFullClusterMixIncluded,
-			expected:       clusterVerboseMatch(topLevelTest, planetArrakis),
+			expected: search.DisjunctionQuery(
+				clusterVerboseMatch(topLevelTest, planetArrakis),
+				clusterVerboseMatch(topLevelTest, planetEarth),
+			),
 		},
 		{
 			description:    "Scope tree with multiple included cluster trees generates a Disjunction of Match for the included clusters",
@@ -101,7 +108,7 @@ func TestClusterScopeFilterGeneration(topLevelTest *testing.T) {
 			assert.Truef(t, correctFilter, "mismatch between queries")
 			if !correctFilter {
 				// Expose the mismatch in the test output
-				assert.Equal(t, tc.expected, filter)
+				protoassert.Equal(t, tc.expected, filter)
 			}
 		})
 	}
@@ -271,7 +278,7 @@ func TestNamespaceScopeFilterGeneration(topLevelTest *testing.T) {
 			assert.Truef(t, correctFilter, "mismatch between queries")
 			if !correctFilter {
 				// Expose the mismatch in the test output
-				assert.Equal(t, tc.expected, filter)
+				protoassert.Equal(t, tc.expected, filter)
 			}
 		})
 	}
@@ -320,14 +327,18 @@ func TestNonVerboseClusterScopeFilterGeneration(topLevelTest *testing.T) {
 			expected:       clusterNonVerboseMatch(topLevelTest, planetArrakis),
 		},
 		{
-			description:    "Scope tree with only partial cluster nodes generates a MatchNone query filter",
+			description:    "Scope tree with only partial cluster nodes generates a Disjunction of Match query filter",
 			scopeGenerator: effectiveaccessscope.TestTreeClusterNamespaceMixIncluded,
-			expected:       getMatchNoneQuery(),
+			expected: search.DisjunctionQuery(
+				clusterNonVerboseMatch(topLevelTest, planetArrakis),
+				clusterNonVerboseMatch(topLevelTest, planetEarth)),
 		},
 		{
-			description:    "Scope tree with one included cluster tree and partial clusters generate only a Match for the included cluster",
+			description:    "Scope tree with one included cluster tree and partial clusters generate a Disjunction of Match for the included clusters",
 			scopeGenerator: effectiveaccessscope.TestTreeClusterNamespaceFullClusterMixIncluded,
-			expected:       clusterNonVerboseMatch(topLevelTest, planetArrakis),
+			expected: search.DisjunctionQuery(
+				clusterNonVerboseMatch(topLevelTest, planetArrakis),
+				clusterNonVerboseMatch(topLevelTest, planetEarth)),
 		},
 		{
 			description:    "Scope tree with multiple included cluster trees generates a Disjunction of Match for the included clusters",
@@ -347,7 +358,7 @@ func TestNonVerboseClusterScopeFilterGeneration(topLevelTest *testing.T) {
 			assert.Truef(t, correctFilter, "mismatch between queries")
 			if !correctFilter {
 				// Expose the mismatch in the test output
-				assert.Equal(t, tc.expected, filter)
+				protoassert.Equal(t, tc.expected, filter)
 			}
 		})
 	}
@@ -501,7 +512,7 @@ func TestNonVerboseNamespaceScopeFilterGeneration(topLevelTest *testing.T) {
 			assert.Truef(t, correctFilter, "mismatch between queries")
 			if !correctFilter {
 				// Expose the mismatch in the test output
-				assert.Equal(t, tc.expected, filter)
+				protoassert.Equal(t, tc.expected, filter)
 			}
 		})
 	}

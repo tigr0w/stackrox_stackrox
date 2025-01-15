@@ -1,6 +1,7 @@
 import React, { ReactElement } from 'react';
 import { Form, PageSection, TextInput } from '@patternfly/react-core';
 import * as yup from 'yup';
+import merge from 'lodash/merge';
 
 import { NotifierIntegrationBase } from 'services/NotifierIntegrationsService';
 
@@ -48,9 +49,7 @@ function SlackIntegrationForm({
     initialValues = null,
     isEditable = false,
 }: IntegrationFormProps<SlackIntegration>): ReactElement {
-    const formInitialValues = initialValues
-        ? ({ ...defaultValues, ...initialValues } as SlackIntegration)
-        : defaultValues;
+    const formInitialValues: SlackIntegration = merge({}, defaultValues, initialValues);
     const {
         values,
         touched,
@@ -91,7 +90,7 @@ function SlackIntegrationForm({
                             type="text"
                             id="name"
                             value={values.name}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -109,7 +108,7 @@ function SlackIntegrationForm({
                             type="text"
                             id="labelDefault"
                             value={values.labelDefault}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -125,7 +124,7 @@ function SlackIntegrationForm({
                             type="text"
                             id="labelKey"
                             value={values.labelKey}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />

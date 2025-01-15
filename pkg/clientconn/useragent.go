@@ -2,10 +2,9 @@ package clientconn
 
 import (
 	"fmt"
-	"os"
 	"runtime"
-	"strconv"
 
+	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stackrox/rox/pkg/version"
 )
 
@@ -16,6 +15,7 @@ const (
 	AdmissionController = "Rox Admission Controller"
 	Central             = "Rox Central"
 	Compliance          = "Rox Compliance"
+	ConfigController    = "Config Controller"
 	Roxctl              = "roxctl"
 	Sensor              = "Rox Sensor"
 	Upgrader            = "Rox Upgrader"
@@ -31,12 +31,8 @@ func init() {
 // e.g. grpc-go/1.50.1.
 func SetUserAgent(agent string) {
 	var ci string
-	if v, ok := os.LookupEnv("CI"); ok {
-		if v == "" {
-			ci = " CI"
-		} else if value, err := strconv.ParseBool(v); err == nil && value {
-			ci = " CI"
-		}
+	if testutils.IsRunningInCI() {
+		ci = " CI"
 	}
 	userAgent = fmt.Sprintf("%s/%s (%s; %s)%s", agent, version.GetMainVersion(), runtime.GOOS, runtime.GOARCH, ci)
 }

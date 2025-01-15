@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/stackrox/rox/pkg/uuid"
-	"gopkg.in/square/go-jose.v2"
-	"gopkg.in/square/go-jose.v2/jwt"
 )
 
 // IssuerFactory allows creating issuers from token sources. The signing key is typically tied to the factory.
+//
+//go:generate mockgen-wrapper
 type IssuerFactory interface {
 	// CreateIssuer creates an issuer for the given source. This must only be invoked once per source (ID).
 	CreateIssuer(source Source, options ...Option) (Issuer, error)
@@ -49,12 +51,17 @@ func (f *issuerFactory) CreateIssuer(source Source, options ...Option) (Issuer, 
 }
 
 func (f *issuerFactory) createClaims(sourceID string, roxClaims RoxClaims) *Claims {
+	var expiry *jwt.NumericDate
+	if roxClaims.ExpireAt != nil {
+		expiry = jwt.NewNumericDate(*roxClaims.ExpireAt)
+	}
 	return &Claims{
 		Claims: jwt.Claims{
 			IssuedAt: jwt.NewNumericDate(time.Now()),
 			Issuer:   f.id,
 			Audience: jwt.Audience{sourceID},
 			ID:       uuid.NewV4().String(),
+			Expiry:   expiry,
 		},
 		RoxClaims: roxClaims,
 	}

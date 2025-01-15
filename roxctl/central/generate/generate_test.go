@@ -13,8 +13,10 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/buildinfo"
 	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/images/defaults"
 	"github.com/stackrox/rox/pkg/renderer"
+	"github.com/stackrox/rox/pkg/telemetry/phonehome"
 	"github.com/stackrox/rox/pkg/version"
 	"github.com/stackrox/rox/pkg/version/testutils"
 	io2 "github.com/stackrox/rox/roxctl/common/io"
@@ -23,8 +25,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/chartutil"
+	"k8s.io/utils/pointer"
 )
 
+// #nosec G101 -- This is a false positive
 const (
 	// Generated test data file.
 	backupBundleWithDer = "testdata/stackrox_with_der.zip"
@@ -44,7 +48,7 @@ func TestRestoreKeysAndCerts(t *testing.T) {
 
 	flavorName := defaults.ImageFlavorNameDevelopmentBuild
 	if buildinfo.ReleaseBuild {
-		flavorName = defaults.ImageFlavorNameStackRoxIORelease
+		flavorName = defaults.ImageFlavorNameOpenSource
 	}
 	config := renderer.Config{
 		Version:     version.GetMainVersion(),
@@ -125,7 +129,7 @@ func TestTelemetryConfiguration(t *testing.T) {
 
 	flavorName := defaults.ImageFlavorNameDevelopmentBuild
 	if buildinfo.ReleaseBuild {
-		flavorName = defaults.ImageFlavorNameStackRoxIORelease
+		flavorName = defaults.ImageFlavorNameOpenSource
 	}
 	config := renderer.Config{
 		Version:     version.GetMainVersion(),
@@ -143,35 +147,38 @@ func TestTelemetryConfiguration(t *testing.T) {
 		err     error
 		key     interface{}
 	}
+	dirtyVersion := "1.2.3-dirty"
+	releaseVersion := "1.2.3"
+	var disabledInDebug any
+	if !buildinfo.ReleaseBuild || buildinfo.TestBuild {
+		disabledInDebug = phonehome.DisabledKey
+	}
+
 	testCases := []struct {
-		testDir   string
-		offline   bool
+		testName  string
+		version   string
 		telemetry bool
 		key       string
 		expected  result
 	}{
-		{testDir: "test1", offline: false, telemetry: false, key: "", expected: result{enabled: false}},
-		{testDir: "test2", offline: true, telemetry: false, key: "", expected: result{enabled: false}},
-		// TODO(ROX-13889): (when the key is hardcoded for on-prem telemetry)
-		// {testDir: "test3", offline: false, telemetry: true, key: "", expected: result{err: errox.InvalidArgs}},
-		{testDir: "test3", offline: false, telemetry: true, key: "", expected: result{enabled: false}},
-		{testDir: "test4", offline: false, telemetry: true, key: "test", expected: result{enabled: true, key: "test"}},
-		{testDir: "test5", offline: false, telemetry: false, key: "test", expected: result{enabled: false, key: "test"}},
-		{testDir: "test6", offline: true, telemetry: true, key: "test", expected: result{enabled: true, key: "test"}},
+		{testName: "test1", version: dirtyVersion, telemetry: true, key: "", expected: result{enabled: false, key: phonehome.DisabledKey}},
+		{testName: "test2", version: dirtyVersion, telemetry: false, key: "", expected: result{enabled: false, key: phonehome.DisabledKey}},
+		{testName: "test3", version: dirtyVersion, telemetry: true, key: "KEY", expected: result{enabled: true, key: "KEY"}},
+		{testName: "test4", version: dirtyVersion, telemetry: false, key: "KEY", expected: result{enabled: false, key: phonehome.DisabledKey}},
+
+		{testName: "test5", version: releaseVersion, telemetry: true, key: "", expected: result{enabled: buildinfo.ReleaseBuild && !buildinfo.TestBuild, key: disabledInDebug}},
+		{testName: "test6", version: releaseVersion, telemetry: false, key: "", expected: result{enabled: false, key: phonehome.DisabledKey}},
+		{testName: "test7", version: releaseVersion, telemetry: true, key: "KEY", expected: result{enabled: true, key: "KEY"}},
+		{testName: "test8", version: releaseVersion, telemetry: false, key: "KEY", expected: result{enabled: false, key: phonehome.DisabledKey}},
 	}
 
 	logio, _, _, _ := io2.TestIO()
 	logger := logger.NewLogger(logio, printer.DefaultColorPrinter())
 
 	for _, testCase := range testCases {
-		t.Run(testCase.testDir, func(t *testing.T) {
-			if testCase.telemetry {
-				t.Setenv(env.TelemetryStorageKey.EnvVar(), testCase.key)
-			} else {
-				t.Setenv(env.TelemetryStorageKey.EnvVar(), "")
-			}
-
-			config.K8sConfig.OfflineMode = testCase.offline
+		t.Run(testCase.testName, func(t *testing.T) {
+			t.Setenv(env.TelemetryStorageKey.EnvVar(), testCase.key)
+			testutils.SetMainVersion(t, testCase.version)
 			config.K8sConfig.Telemetry.Enabled = testCase.telemetry
 
 			bundleio, _, out, _ := io2.TestIO()
@@ -196,6 +203,104 @@ func TestTelemetryConfiguration(t *testing.T) {
 			key, err := values.PathValue("central.telemetry.storage.key")
 			assert.NoError(t, err)
 			assert.Equal(t, testCase.expected.key, key)
+		})
+	}
+}
+
+func TestMonitoringConfiguration(t *testing.T) {
+	// Keep the bundle in memory
+	t.Setenv("ROX_ROXCTL_IN_MAIN_IMAGE", "true")
+
+	testutils.SetExampleVersion(t)
+
+	flavorName := defaults.ImageFlavorNameDevelopmentBuild
+	if buildinfo.ReleaseBuild {
+		flavorName = defaults.ImageFlavorNameOpenSource
+	}
+	config := renderer.Config{
+		K8sConfig: &renderer.K8sConfig{
+			ImageFlavorName:  flavorName,
+			DeploymentFormat: v1.DeploymentFormat_HELM,
+		},
+	}
+
+	testCases := []struct {
+		testName      string
+		clusterType   storage.ClusterType
+		flagEnabled   *bool
+		expectErr     error
+		expectEnabled bool
+	}{
+		{
+			testName:      "OpenShift 3, --openshift-monitoring=true",
+			clusterType:   storage.ClusterType_OPENSHIFT_CLUSTER,
+			flagEnabled:   pointer.Bool(true),
+			expectErr:     errox.InvalidArgs,
+			expectEnabled: false,
+		},
+		{
+			testName:      "OpenShift 4, --openshift-monitoring=true",
+			clusterType:   storage.ClusterType_OPENSHIFT4_CLUSTER,
+			flagEnabled:   pointer.Bool(true),
+			expectErr:     nil,
+			expectEnabled: true,
+		},
+		{
+			testName:      "OpenShift 3, --openshift-monitoring=false",
+			clusterType:   storage.ClusterType_OPENSHIFT_CLUSTER,
+			flagEnabled:   pointer.Bool(false),
+			expectErr:     nil,
+			expectEnabled: false,
+		},
+		{
+			testName:      "OpenShift 4, --openshift-monitoring=false",
+			clusterType:   storage.ClusterType_OPENSHIFT4_CLUSTER,
+			flagEnabled:   pointer.Bool(false),
+			expectEnabled: false,
+		},
+		{
+			testName:      "OpenShift 3, --openshift-monitoring=auto",
+			clusterType:   storage.ClusterType_OPENSHIFT_CLUSTER,
+			flagEnabled:   nil,
+			expectErr:     nil,
+			expectEnabled: false,
+		},
+		{
+			testName:      "OpenShift 4, --openshift-monitoring=auto",
+			clusterType:   storage.ClusterType_OPENSHIFT4_CLUSTER,
+			flagEnabled:   nil,
+			expectErr:     nil,
+			expectEnabled: true,
+		},
+	}
+
+	logio, _, _, _ := io2.TestIO()
+	logger := logger.NewLogger(logio, printer.DefaultColorPrinter())
+
+	for _, testCase := range testCases {
+		t.Run(testCase.testName, func(t *testing.T) {
+			bundleio, _, out, _ := io2.TestIO()
+			config.ClusterType = testCase.clusterType
+			config.K8sConfig.Monitoring.OpenShiftMonitoring = testCase.flagEnabled
+			err := OutputZip(logger, bundleio, config)
+			require.ErrorIs(t, err, testCase.expectErr)
+			if err != nil {
+				return
+			}
+
+			r, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(len(out.Bytes())))
+			require.NoError(t, err)
+			file, err := r.Open("values-public.yaml")
+			require.NoError(t, err)
+			data, err := io.ReadAll(file)
+			require.NoError(t, err)
+
+			values, err := chartutil.ReadValues(data)
+			require.NoError(t, err)
+
+			enabled, err := values.PathValue("monitoring.openshift.enabled")
+			assert.NoError(t, err)
+			assert.Equal(t, testCase.expectEnabled, enabled)
 		})
 	}
 }

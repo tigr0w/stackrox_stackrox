@@ -4,12 +4,14 @@ import io.stackrox.proto.storage.VulnRequests
 import objects.Deployment
 import services.VulnRequestService
 
+import spock.lang.IgnoreIf
 import spock.lang.Tag
 import spock.lang.Unroll
 
+@Tag("PZ")
 class VulnMgmtWorkflowTest extends BaseSpecification {
 
-    static final private NGINX_1_12_IMAGE = "quay.io/rhacs-eng/qa-multi-arch:nginx-1.12"
+    static final private NGINX_1_12_IMAGE = TEST_IMAGE
 
     static final private Deployment CVE_DEPLOYMENT = new Deployment()
             .setName("vulnerable-deploy")
@@ -30,6 +32,7 @@ class VulnMgmtWorkflowTest extends BaseSpecification {
     @Unroll
     @Tag("BAT")
     @Tag("RUNTIME")
+    @IgnoreIf({ Env.ROX_VULN_MGMT_UNIFIED_CVE_DEFERRAL == "true" })
     def "Verify Vulnerability Requests can transition between states - #requestType - approve?(#approve)"() {
         when:
         "A user requests a vuln be deferred or marked as FP"

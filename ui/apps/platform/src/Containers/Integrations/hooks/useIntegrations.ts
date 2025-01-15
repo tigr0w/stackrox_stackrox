@@ -7,11 +7,12 @@ import { Integration, IntegrationSource, IntegrationType } from '../utils/integr
 
 const selectIntegrations = createStructuredSelector({
     apiTokens: selectors.getAPITokens,
-    clusterInitBundles: selectors.getClusterInitBundles,
+    machineAccessConfigs: selectors.getMachineAccessConfigs,
     notifiers: selectors.getNotifiers,
     imageIntegrations: selectors.getImageIntegrations,
     backups: selectors.getBackups,
     signatureIntegrations: selectors.getSignatureIntegrations,
+    cloudSources: selectors.getCloudSources,
 });
 
 export type UseIntegrations = {
@@ -24,11 +25,12 @@ export type UseIntegrationsResponse = Integration[];
 const useIntegrations = ({ source, type }: UseIntegrations): UseIntegrationsResponse => {
     const {
         apiTokens,
-        clusterInitBundles,
+        machineAccessConfigs,
         notifiers,
         backups,
         imageIntegrations,
         signatureIntegrations,
+        cloudSources,
     } = useSelector(selectIntegrations);
 
     function findIntegrations() {
@@ -41,8 +43,8 @@ const useIntegrations = ({ source, type }: UseIntegrations): UseIntegrationsResp
                 if (type === 'apitoken') {
                     return apiTokens;
                 }
-                if (type === 'clusterInitBundle') {
-                    return clusterInitBundles;
+                if (type === 'machineAccess') {
+                    return machineAccessConfigs;
                 }
                 return [];
             }
@@ -57,6 +59,17 @@ const useIntegrations = ({ source, type }: UseIntegrations): UseIntegrationsResp
             }
             case 'signatureIntegrations': {
                 return signatureIntegrations;
+            }
+            case 'cloudSources': {
+                if (type === 'paladinCloud') {
+                    return cloudSources.filter(
+                        (integration) => integration.type === 'TYPE_PALADIN_CLOUD'
+                    );
+                }
+                if (type === 'ocm') {
+                    return cloudSources.filter((integration) => integration.type === 'TYPE_OCM');
+                }
+                return cloudSources;
             }
             default: {
                 // eslint-disable-next-line @typescript-eslint/restrict-template-expressions

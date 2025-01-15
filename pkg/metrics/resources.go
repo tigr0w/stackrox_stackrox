@@ -31,4 +31,12 @@ const (
 	ComplianceOperatorScanSettingBinding
 	ComplianceOperatorRule
 	ComplianceOperatorScan
+	ComplianceOperatorInfo
+	ComplianceOperatorCheckResultV2
+	ComplianceOperatorRuleV2
+	ComplianceOperatorProfileV2
+	ComplianceOperatorScanV2
+	ComplianceOperatorSuiteV2
+	ComplianceOperatorRemediationV2
+	NodeIndex
 )

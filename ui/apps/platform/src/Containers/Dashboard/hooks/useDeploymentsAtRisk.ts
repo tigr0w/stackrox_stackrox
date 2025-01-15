@@ -1,13 +1,13 @@
 import { useCallback } from 'react';
 import { fetchDeploymentsWithProcessInfo } from 'services/DeploymentsService';
 import { SearchFilter } from 'types/search';
-import useRestQuery from './useRestQuery';
+import useRestQuery from 'hooks/useRestQuery';
 
 export default function useDeploymentsAtRisk(searchFilter: SearchFilter, numberOfResults = 6) {
     const restQuery = useCallback(() => {
         const { request, cancel } = fetchDeploymentsWithProcessInfo(
             searchFilter,
-            { field: 'Deployment Risk Priority', reversed: 'false' },
+            { field: 'Deployment Risk Priority', reversed: false },
             0,
             numberOfResults
         );

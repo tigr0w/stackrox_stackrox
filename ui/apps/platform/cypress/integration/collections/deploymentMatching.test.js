@@ -1,5 +1,4 @@
 import withAuth from '../../helpers/basicAuth';
-import { hasFeatureFlag } from '../../helpers/features';
 import {
     assertDeploymentsAreMatched,
     assertDeploymentsAreMatchedExactly,
@@ -15,18 +14,10 @@ describe('Collection deployment matching', () => {
     const sampleCollectionName = 'Stackrox sample deployments';
     const withEmbeddedCollectionName = 'Contains embedded collections';
 
-    beforeEach(function beforeHook() {
-        if (!hasFeatureFlag('ROX_POSTGRES_DATASTORE')) {
-            this.skip();
-        }
-    });
-
     // Clean up when the test suite exits
     after(() => {
-        if (hasFeatureFlag('ROX_POSTGRES_DATASTORE')) {
-            tryDeleteCollection(withEmbeddedCollectionName);
-            tryDeleteCollection(sampleCollectionName);
-        }
+        tryDeleteCollection(withEmbeddedCollectionName);
+        tryDeleteCollection(sampleCollectionName);
     });
 
     it('should preview deployments matching specified rules', () => {
@@ -36,11 +27,11 @@ describe('Collection deployment matching', () => {
 
         visitCollections();
 
-        cy.get('a:contains("Create collection")').click();
+        cy.get('a:contains("Create collection")').first().click();
         cy.get('input[name="name"]').type(sampleCollectionName);
         cy.get('input[name="description"]').type('Matches some stackrox deployments');
 
-        cy.get('button:contains("All namespaces")').click();
+        cy.get('button:contains("No namespaces specified")').click();
         cy.get('button:contains("Namespaces with names matching")').click();
         cy.get('input[aria-label="Select value 1 of 1 for the namespace name"]').type('stackrox');
 
@@ -48,7 +39,7 @@ describe('Collection deployment matching', () => {
         assertDeploymentsAreMatched(['central', 'central-db', 'collector', 'scanner', 'sensor']);
 
         // Restrict collection to two specific deployments
-        cy.get('button:contains("All deployments")').click();
+        cy.get('button:contains("No deployments specified")').click();
         cy.get('button:contains("Deployments with labels matching")').click();
         cy.get('input[aria-label="Select label value 1 of 1 for deployment rule 1 of 1"]').type(
             'app=collector'
@@ -77,7 +68,7 @@ describe('Collection deployment matching', () => {
         cy.get('input[name="name"]').type(withEmbeddedCollectionName);
         cy.get('input[name="description"]').type('Embeds another collection');
 
-        cy.get('button:contains("All namespaces")').click();
+        cy.get('button:contains("No namespaces specified")').click();
         cy.get('button:contains("Namespaces with names matching")').click();
         cy.get('input[aria-label="Select value 1 of 1 for the namespace name"]').type(
             'kube-system'
@@ -100,7 +91,7 @@ describe('Collection deployment matching', () => {
         assertDeploymentsAreMatched(['kube-dns']);
 
         // Restrict collection to two specific deployments
-        cy.get('button:contains("All deployments")').click();
+        cy.get('button:contains("No deployments specified")').click();
         cy.get('button:contains("Deployments with labels matching")').click();
         cy.get('input[aria-label="Select label value 1 of 1 for deployment rule 1 of 1"]').type(
             'k8s-app=calico-node-autoscaler'

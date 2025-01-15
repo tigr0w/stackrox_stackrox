@@ -9,11 +9,12 @@ import (
 	"math/rand"
 	"testing"
 
-	timestamp "github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/central/blob/datastore"
 	"github.com/stackrox/rox/central/blob/datastore/store"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stretchr/testify/suite"
 )
@@ -34,7 +35,7 @@ func (s *snapshotTestSuite) SetupSuite() {
 	s.ctx = sac.WithAllAccess(context.Background())
 	s.testDB = pgtest.ForT(s.T())
 	s.store = store.New(s.testDB.DB)
-	s.datastore = datastore.NewDatastore(s.store)
+	s.datastore = datastore.NewDatastore(s.store, nil)
 }
 
 func (s *snapshotTestSuite) SetupTest() {
@@ -52,8 +53,8 @@ func (s *snapshotTestSuite) TestSnapshot() {
 	size := 1024*1024 + 16
 	insertBlob := &storage.Blob{
 		Name:         "test",
-		LastUpdated:  timestamp.TimestampNow(),
-		ModifiedTime: timestamp.TimestampNow(),
+		LastUpdated:  protocompat.TimestampNow(),
+		ModifiedTime: protocompat.TimestampNow(),
 		Length:       int64(size),
 	}
 
@@ -74,6 +75,6 @@ func (s *snapshotTestSuite) TestSnapshot() {
 	bytes, err := io.ReadAll(snap)
 	s.Require().NoError(err)
 	s.Equal(randomData, bytes)
-	s.Equal(insertBlob, snap.GetBlob())
+	protoassert.Equal(s.T(), insertBlob, snap.GetBlob())
 	s.FileExists(snap.Name())
 }

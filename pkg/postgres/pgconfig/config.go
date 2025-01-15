@@ -8,16 +8,16 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/config"
+	"github.com/stackrox/rox/pkg/migrations"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/size"
 	"github.com/stackrox/rox/pkg/stringutils"
+	"github.com/stackrox/rox/pkg/sync"
 )
 
 const (
 	// DBPasswordFile is the database password file
 	DBPasswordFile = "/run/secrets/stackrox.io/db-password/password"
-
-	activeSuffix = "_active"
 
 	// capacity - Minimum recommended Postgres capacity
 	capacity = 100 * size.GB
@@ -25,8 +25,22 @@ const (
 	connectTimeout = 15 * time.Second
 )
 
+var (
+	pgConfigMap  map[string]string
+	pgConfig     *postgres.Config
+	pgConfigErr  error
+	pgConfigOnce sync.Once
+)
+
 // GetPostgresConfig - gets the configuration used to connect to Postgres
 func GetPostgresConfig() (map[string]string, *postgres.Config, error) {
+	pgConfigOnce.Do(func() {
+		pgConfigMap, pgConfig, pgConfigErr = getPostgresConfig()
+	})
+	return pgConfigMap, pgConfig, pgConfigErr
+}
+
+func getPostgresConfig() (map[string]string, *postgres.Config, error) {
 	centralConfig := config.GetConfig()
 	password, err := os.ReadFile(DBPasswordFile)
 	if err != nil {
@@ -70,10 +84,15 @@ func ParseSource(source string) (map[string]string, error) {
 
 // GetActiveDB - returns the name of the active database
 func GetActiveDB() string {
-	return fmt.Sprintf("%s%s", config.GetConfig().CentralDB.DatabaseName, activeSuffix)
+	return migrations.CurrentDatabase
 }
 
 // GetPostgresCapacity - returns the capacity of the Postgres instance
 func GetPostgresCapacity() int64 {
 	return capacity
+}
+
+// IsExternalDatabase - retrieves whether Postgres is external
+func IsExternalDatabase() bool {
+	return config.GetConfig().CentralDB.External
 }

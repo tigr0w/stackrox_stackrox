@@ -3,16 +3,17 @@ package common
 import (
 	"testing"
 
-	timestamp "github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/cve"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	pgSearch "github.com/stackrox/rox/pkg/search/postgres"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSplitAndMergeImage(t *testing.T) {
-	ts := timestamp.TimestampNow()
+	ts := protocompat.TimestampNow()
 	image := &storage.Image{
 		Id: "sha",
 		Name: &storage.ImageName{
@@ -169,6 +170,7 @@ func TestSplitAndMergeImage(t *testing.T) {
 							CveBaseInfo: &storage.CVEInfo{
 								Cve: "cve1",
 							},
+							NvdScoreVersion: storage.CvssScoreVersion_UNKNOWN_VERSION,
 						},
 						Edge: &storage.ComponentCVEEdge{
 							Id:               pgSearch.IDFromPks([]string{scancomponent.ComponentID("comp1", "ver2", ""), cve.ID("cve1", "")}),
@@ -182,6 +184,7 @@ func TestSplitAndMergeImage(t *testing.T) {
 							CveBaseInfo: &storage.CVEInfo{
 								Cve: "cve2",
 							},
+							NvdScoreVersion: storage.CvssScoreVersion_UNKNOWN_VERSION,
 						},
 						Edge: &storage.ComponentCVEEdge{
 							Id:               pgSearch.IDFromPks([]string{scancomponent.ComponentID("comp1", "ver2", ""), cve.ID("cve2", "")}),
@@ -216,6 +219,7 @@ func TestSplitAndMergeImage(t *testing.T) {
 							CveBaseInfo: &storage.CVEInfo{
 								Cve: "cve1",
 							},
+							NvdScoreVersion: storage.CvssScoreVersion_UNKNOWN_VERSION,
 						},
 						Edge: &storage.ComponentCVEEdge{
 							Id:               pgSearch.IDFromPks([]string{scancomponent.ComponentID("comp2", "ver1", ""), cve.ID("cve1", "")}),
@@ -233,6 +237,7 @@ func TestSplitAndMergeImage(t *testing.T) {
 							CveBaseInfo: &storage.CVEInfo{
 								Cve: "cve2",
 							},
+							NvdScoreVersion: storage.CvssScoreVersion_UNKNOWN_VERSION,
 						},
 						Edge: &storage.ComponentCVEEdge{
 							Id:               pgSearch.IDFromPks([]string{scancomponent.ComponentID("comp2", "ver1", ""), cve.ID("cve2", "")}),
@@ -246,7 +251,22 @@ func TestSplitAndMergeImage(t *testing.T) {
 	}
 
 	splitActual := Split(image, true)
-	assert.Equal(t, splitExpected, splitActual)
+	protoassert.MapEqual(t, splitExpected.ImageCVEEdges, splitActual.ImageCVEEdges)
+	protoassert.Equal(t, splitExpected.Image, splitActual.Image)
+
+	assert.Len(t, splitActual.Children, len(splitExpected.Children))
+	for i, expected := range splitExpected.Children {
+		actual := splitActual.Children[i]
+		protoassert.Equal(t, expected.Component, actual.Component)
+		protoassert.Equal(t, expected.Edge, actual.Edge)
+
+		assert.Len(t, actual.Children, len(expected.Children))
+		for i, e := range expected.Children {
+			a := actual.Children[i]
+			protoassert.Equal(t, e.Edge, a.Edge)
+			protoassert.Equal(t, e.CVE, a.CVE)
+		}
+	}
 
 	// Need to add first occurrence edges as otherwise they will be filtered out
 	// These values are added on insertion for the DB which is why we will populate them artificially here
@@ -255,5 +275,5 @@ func TestSplitAndMergeImage(t *testing.T) {
 	}
 
 	imageActual := Merge(splitActual)
-	assert.Equal(t, image, imageActual)
+	protoassert.Equal(t, image, imageActual)
 }

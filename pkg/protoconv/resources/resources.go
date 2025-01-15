@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"reflect"
 
-	ptypes "github.com/gogo/protobuf/types"
-	openshift_appsv1 "github.com/openshift/api/apps/v1"
+	openshiftAppsV1 "github.com/openshift/api/apps/v1"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
 	imageUtils "github.com/stackrox/rox/pkg/images/utils"
 	"github.com/stackrox/rox/pkg/kubernetes"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/protoconv/k8s"
 	"github.com/stackrox/rox/pkg/protoconv/resources/volumes"
 	"github.com/stackrox/rox/pkg/stringutils"
@@ -100,7 +100,7 @@ func extractDeploymentConfig(encodedDeploymentConfig string) (metav1.Object, str
 }
 
 func newWrap(meta metav1.Object, kind, clusterID, registryOverride string) *DeploymentWrap {
-	createdTime, err := ptypes.TimestampProto(meta.GetCreationTimestamp().Time)
+	createdTime, err := protocompat.ConvertTimeToTimestampOrError(meta.GetCreationTimestamp().Time)
 	if err != nil {
 		log.Error(err)
 	}
@@ -227,9 +227,10 @@ func (w *DeploymentWrap) populateFields(obj interface{}) {
 	w.populateReplicas(spec, obj)
 
 	var podSpec v1.PodSpec
+	var podMeta metav1.ObjectMeta
 
 	switch o := obj.(type) {
-	case *openshift_appsv1.DeploymentConfig:
+	case *openshiftAppsV1.DeploymentConfig:
 		if o.Spec.Template == nil {
 			log.Errorf("Spec obj %+v does not have a Template field or is not a pointer pod spec", spec)
 			return
@@ -253,9 +254,11 @@ func (w *DeploymentWrap) populateFields(obj interface{}) {
 			return
 		}
 		podSpec = podTemplate.Spec
+		podMeta = podTemplate.ObjectMeta
 	}
 
 	w.PopulateDeploymentFromPodSpec(podSpec)
+	w.PopulateDeploymentFromPodMeta(podMeta)
 }
 
 // PopulateDeploymentFromPodSpec fills in the initialized wrap with data from the passed pod spec
@@ -270,6 +273,11 @@ func (w *DeploymentWrap) PopulateDeploymentFromPodSpec(podSpec v1.PodSpec) {
 	w.populateImagePullSecrets(podSpec)
 
 	w.populateContainers(podSpec)
+}
+
+// PopulateDeploymentFromPodMeta fills in the initialized wrap with data from the passed pod meta
+func (w *DeploymentWrap) PopulateDeploymentFromPodMeta(podMeta metav1.ObjectMeta) {
+	w.PodLabels = podMeta.GetLabels()
 }
 
 func (w *DeploymentWrap) populateTolerations(podSpec v1.PodSpec) {

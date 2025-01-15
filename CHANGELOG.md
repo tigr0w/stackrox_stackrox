@@ -1,13 +1,389 @@
 
 # Changelog
+
 Entries in this file should be limited to:
--  Any changes that introduce a deprecation in functionality, OR
--  Obscure side-effects that are not obviously apparent based on the JIRA associated with the changes.
+
+- Any changes that introduce a deprecation in functionality, OR
+- Obscure side-effects that are not obviously apparent based on the JIRA associated with the changes.
 Please avoid adding duplicate information across this changelog and JIRA/doc input pages.
 
 ## [NEXT RELEASE]
 
 ### Added Features
+
+- ROX-26849: Introduce report caching for RHCOS Node Indexing
+- ROX-25638: Introduce configurable log rotation. `ROX_LOGGING_MAX_ROTATION_FILES` and `ROX_LOGGING_MAX_SIZE_MB` variables allow for configuring the number and the size of a central log rotation file.
+- ROX-14332: Automatic service certificate renewal for Secured Clusters installed using Helm or operator.
+- Scanner V4 adds supports for openSUSE Leap 15.5 and 15.6
+- ROX-27596: ROX_EXTERNAL_IPS feature flag enabled by default. Note: Collector will still need to be configured for external IPs for this to have an effect.
+
+### Removed Features
+
+- Scanner V4 drops support for openSUSE Leap 15.0 and 15.1
+
+### Deprecated Features
+
+### Technical Changes
+
+- Scanner V4 now uses [Red Hat's VEX files](https://security.access.redhat.com/data/csaf/v2/vex/) instead of the [CVE map](https://security.access.redhat.com/data/metrics/cvemap.xml) for vulnerability data related to non-RPM content inside of official Red Hat images.
+
+## [4.6.0]
+
+### Added Features
+
+- ROX-25066: Add new external backup integration for non-AWS S3 compatible providers.
+- ROX-25451: Secured Cluster Auto-Upgrader is now enabled for all kind of clusters.
+- ROX-26124: Added a `--with-database-only` only to diagnostic bundle.
+  - `roxctl central debug download-diagnostics --with-database-only`
+- ROX-18899: Added Microsoft Sentinel notifier to send alerts and audit logs to Azure Log Analytics Workspace.
+
+### Removed Features
+
+- The environment variable `ROX_DEPLOYMENT_ENVVAR_SEARCH` has been removed.
+- The environment variable `ROX_DEPLOYMENT_SECRET_SEARCH` has been removed.
+- The environment variable `ROX_DEPLOYMENT_VOLUME_SEARCH` has been removed.
+- The environment variable `ROX_SECRET_FILE_SEARCH` has been removed.
+- The Central PVC stackrox-db will be removed. Existing volumes will be released. Flags for configuring Central attached persistent storage have been removed from roxctl:
+  - `roxctl central generate k8s pvc` and `roxctl central generate openshift pvc` no longer have the flags `--name`, `--size`, and `--storage-class`.
+  - `roxctl central generate k8s hostpath` and `roxctl central generate openshift hostpath` no longer have the flags `--hostpath`, `--node-selector-key`, and `--node-selector-value`.
+
+### Deprecated Features
+- ROX-25677: The format for specifying durations in JSON requests to
+  `v1/nodecves/suppress`, `v1/clustercves/suppress` and `v1/imagecves/suppress`
+  will be restricted to a [proto JSON format](https://protobuf.dev/programming-guides/proto3/#json:~:text=are%20also%20accepted.-,Duration,-string).
+  Only a numeric value representing seconds (with optional fractional seconds for nanosecond precision)
+  followed by the s suffix will be accepted (e.g., "0.300s", "-5400s", or "9900s").
+  This replaces the current format, which allows a string with a signed sequence of decimal numbers,
+  each with an optional fraction and a unit suffix (e.g., "300ms", "-1.5h", or "2h45m").
+  The currently valid time units "ns", "us" (or "µs"), "ms", "m", and "h" will no longer be supported.
+- ROX-24169: API token authentication has been deprecated by Red Hat OpenShift Cluster Manager. The corresponding cloud source integration now uses service accounts for authentication.
+- ROX-26669: StackRox Scanner is now deprecated. Users should use Scanner V4, instead, for all image scanning needs. StackRox Scanner is still required for full Node and Orchestrator scanning, though.
+- ROX-26670: Google Container Registry integration is now deprecated. Users should use Artifact Registry as a registry replacement and Scanner V4 as a scanner replacement.
+
+### Technical Changes
+- ROX-24897: Sensor will now perform TLS checks lazily during delegated scanning instead of when secrets are first discovered, this should reduce Sensor startup time.
+- ROX-23343: The auto-sensing within the Helm charts for detecting OpenShift clusters has been changed to depend on the `project.openshift.io/v1` APIVersion.
+- ROX-22701: Prevent deleting default policies through the API
+- ROX-26422: Central will now include the `id` field in alert notifications and API responses.
+- ROX-20723: Remove monorepo substructure under `ui/` directory and switch from yarn v1 to npm for package management. Use `npm run` in place of `yarn` commands.
+- ROX-26306: Increase minimum Node.js version from `">=18.0.0"` to `"^18.18.0 || >=20.0.0"` for open source community to run `make lint` command in the ui directory.
+    - Node.js 18.18.0 was released on 2023-09-18
+    - Node.js 18 moves from Maintenance to End-of-Life status on 2025-04-30
+    - Node.js 20 moves from Active to Maintenance status on 2024-10-22
+- ROX-20578: Sensor will now store pull secrets by secret name and registry host (instead of only registry host). This will reduce Delegated Scanning authentication failures when multiple secrets exist for the same registry within a namespace and more closely aligns with k8s secret handling.
+  - Setting `ROX_SENSOR_PULL_SECRETS_BY_NAME` to `false` on Sensor will disable this feature and cause secrets to be stored by only registry host.
+- ROX-25981: Scanner V4 now fetches vulnerability data from [Red Hat's VEX files](https://security.access.redhat.com/data/csaf/v2/vex/) instead of [Red Hat's OVAL feed](https://security.access.redhat.com/data/oval/v2/) for RPMs installed in RHEL-based image containers.
+  - Fixed vulnerabilities affecting RHEL-based images are still identified by the respective RHSA, RHBA, or RHEA, by default. They may be identified by CVE, instead, by setting the feature flag `ROX_SCANNER_V4_RED_HAT_CVES` to `true` in Scanner V4 Matcher.
+    - This will also apply to vulnerabilities obtained from the [CVE map](https://security.access.redhat.com/data/metrics/cvemap.xml) (used for container-first scanning).
+    - Setting the feature flag will disrupt policies created around RHSAs, as RHSAs will no longer be tracked.
+  - Scanner V4 now only considers vulnerabilities affecting Red Hat products dated back to 2014.
+    - Previously when reading Red Hat's OVAL data, the vulnerabilities dated back to pre-2000, but ClairCore only reads back to 2014.
+  - Scanner V4 DB requires less space for vulnerability data, and its initialization time has improved from about 1 hour on SSD to about 10 minutes.
+- ROX-26372: `ROX_POSTGRES_VM_STATEMENT_TIMEOUT` env var defaulting to 3 minutes to allow customers to extend the timeout for queries backing VM pages only
+- ROX-26428: Fixed a bug when using delegated scanning where newer image metadata and layers were pulled incorrectly for an older image referenced by tag when the image registry contents have changed since deployment.
+  - Now the metadata and layers pulled will be based on the digest of the image provided by the container runtime (when available) instead of just the tag.
+- ROX-26748: Replaced 'unsafe' characters in the CSV report file name.
+- The endpoint `/v2/compliance/scan/configurations/reports/run` method has changed from `PUT` to `POST`.
+- ROX-23956, ROX-17355: Scanner V4 Indexer will now re-index manifests/images for one of two reasons: (1) upon Indexer update which knowingly affects manifests/images or (2) after some random amount of time between 7 and 30 days after indexing.
+  - This means Scanner V4 Indexer will now pull images from the registry more than just once.
+  - This will allow image scans to reflect the latest features (for example, we support a new language, we will re-index an image to see if artifacts of the new language exist).
+  - This will also clean up manifests/Index Reports from Scanner V4 DB which are no longer relevant in the environment or may have previously been indexed incorrectly due to a bug or missing data.
+  - Any manifests indexed prior to this change will be deleted upon update to this version to ensure any incorrect Index Reports are amended.
+  - The interval in which manifests are randomly deleted may be modified via `ROX_SCANNER_V4_MANIFEST_DELETE_INTERVAL_START` (default: 7 days) and `ROX_SCANNER_V4_MANIFEST_DELETE_DURATION` (default: 23 days) in Scanner V4 Indexer.
+  - Scanner V4 Indexer periodically checks for expired manifests at the interval specified by `ROX_SCANNER_V4_MANIFEST_GC_INTERVAL` (default: 4 hours).
+  - Each GC process only deletes a subset of expired manifests specified by `ROX_SCANNER_V4_MANIFEST_GC_THROTTLE` (default: 100) in Scanner V4 Indexer.
+  - Scanner V4 Indexer will also run a periodic "full" GC process at the interval specified by `ROX_SCANNER_V4_FULL_MANIFEST_GC_INTERVAL` (default: 24 hours).
+  - Re-indexing may be disabled by setting `ROX_SCANNER_V4_REINDEX` to `false` in the Scanner V4 Indexer.
+- Alpine vulnerabilities will now have a link to https://security.alpinelinux.org instead of https://www.cve.org.
+
+## [4.5.0]
+
+
+
+### Added Features
+
+- ROX-18689: ACS will qualify the registry (and path) of images from the container runtime when env var `ROX_UNQUALIFIED_SEARCH_REGISTRIES` is set to `true` on both Central and Sensor.
+  - This enables support for CRI-O's unqualified search registries and short name aliases ([more info](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)).
+- ROX-23852: `roxctl image scan` now has the option to filter by vulnerability severities using the `--severity` flag.
+- ROX-22376: Add a new notifier integration to enable notification via email for ACS Cloud Service managed centrals
+- ROX-24411: `roxctl image scan --output=csv` and `roxctl image scan --output=table` now include the fixed version by default.
+- ROX-24173: A new export API `/v1/export/vuln-mgmt/workloads` for workload vulnerabilities has been added. It provides a performant way of exporting both deployments and images in a single query which will hold all relevant data for vulnerability management.
+- ROX-21768: Scanner V4 may now be configured to return partial Node.js results via `ROX_SCANNER_V4_PARTIAL_NODE_JS_SUPPORT` (default is `false`).
+  - Scanner v2 (aka StackRox Scanner) always returned partial results for programming languages such that only packages with known vulnerabilities were returned. This flag allows users to enable this functionality in Scanner V4 for Node.js, only.
+- Scanner V4 is out of Tech Preview and is now Generally Available.
+  - StackRox Scanner (Scanner v2) continues to be the default scanner until a future release, but it is recommended to use Scanner V4 for more accurate image scan results.
+
+### Removed Features
+
+- Dropped support for older Helm versions: For rendering the Helm charts stackrox-central-services and
+  stackrox-secured-cluster-services a Helm version >= 3.9.0 is now required.
+- The `ROX_SCANNER_V4_NODE_JS_SUPPORT` environment variable is removed.
+  - This flag originally allowed users to configure if Scanner V4 should support Node.js.
+  - This is replaced with `ROX_SCANNER_V4_PARTIAL_NODE_JS_SUPPORT`.
+- ROX-23155: EBPF collection has been removed. If EBPF is configured, it
+  will be automatically converted to CORE_BPF. forceCollection no longer has an
+  effect.
+- The `ROX_CLOUD_CREDENTIALS` feature flag has been removed. Its effect is now enabled by default.
+
+### Deprecated Features
+
+- ROX-23155: Slim/Full Collector images have been deprecated and will be removed in a
+  future release. The two image flavors are now functionally identical (neither contain any kernel drivers.)
+- ROX-23155: Kernel support packages and driver download functionality have been deprecated and will be removed in ACS 4.7 or later.
+- The field `error` returned for failed API calls has been deprecated, and it will be removed in a future release. Instead of using the `error` field, use the `message` field. The `message` field contains the same information as the `error` field.
+- The `/v1/summary/counts` API has been deprecated in 4.5 and will be removed in the future.
+- 'Dashboard' view under 'Vulnerability Management' is deprecated and will be removed in a future release. Use 'Workload CVEs', 'Exception Management', 'Platform CVEs', and 'Node CVEs' views instead.
+- ROX-25067: The Amazon S3 external backup integration interoperability with Google Cloud Storage has been deprecated. Backups to Google Cloud Storage should be done by using the dedicated Google Cloud Storage external backup integration.
+- The fields `grpcCode`, `httpCode`, and `httpStatus` in returned error for gRPC stream APIs will be removed in the next release. A new field `code` will be added, which should be used instead of `grpcCode`. This change will unify returned API calls for streams and unary requests and it will simplify error handling.
+  Here is an example of the current error payload:
+  ```
+  {
+     "error": {
+       "grpcCode": 16,
+       "httpCode": 401,
+       "message": "credentials not found",
+       "httpStatus": "Unauthorized",
+       "details": []
+     }
+  }
+  ```
+  That example error will be returned in the following format with the next release:
+  ```
+  {
+     "error": {
+       "code": 16,
+       "message": "credentials not found",
+       "details": []
+     }
+  }
+  ```
+
+### Technical Changes
+
+- ROX-18969: Added a label selector for the caching configuration of secrets and configmaps to the operator.
+  - Reduces memory consumption of the operator significantly, especially on large clusters. (28% on a fresh OCP cluster)
+  - Increases number of requests sent to the API server to get secrets that are not managed by the operator and don't match the cache label selector.
+  - Adds a label `app.stackrox.io/managed-by: operator` to all helm chart resources and secrets created by the operator
+- ROX-22044: Scanner DB is now based on PostgreSQL 15 instead of 12.
+  - No migration should be necessary, as the database is not persisted.
+- ROX-23953: Nexus and Red Hat registry integrations will now attempt to pull manifest digests by default (via a `HEAD` request to `/v2/<name>/manifests/<reference>`). This can be disabled by setting env `ROX_ATTEMPT_MANIFEST_DIGEST` to `false`.
+  - This fixes one scenario that resulted in an `unsupported digest algorithm` error when using Scanner V4.
+- ROX-20223: Added a new default policy category called "Zero Trust", and the following default policies have been tagged with the category: "Deployments should have at least one ingress Network Policy" and "Unauthorized Network Flow"
+- ROX-20224: Added a new default policy category called "Supply Chain Security", and the following default policies have been tagged with the category: "Images with no scans", "30-day Scan Age", "90-day Image Age", "Required Annotation: Email",
+  "Required Annotation: Owner/Team", "Required Label: Owner/Team" and "Latest tag"
+- ROX-21207: All usage of RocksDB has been removed.
+  - Support to directly upgrade from any ACS version 3.74.x or earlier to version 4.5 has been deprecated. ACS version 3.74.x or earlier MUST be upgraded to version 4.4.x before proceeding to version 4.5 or later.
+- ROX-14990: When generating manifests for OpenShift, roxctl now defaults to OpenShift 4.x instead of OpenShift 3.x.
+- ROX-17572: Image scans initiated by image watch reprocessing may now be delegated per the delegated scanning config. This can be disabled by setting Central env `ROX_DELEGATE_WATCHED_IMAGE_REPROCESSING` to `false`.
+- ROX-24355: Scanner V4 Matcher is capable of performing concurrent vulnerability updates with iterators, bringing down the memory consumption for vulnerability updates from 4GB to 500MB.
+- ROX-23714: Populating initial registry integration repo list (`/v2/_catalog`) will now be done lazily.
+  - This should reduce Central startup time in environments with many autogenerated integrations.
+- Scanner V4 may now be accessed anonymously for debugging purposes by enabling `ROX_SCANNER_V4_ALLOW_ANONYMOUS_AUTH`.
+  - This was already enabled for development builds of StackRox, but now it may be configured for release builds, too.
+  - This defaults to `true` for development builds, and `false` for release builds.
+- Deployment bundles created with roxctl do not contain PodSecurityPolicies (PSPs) anymore by default. When deploying to pre-1.25 Kubernetes clusters with PSPs enabled the --enable-pod-security-policies flag needs to be specified when invoking roxctl for generating deployment bundles.
+- ROX-24725: Enhances Sensor's image scan event handling when `ROX_UNQUALIFIED_SEARCH_REGISTRIES` is `true` so only one simultaneous scan request is allowed per unique image.
+  - Also increases the chances of scan cache hits when multiple names for the same image have been observed.
+  - This enhancement is enabled by default when `ROX_UNQUALIFIED_SEARCH_REGISTRIES` is `true` on Sensor, it can be disabled by setting `ROX_SENSOR_SINGLE_SCAN` to `false` on Sensor.
+- ROX-21651, ROX-22364, ROX-22365:  Further enhancements to the ACS and Compliance Operator integration are now available under the heading "Compliance (2.0)". Updates include improved views by profiles, limited control information and on demand reporting.  As part of the enhancements the APIs were updated and the count APIs were removed.  This feature remains in Tech Preview.
+- ROX-21288: The default timeout setting for ACS' admission controller webhooks has been reduced from 20 seconds to 10 seconds, which will result in an effective timeout within the ValidatingWebhookConfiguration of 12 seconds. This change has been motivated by the fact that OpenShift unconditionally caps webhook timeouts at 13 seconds. On non-OpenShift Kubernetes longer webhook timeouts are supported. Users currently depending on longer timeouts, for example because of enabled inline image scanning within webhooks, might need to specify a longer timeout explicitly, which can be done in the `SecuredCluster` CR (`admissionControl.timeoutSeconds`), in Helm (`admissionControl.dynamic.timeout`) or within a sensor deployment bundle (`ValidatingWebhookConfiguration` manifest within the file `admission-controller.yaml`).
+- ROX-20621, ROX-17677, ROX-17678: New improved user interface for managing workload, node and platform vulnerabilities are now available under 'Vulnerability Management'.
+- ROX-17385: The 'Risk Acceptance' workflow is replaced by 'Exception Management'.
+    - Pre-existing deferrals and false positive requests will be migrated to 'Exception Management'.
+    - Pre-existing globally snoozed Image CVEs will be migrated to create equivalent approved deferrals under 'Exception Management'.
+    - `/v1/cve/requests` APIs (deprecated in 4.3.0) for managing vulnerability exceptions are now replaced with new `/v2/vulnerability-exceptions/` APIs.
+- ROX-22251: The ability to snooze Node and Platform CVEs is no longer enabled by default and can be enabled by setting `ROX_VULN_MGMT_LEGACY_SNOOZE` to `true` on Central.
+- ROX-24471: Scanner V4 Matcher memory requirements were updates to align with the current consumption (see ROX-24355).
+
+## [4.4.0]
+
+
+### Added Features
+- Customer-provided PostgreSQL databases are now GA
+- ROX-21235: `/api/extensions/certs/backup` added to provide external database consumers a means to back up certs. `--certs-only` flag added to `roxctl central backup` to exercise that endpoint.
+- The "Kubernetes Resource Name" policy criteria now supports regex values. Note: the value must be prefixed with "r/" to activate regex matching.
+- ROX-22238: `roxctl deployment check` results now contain additional information about the Permission Level and applicable Network Policies for a deployment, if `--cluster` and `--namespace` are provided together with `--verbose`.
+- Export APIs have been added for deployments (`/v1/export/deployments`), nodes (`/v1/export/nodes`), pods
+  (`/v1/export/pods`), and images (`/v1/export/images`) as a tech preview. They are much more performant for a full
+  export than their REST counterparts.
+- ROX-21950: `roxctl scanner download-db` has been added to help download version specific offline vulnerability bundles introduced with `Scanner V4`.
+- The new vulnerability scanner named "Scanner V4" has been integrated. At the moment it needs to run side-by-side with the current default scanner named "StackRox Scanner". Installation instructions can be found in the official RHACS documentation.
+- ROX-19932: ACS can pull information about available clusters to secure from
+  Red Hat OpenShift Cluster Manager and Paladin Cloud.
+- ROX-13367: ACS now supports short-lived token integrations for GCP via
+  workload identity federation and AWS via the Secure Token Service.
+- ROX-17382: An enhanced version of the ACS and Compliance Operator integration is now available under the heading "Compliance (2.0)". This feature is in Tech Preview.
+- ROX-20100: `Machine access configurations` have been added to provide short-lived access tokens for Central.
+- A new image scanner based on [ClairCore](https://github.com/quay/claircore), Scanner V4, is now available.
+  - It is disabled by default, but it is recommended for more accurate image scan results.
+- ROX-22505: It is now possible to set up authentication provider claim mappings via UI.
+- API token expiration date can be configured. If expiration date is not specified, API token will expire in 1 year.
+
+### Removed Features
+- ROX-18840: Sunburst widgets in the Compliance section have been removed (deprecation announced in version 4.2 release notes)
+- The Docker CIS benchmark has been removed as announced in the 4.2 release notes.
+- ROX-12982: All custom `stackrox-*` SecurityContextConstraints (SCC) have been replaced with default SCCs (deprecation announced in 4.1 release notes).
+- ROX-9156: In Helm and Operator installation modes, references to image pull secrets with certain names are no longer
+  unconditionally added to service accounts. This is done to avoid causing log spam for kubelet due to non-existing secrets.
+
+  References will still be added for backwards compatibility if during installation or upgrade the secrets in question
+  are found to actually exist. The names of these special secrets are:
+  - for central components: `stackrox`, `stackrox-scanner`,
+  - for secured cluster components: `stackrox`, `stackrox-scanner`,  `secured-cluster-services-main`,
+    `secured-cluster-services-collector`, `collector-stackrox`.
+
+  We recommend to explicitly list image pull secrets that are needed, if any:
+  - for Helm-based installs: via the `imagePullSecrets.useExisting` Helm value
+  - for operator-based installs: via the `spec.imagePullSecrets` field in stackrox custom resources
+  This may be necessary in case the Helm chart is applied in an environment where cluster lookup is unavailable
+  (such as a CD pipeline like ArgoCD).
+
+### Deprecated Features
+- The following search terms will be disabled in the next release and removed from the deployment context in 2 releases:
+  - Environment variable terms that can be removed by setting ROX_DEPLOYMENT_ENVVAR_SEARCH=false:
+    - Environment Key, Environment Value, Environment Variable Source
+  - Volume terms that can be removed by setting ROX_DEPLOYMENT_VOLUME_SEARCH=false:
+    - Volume Destination, Volume Name, Volume ReadOnly, Volume Source, Volume Type
+  - Secret terms that can be removed by setting ROX_DEPLOYMENT_SECRET_SEARCH=false:
+    - Secret, Secret Path
+- The following search terms will be disabled in the next release and removed from the secret context in 2 releases. They can be removed in the current release by setting ROX_SECRET_FILE_SEARCH=false:
+  - Secret Type, Cert Expiration, Image Pull Secret Registry
+- The Helm setting `central.db.persistence.hostPath` for hostPath storage will be deprecated in 2 releases. It is recommended to switch to an alternative persistent storage.
+- Users running ACS version 3.74.x or earlier must stop at version 4.4.x before upgrading to 4.5 or later. In version 4.0.0, ACS switched the underlying datastore to PostgreSQL. On an upgrade, data would be automatically migrated to PostgresSQL from the previous store.
+  In 4.5.0 this previous store will no longer be available, thus any existing data will not be migrated over if users jump from 3.74.x directly to 4.5.0. By stopping at any version from 4.0.0 to 4.4.x, users can ensure that the data will be properly migrated.
+- StackRox Scanner will no longer receive new features and will be in maintenance-mode. Development is now focused on the new Scanner V4.
+
+### Technical Changes
+- Increased default memory request for scanner-db from 200MiB to 512MiB,
+  to prevent OOMs during DB initialization in case of memory pressure on the node.
+- ROX-20105: Scanner slim will now read additional CAs from the `additional-ca-sensor` secret.
+- ROX-20623: Fixed bug mistakenly requiring admin access to delegate ad-hoc scan requests to secured clusters.
+- ROX-20492: Existing autogenerated integrations will now be deleted on Central startup if `ROX_DISABLE_AUTOGENERATED_REGISTRIES` is `true`.
+- `/v1/administration/usage` API endpoint is now considered stable.
+- Enforce the existence of the OpenShift monitoring `/metrics` server certificate by requiring
+  the secrets `central-monitoring-tls` / `sensor-monitoring-tls` to exist on start up. This only applies
+  if OpenShift monitoring is enabled.
+- Configuration files now specify ROX_MEMLIMIT instead of GOMEMLIMIT.
+  - ROX_MEMLIMIT is meant to capture the memory limit of the deployment, so it may adjust the GOMEMLIMIT accordingly.
+  - ROX_MEMLIMIT is not as flexible as GOMEMLIMIT. It may only be set to an integer representing a number of bytes.
+- ROX-21620: publish opensource instead of stackrox.io helm charts
+- ROX-20163: Sensor captures runtime events even if it is disconnected from Central.
+- ROX-20280: Fixed bug that prevented user from editing the endpoint from an unauthenticated email notifier. The credentials are still required to change the endpoint if it's not unauthenticated.
+- ROX-21729: - ROX-21729: When deleting a collection that is referenced by other objects such as report configurations, the error message now includes the names of the collection being deleted and its referencing object (report configuration).
+- ROX_SCAN_TIMEOUT environment variable in Central and Sensor now defaults to 10m instead of 6m.
+- ROX-19814: As announced in 4.2, the /v1/resources endpoint now requires authenticated access.
+- The default policy "systemctl Execution" has been updated to not trigger when the process argument `--version` is used. This does not pose a security issue because the information printed relates to features supported by systemd at the build time and not the capabilities of the host OS.
+- The default policy "No resource requests or limits specified" has been renamed to "No CPU request or memory limit specified" and now no longer checks CPU limit or memory request. Rather it only detects that the CPU request and memory limits are set.
+- The `/v1/availableAuthProviders` endpoint will in a future release require authentication and at least READ permission on the `Access` resource.
+  Ensure that any flow interacting with it is authenticated and has the proper permissions going forward.
+- The `/v1/tls-challenge` will  require authentication, ensure that all interactions with these endpoints include proper authentication going forward.
+
+## [4.3.0]
+
+
+
+### Added Features
+- ROX-18525, ROX-19158: A new `cluster` flag has been added to the `roxctl` commands and APIs that perform image scans, this enables delegating scans to specific secured clusters on demand.
+- ROX-19156: Ad-hoc image scanning is now enabled for images in the OCP integrated registry.
+  - RHACS attempts to infer the OCP project name from the image path and utilize the project secrets for registry authentication.
+- ROX-19561: Few new environment variables have been introduced in Central. They can be used to rate limit requests and Sensor communications.
+  - `ROX_CENTRAL_MAX_INIT_SYNC_SENSORS` functions as a restriction on the quantity of Sensors engaged in their initial synchronization process. It is set to a default value `0` (unlimited).
+    This synchronization occurs once Sensor establishes a connection with Central. It is recommended to set this limit when a significant number of secured clusters are connected to a single Central instance to avoid resource exhaustion.
+  - `ROX_CENTRAL_RATE_LIMIT_PER_SECOND` setting functions as a global rate limiter for all requests directed to Central. It is set to a default value `0` (unlimited).
+    The primary objective of this configuration is to serve as a protective measure against Distributed Denial of Service (DDoS) attacks on Central.
+  - `ROX_CENTRAL_RATE_LIMIT_THROTTLE_DURATION` setting allows you to specify the maximum throttle duration when the rate limit is reached. If set to less than 1 second (or 0), requests are immediately rejected. The default value is `10s` (10 seconds).
+
+### Removed Features
+
+- ROX-9510: As announced in release 69.0, empty value for `role.access_scope_id` is not supported anymore for `CreateRole` and `UpdateRole` in `/v1/roles/`. Role creation and update now require passing an identifier referencing a valid access scope in `role.access_scope_id`.
+- The UI menu option `Vulnerability Reporting` under `Vulnerability Management (1.0)` has been removed. The new and improved v2 version is available under `Vulnerability Management (2.0)`.
+- The `/v1/report` APIs have been removed. Please use `/v2/reports/` APIs.
+
+### Deprecated Features
+- The UI menu option `Vulnerability Management (1.0)` has been deprecated and will be removed in the future. It will be replaced by `Vulnerability Management (2.0)`.
+- The `/v1/cve/requests` APIs have been deprecated and will be replaced by `/v2/vulnerability-exceptions/` APIs in the future.
+- Vulnerability deferral management for host(/node) and platform(/cluster) vulnerabilities has been deprecated and
+will be removed in the future. Once removed, deferral cannot be created for host and platform vulnerabilities
+and the existing exceptions enforced on host and platform vulnerabilities will be reverted. The affected APIs are
+`/v1/nodecves/suppress`, `/v1/nodecves/unsuppress`, `/v1/clustercves/suppress`, and `/v1/clustercves/unsuppress`.
+
+### Technical Changes
+- Increased minimum Node.js version to 18.0.0 because 16 reached end of life. This change affects `yarn` commands in the ui folder.
+- ROX-19738: Previously categories passed to the detection service's APIs `v1/detect/build, v1/detect/deploy, v1/detect/deploy/yaml`
+  have been _always_ lower-cased by the backend. However, this is not the case anymore to support custom categories, which
+  are required to be title-cased.
+- ROX-14701: Starting from 4.3.0 release, `roxctl` binaries for `ppc64le` and `s390x` architectures are available for download from `https://mirror.openshift.com/pub/rhacs/assets/<version>/Linux/roxctl-<ppc64le|s390x>` (e.g. <https://mirror.openshift.com/pub/rhacs/assets/4.3.0/Linux/roxctl-s390x>).
+- The experimental API `/v1/product/usage` has been renamed to `/v1/administration/usage`.
+- ROX-19566: The results of registry TLS checks made by Sensor are now cached (for 15 minutes by default, which can be changed by setting the `ROX_SENSOR_REGISTRY_TLS_CHECK_CACHE_TTL` environment variable). This will result in faster Sensor startup times in clusters with a large number of pull secrets.
+- Risk reprocessing has been shifted from being potentially computed every 15 seconds to 10 minutes. This will improve system performance by debouncing expensive risk calculations.
+- ROX-20303: Fixed a bug that may have incorrectly matched an image to an image integration during scanning.
+- ROX:20288: A new environment variable `ROX_AUDIT_LOG_WITHOUT_PERMISSIONS` has been added to Central (defaults to `false`).
+  When set to `true`, audit log messages will not contain the detailed permissions of the user associated with the request.
+  Instead, only the associated role names will be there. Enabling this will lower the verbosity of the audit log messages,
+  but investigating associated permissions for a requester might be harder (i.e. the associated role would have be known at the time of the request).
+  Thus, it is generally not recommended to set this to `true`.
+- ROX-18978: The default policy "Iptables Executed in Privileged Container" has been renamed to "Iptables or nftables Executed in Privileged Container" and now also detects the `nft` process which is used by `nftables`.
+
+## [4.2.0]
+
+
+
+### Added Features
+
+- Telemetry collection enabled by default for self-managed installations. Opt-out is available on bundle generation, or at any time via the System Configuration UI.
+- Integration with OpenShift Container Platform monitoring is configured and enabled by default for OpenShift 4 installations. The flag `monitoring.openshift.enabled: false` disables the integration.
+- A new environment variable `ROX_DISABLE_REGISTRY_REPO_LIST` has been added to Central (defaults to `false`). When set to `true` will disable registry repo list (`/v2/_catalog`) usage when matching integrations to image registries.
+- A new environment variable `ROX_REGISTRY_MIRRORING_ENABLED` has been added to Sensor that is set to `true` by default and enables processing registry mirrors during Sensor image enrichment. Mirror details are obtained via the `ImageContentSourcePolicy`, `ImageDigestMirrorSet`, and `ImageTagMirrorSet` CRs.
+- ROX-17112: CORE_BPF collection is now generally available.
+- ROX-17702: Product usage metrics experimental API: `/v1/product/usage/secured-units/current`, `/v1/product/usage/secured-units/max`. New `/api/product/usage/secured-units/csv` endpoint.
+- ROX-19096, ROX-19098, ROX-19099: StackRox Scanner now supports alpine:v3.18, debian:12, ubuntu:23.04, ubuntu:23.10
+
+### Removed Features
+
+- The `--offline-mode` flag for the `roxctl scanner generate` command was removed, as Scanner's default behavior is
+  to fetch vulnerability updates from Central.
+- In version 4.0, RHACS released the collections feature that replaced access scopes used in report configurations.
+  RHACS automatically created equivalent collections for access scopes used in existing report configurations and migrated report configurations to use newly-created collections.
+  If the migration failed, the report configurations became non-functional, and RHACS logged the error messages in Central logs. In this release, any report configurations that could not be migrated will be deleted.
+
+### Deprecated Features
+
+- RBAC risk was deprecated in release 4.0 due to poor performance.
+- (Tech preview feature) CLI command `roxctl generate netpol` is deprecated in favor of `roxctl netpol generate`
+- (Tech preview feature) CLI command `roxctl connextivity-map` is deprecated in favor of `roxctl netpol connectivity map`
+- The CIS Docker v1.2.0 standard will be removed from RHACS Compliance checks starting in RHACS version 4.4.
+- The Syslog notifier used to send the message header incorrect - the severity and name fields were flipped. Starting in this release, there is now an option
+  to choose which format the header should be sent it: `CEF` which is the correct order or `CEF (legacy field order)` which is the older incorrect way.
+  The UI will default to `CEF` but when using the API if a value isn't selected, it will default to `CEF (legacy field order)`.
+  Starting in version 4.4 the notifier will default to `CEF`.
+- A few public endpoints will soon require authentication, ensure that any flow interacting with these endpoints is authenticated going forward:
+  - `/v1/featureflags`
+  - `/v1/resources`
+
+### Technical Changes
+
+- ROX-16962: A new parameter `spec.admissionControl.replicas` has been added to the `SecuredCluster` CRD.
+- ROX-18073: The implementation of Add Capabilities policy criteria has been fixed to ensure violations are generated
+  correctly for the specified values.
+- Rollback to a 3.y release or the 4.0 release will no longer be supported starting from 4.3.
+- Rollbacks from future releases to the 4.2 or later release will no longer require `ForceRollbackVersion` to be set.
+- ROX-18173: A few previously public endpoints now require authentication: `/v1/metadata`,
+  `/v1/database/status`, `/v1/mitreattackvectors`. This reduces the surface for DoS attacks and
+  prevents an attacker from taking advantage of the information served by these endpoints.
+- Non autogenerated image integrations will no longer use repo list (`/v2/_catalog`) during matching.
+- ROX-18477: Fixed an issue that breaks operator installations if a `Central` or `SecuredCluster` CR configures egress proxy environment variables while openshift cluster-wide proxy is enabled.
+- ROX-15969: The column `Component Upgrade` in vulnerability reports has been renamed to `CVE Fixed In`.
+- The removal of `/v1/report` APIs in this release, that was communicated in release 4.0.0, has been postponed by one release. Consequently, the `/v1/report` APIs will continue to be available in this release.
+- The `/api/docs/swagger` API previously required read on the resource `Integration`.
+  Now it only requires users to be authenticated to via the API docs.
+- StackRox Scanner will now opt to scan the image whose architecture matches the Scanner's architecture instead of always opting for amd64 when scanning a multi-arch image.
+  - For example, if StackRox Scanner is running on arm64, and there is an arm64 version of the multi-arch image, it will scan that arm64 image.
+  - If there is no image which matches Scanner's architecture, then it will attempt to scan the amd64 version, as it did previously.
+
+## [4.1.0]
+
+### Added Features
+
 - Two new default permission sets `Vulnerability Management Consumer` and `Vulnerability Management Admin` have been added for vulnerability management.
   - `Vulnerability Management Consumer` provides read-only access to analyze vulnerabilities and initiate risk acceptance process.
   - `Vulnerability Management Admin` provides administrative access to analyze vulnerabilities, generate reports, and manage risk acceptance process.
@@ -19,20 +395,31 @@ Please avoid adding duplicate information across this changelog and JIRA/doc inp
   Note that if the environment variable is set, no signatures will be fetched and thus the signature verification feature cannot be used.
 - ROX-16532: Resource limits and requests for the node-inventory container can now be configured via the operator.
 - A new environment variable `ROX_SCAN_TIMEOUT` has been added to Sensor which allows for customizing the image scan timeout used in Sensor initiated scans.
+- ROX-17365: A new environment variable `ROX_DELEGATED_SCANNING_DISABLED` has been added that disables delegated scanning capabilities while leaving other local scanning capabilities intact.
 - ROX-16703: Helm setting `scanner.disable=false` now valid for any secured cluster (instead of OpenShift only). This enables scanner slim to be installed in non-OCP secured clusters.
 
 ### Removed Features
+
 - ROX-14398: As announced in 3.74, the permission `Access` replaces the deprecated permission `Role`.
 - ROX-14398: As announced in 3.74, the `Scope Manager` system role and permission set will be removed. If existing product installations do have customer references to either the `Scope Manager` system role or the `Scope Manager` system permission set, then the referenced object will be adjusted to contain a description mentioning its deprecation. Furthermore, the objects will not be marked as system resources, and will not be supported anymore.
 - ROX-17031: env var `ROX_FORCE_LOCAL_IMAGE_SCANNING` has been removed and replaced by the `DelegatedRegistryConfig` API.
+- ROX-13888: As announced in 3.74, the permission `WorkflowAdministration` replaces the deprecated permissions `Vulnerability Reports` and `Policy`.
 
 - KernelModule collection has been removed, following deprecation in 4.0.
     - Secured clusters configured to use KernelModule collection will automatically switch to EBPF
 
 ### Deprecated Features
-Vulnerability Management 1.0 sections Image CVEs, Image Components, Images, Deployments, and Namespaces are deprecated and will be removed in the future. Once removed, use Vulnerability Management 2.0 for managing workload vulnerabilities.
+
+- Vulnerability Management 1.0 sections Image CVEs, Image Components, Images, Deployments, and Namespaces are deprecated and will be removed in the future. Once removed, use Vulnerability Management 2.0 for managing workload vulnerabilities.
+- Custom Security Context Constraints (SCC) (e.g.: `stackrox-collector`, `stackrox-admission-control`, `stackrox-sensor`) are deprecated and will be removed in the future.
+  Users should ensure that those SCCs are not being used by workloads other than Stackrox/RHACS.
+- The default permission set `Vulnerability Management Approver` is deprecated and will be removed in a future release. Customers are advised to use `Vulnerability Management Admin` permission set instead. When `Vulnerability Management Approver` permission set is removed existing roles using it will be updated to use `Vulnerability Management Admin`.
+- The default permission set `Vulnerability Management Requester` is deprecated and will be removed in a future release. Customers are advised to use `Vulnerability Management Consumer` permission set instead. When `Vulnerability Management Requester` permission set is removed existing roles using it will be updated to use `Vulnerability Management Consumer`.
+- The default permission set `Vulnerability Report Creator` is deprecated and will be removed in a future release. Customers are advised to use `Vulnerability Management Admin` permission set instead. When `Vulnerability Report Creator` permission set is removed existing roles using it will be updated to use `Vulnerability Management Admin`.
+- `/v1/imagecves/suppress` and `/v1/imagecves/unsuppress` APIs used to defer image vulnerabilities globally and undo deferral are deprecated and will be removed in a future release. Once removed, use Risk Acceptance workflow to defer image vulnerabilities globally.
 
 ### Technical Changes
+
 - The Central PVC stackrox-db is no longer required after this upgrade. To obsolete existing PVC, please check the docs online.
 - The output of `roxctl central whoami` now includes the username as well.
 - Helm setting `collector.nodeInventoryResources` has been renamed to `collector.nodeScanningResources`.
@@ -41,6 +428,7 @@ Vulnerability Management 1.0 sections Image CVEs, Image Components, Images, Depl
   is no longer needed. We will continue to populate it to support older versions of the product, but it will be ignored.
 - The time interval used to determine the frequency to scan orchestrator-level components (Kubernetes, OpenShift, Istio) is now configurable
   via ROX_ORCHESTRATOR_VULN_SCAN_INTERVAL.
+- Image Integrations will now be synced with secured clusters that have local scanning enabled.
 
 ## [4.0.0]
 
@@ -73,7 +461,7 @@ Vulnerability Management 1.0 sections Image CVEs, Image Components, Images, Depl
 - ROX-15337: RHACS Operator is not published to Red Hat Operator Catalogs for OpenShift versions 4.9 and earlier.
 - The API endpoint `/v1/serviceaccounts` is deprecated and will be changed as part of the 4.2.0 release.
 - PDF export in current version of the Vulnerability Management UI is deprecated and will be removed in the 4.2.0 release. Use the vuln reporting feature instead, for more comprehensive CSV data.
-- All `/v1/report` APIs for creating and managing vulnerability reports are deprecated and replaced will be replaced with new `/v2/report` APIs in 4.2.0 release.
+- All `/v1/report` APIs for creating and managing vulnerability reports are deprecated and will be replaced with new `/v2/reports` APIs in 4.2.0 release.
 
 ### Required Actions
 - The `Analyst` permission set will change behaviour: instead of allowing read to all resources except `DebugLogs`, it will

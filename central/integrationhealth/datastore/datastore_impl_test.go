@@ -6,17 +6,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stackrox/rox/central/integrationhealth/store"
 	postgresIntegrationStore "github.com/stackrox/rox/central/integrationhealth/store/postgres"
-	rocksdbIntegrationStore "github.com/stackrox/rox/central/integrationhealth/store/rocksdb"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
-	"github.com/stackrox/rox/pkg/rocksdb"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
-	"github.com/stackrox/rox/pkg/testutils/rocksdbtest"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
 )
@@ -34,21 +30,13 @@ type integrationHealthDatastoreTestSuite struct {
 	hasNoAccessCtx context.Context
 
 	datastore    DataStore
-	rocksie      *rocksdb.RocksDB
 	postgresTest *pgtest.TestPostgres
 }
 
 func (s *integrationHealthDatastoreTestSuite) SetupTest() {
-	var integrationStore store.Store
-
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.postgresTest = pgtest.ForT(s.T())
-		s.Require().NotNil(s.postgresTest)
-		integrationStore = postgresIntegrationStore.New(s.postgresTest.DB)
-	} else {
-		s.rocksie = rocksdbtest.RocksDBForT(s.T())
-		integrationStore = rocksdbIntegrationStore.New(s.rocksie)
-	}
+	s.postgresTest = pgtest.ForT(s.T())
+	s.Require().NotNil(s.postgresTest)
+	integrationStore := postgresIntegrationStore.New(s.postgresTest.DB)
 	s.datastore = New(integrationStore)
 
 	s.hasReadCtx = sac.WithGlobalAccessScopeChecker(context.Background(),
@@ -68,11 +56,7 @@ func (s *integrationHealthDatastoreTestSuite) SetupTest() {
 }
 
 func (s *integrationHealthDatastoreTestSuite) TearDownTest() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.postgresTest.Close()
-	} else {
-		rocksdbtest.TearDownRocksDB(s.rocksie)
-	}
+	s.postgresTest.Close()
 }
 
 func (s *integrationHealthDatastoreTestSuite) TestGetRegistriesAndScanners() {
@@ -85,7 +69,7 @@ func (s *integrationHealthDatastoreTestSuite) TestGetRegistriesAndScanners() {
 
 	receivedIntegrationHealths, err := s.datastore.GetRegistriesAndScanners(s.hasReadCtx)
 	s.NoError(err)
-	s.ElementsMatch([]*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
+	protoassert.ElementsMatch(s.T(), []*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
 }
 
 func (s *integrationHealthDatastoreTestSuite) TestGetNotifierPlugins() {
@@ -98,7 +82,7 @@ func (s *integrationHealthDatastoreTestSuite) TestGetNotifierPlugins() {
 
 	receivedIntegrationHealths, err := s.datastore.GetNotifierPlugins(s.hasReadCtx)
 	s.NoError(err)
-	s.ElementsMatch([]*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
+	protoassert.ElementsMatch(s.T(), []*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
 }
 
 func (s *integrationHealthDatastoreTestSuite) TestGetBackupPlugins() {
@@ -111,7 +95,7 @@ func (s *integrationHealthDatastoreTestSuite) TestGetBackupPlugins() {
 
 	receivedIntegrationHealths, err := s.datastore.GetBackupPlugins(s.hasReadCtx)
 	s.NoError(err)
-	s.ElementsMatch([]*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
+	protoassert.ElementsMatch(s.T(), []*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
 }
 
 func (s *integrationHealthDatastoreTestSuite) TestGetDeclarativeConfigs() {
@@ -124,7 +108,7 @@ func (s *integrationHealthDatastoreTestSuite) TestGetDeclarativeConfigs() {
 
 	receivedIntegrationHealths, err := s.datastore.GetDeclarativeConfigs(s.hasReadCtx)
 	s.NoError(err)
-	s.ElementsMatch([]*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
+	protoassert.ElementsMatch(s.T(), []*storage.IntegrationHealth{integrationHealth}, receivedIntegrationHealths)
 }
 
 func (s *integrationHealthDatastoreTestSuite) TestUpdateIntegrationHealth() {
@@ -150,7 +134,7 @@ func (s *integrationHealthDatastoreTestSuite) TestUpdateIntegrationHealth() {
 	receivedIntegrationHealth, exists, err := s.datastore.GetIntegrationHealth(s.hasReadCtx, integrationHealth.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(integrationHealth, receivedIntegrationHealth)
+	protoassert.Equal(s.T(), integrationHealth, receivedIntegrationHealth)
 
 	// 4. Updating an invalid integration health type should not be possible.
 	integrationHealth.Type = storage.IntegrationHealth_UNKNOWN

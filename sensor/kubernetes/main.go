@@ -8,21 +8,26 @@ import (
 	"github.com/stackrox/rox/pkg/clientconn"
 	"github.com/stackrox/rox/pkg/devmode"
 	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/memlimit"
 	"github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/premain"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/pkg/version"
 	"github.com/stackrox/rox/sensor/common/centralclient"
+	"github.com/stackrox/rox/sensor/common/cloudproviders/gcp"
 	"github.com/stackrox/rox/sensor/kubernetes/client"
 	"github.com/stackrox/rox/sensor/kubernetes/fake"
 	"github.com/stackrox/rox/sensor/kubernetes/sensor"
 	"golang.org/x/sys/unix"
 )
 
-var (
-	log = logging.LoggerForModule()
-)
+var log = logging.LoggerForModule()
+
+func init() {
+	memlimit.SetMemoryLimit()
+}
 
 func main() {
 	premain.StartMain()
@@ -31,8 +36,9 @@ func main() {
 
 	log.Infof("Running StackRox Version: %s", version.GetMainVersion())
 
+	features.LogFeatureFlags()
 	// Start the prometheus metrics server
-	metrics.NewDefaultHTTPServer(metrics.SensorSubsystem).RunForever()
+	metrics.NewServer(metrics.SensorSubsystem, metrics.NewTLSConfigurerFromEnv()).RunForever()
 	metrics.GatherThrottleMetricsForever(metrics.SensorSubsystem.String())
 
 	sigs := make(chan os.Signal, 1)
@@ -48,24 +54,29 @@ func main() {
 		sharedClientInterface = client.MustCreateInterface()
 	}
 	clientconn.SetUserAgent(clientconn.Sensor)
-	centralConnFactory, err := centralclient.NewCentralConnectionFactory(env.CentralEndpoint.Setting())
+	centralClient, err := centralclient.NewClient(env.CentralEndpoint.Setting())
 	if err != nil {
-		utils.CrashOnError(errors.Wrapf(err, "sensor failed to start while initializing gRPC client to endpoint %s", env.CentralEndpoint.Setting()))
+		utils.CrashOnError(errors.Wrapf(err, "sensor failed to start while initializing central HTTP client for endpoint %s", env.CentralEndpoint.Setting()))
 	}
+	centralConnFactory := centralclient.NewCentralConnectionFactory(centralClient)
+	certLoader := centralclient.RemoteCertLoader(centralClient)
 
 	s, err := sensor.CreateSensor(sensor.ConfigWithDefaults().
 		WithK8sClient(sharedClientInterface).
 		WithCentralConnectionFactory(centralConnFactory).
+		WithCertLoader(certLoader).
 		WithWorkloadManager(workloadManager))
 	utils.CrashOnError(err)
 
 	s.Start()
+	gcp.Singleton().Start()
 
 	for {
 		select {
 		case sig := <-sigs:
 			log.Infof("Caught %s signal", sig)
 			s.Stop()
+			gcp.Singleton().Stop()
 		case <-s.Stopped().Done():
 			if err := s.Stopped().Err(); err != nil {
 				log.Fatalf("Sensor exited with error: %v", err)

@@ -5,9 +5,9 @@ import (
 
 	alertDataStore "github.com/stackrox/rox/central/alert/datastore"
 	"github.com/stackrox/rox/central/cluster/datastore/internal/search"
-	"github.com/stackrox/rox/central/cluster/index"
 	clusterStore "github.com/stackrox/rox/central/cluster/store/cluster"
 	clusterHealthStore "github.com/stackrox/rox/central/cluster/store/clusterhealth"
+	compliancePruning "github.com/stackrox/rox/central/complianceoperator/v2/pruner"
 	clusterCVEDS "github.com/stackrox/rox/central/cve/cluster/datastore"
 	deploymentDataStore "github.com/stackrox/rox/central/deployment/datastore"
 	imageIntegrationDataStore "github.com/stackrox/rox/central/imageintegration/datastore"
@@ -27,8 +27,6 @@ import (
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/dackbox/graph"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/logging"
 	notifierProcessor "github.com/stackrox/rox/pkg/notifier"
 	"github.com/stackrox/rox/pkg/sac"
@@ -47,8 +45,10 @@ type DataStore interface {
 	GetCluster(ctx context.Context, id string) (*storage.Cluster, bool, error)
 	GetClusterName(ctx context.Context, id string) (string, bool, error)
 	GetClusters(ctx context.Context) ([]*storage.Cluster, error)
+	GetClustersForSAC(ctx context.Context) ([]*storage.Cluster, error)
 	CountClusters(ctx context.Context) (int, error)
 	Exists(ctx context.Context, id string) (bool, error)
+	WalkClusters(ctx context.Context, fn func(obj *storage.Cluster) error) error
 
 	AddCluster(ctx context.Context, cluster *storage.Cluster) (string, error)
 	UpdateCluster(ctx context.Context, cluster *storage.Cluster) error
@@ -92,10 +92,9 @@ func New(
 	rbds roleBindingDataStore.DataStore,
 	cm connection.Manager,
 	notifier notifierProcessor.Processor,
-	graphProvider graph.Provider,
 	clusterRanker *ranking.Ranker,
-	indexer index.Indexer,
 	networkBaselineMgr networkBaselineManager.Manager,
+	compliancePruner compliancePruning.Pruner,
 ) (DataStore, error) {
 	ds := &datastoreImpl{
 		clusterStorage:            clusterStorage,
@@ -116,26 +115,19 @@ func New(
 		cm:                        cm,
 		notifier:                  notifier,
 		clusterRanker:             clusterRanker,
-		indexer:                   indexer,
 		networkBaselineMgr:        networkBaselineMgr,
 		idToNameCache:             simplecache.New(),
 		nameToIDCache:             simplecache.New(),
+		compliancePruner:          compliancePruner,
 	}
 
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		ds.searcher = search.NewV2(clusterStorage, indexer, clusterRanker)
-	} else {
-		ds.searcher = search.New(clusterStorage, indexer, graphProvider, clusterRanker)
-	}
-
-	if err := ds.buildIndex(sac.WithAllAccess(context.Background())); err != nil {
+	ds.searcher = search.NewV2(clusterStorage, clusterRanker)
+	if err := ds.buildCache(sac.WithAllAccess(context.Background())); err != nil {
 		return ds, err
 	}
 
 	if err := ds.registerClusterForNetworkGraphExtSrcs(); err != nil {
 		return ds, err
 	}
-
-	go ds.cleanUpNodeStore()
 	return ds, nil
 }

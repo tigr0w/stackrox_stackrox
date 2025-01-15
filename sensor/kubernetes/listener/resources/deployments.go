@@ -3,12 +3,12 @@ package resources
 import (
 	"sort"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/process/filter"
+	"github.com/stackrox/rox/pkg/protocompat"
+	registryTypes "github.com/stackrox/rox/pkg/registries/types"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/pkg/uuid"
@@ -59,7 +59,7 @@ func (d *deploymentDispatcherImpl) ProcessEvent(obj, oldObj interface{}, action 
 	}
 
 	if action == central.ResourceAction_REMOVE_RESOURCE {
-		d.handler.hierarchy.Remove(string(metaObj.GetUID()))
+		defer d.handler.hierarchy.Remove(string(metaObj.GetUID()))
 		return d.handler.processWithType(obj, oldObj, action, d.deploymentType)
 	}
 	d.handler.hierarchy.Add(metaObj)
@@ -121,7 +121,7 @@ func newDeploymentHandler(
 
 func (d *deploymentHandler) processWithType(obj, oldObj interface{}, action central.ResourceAction, deploymentType string) *component.ResourceEvent {
 	deploymentWrap := newDeploymentEventFromResource(obj, &action, deploymentType, d.clusterID, d.podLister, d.namespaceStore,
-		d.hierarchy, d.config.GetConfig().GetRegistryOverride(), d.orchestratorNamespaces, d.registryStore)
+		d.hierarchy, d.config.GetConfig().GetRegistryOverride(), d.orchestratorNamespaces)
 	// Note: deploymentWrap may be nil. Typically, this means that this is not a top-level object that we track --
 	// either it's an object we don't track, or we track its parent.
 	// (For example, we don't track replicasets if they are owned by a deployment.)
@@ -131,7 +131,7 @@ func (d *deploymentHandler) processWithType(obj, oldObj interface{}, action cent
 
 	events := &component.ResourceEvent{
 		ForwardMessages:      []*central.SensorEvent{},
-		DetectorMessages:     []component.DetectorMessage{},
+		DetectorMessages:     []component.DeploytimeDetectionRequest{},
 		ReprocessDeployments: []string{},
 		DeploymentTiming:     nil,
 		DeploymentReferences: []component.DeploymentReference{},
@@ -183,45 +183,23 @@ func (d *deploymentHandler) processWithType(obj, oldObj interface{}, action cent
 
 	events = d.appendIntegrationsOnCredentials(action, deploymentWrap.GetContainers(), events)
 
-	if env.ResyncDisabled.BooleanSetting() {
-		if action == central.ResourceAction_REMOVE_RESOURCE {
-			// TODO(ROX-14309): move this logic to the resolver
-			// We need to do this here since the resolver relies on the deploymentStore to have the wrap
-			d.endpointManager.OnDeploymentRemove(deploymentWrap)
-			// At the moment we need to also send this deployment to the compatibility module when it's being deleted.
-			// Moving forward, there might be a different way to solve this, for example by changing the compatibility
-			// module to accept only deployment IDs rather than the entire deployment object. For more info on this
-			// check the PR comment here: https://github.com/stackrox/stackrox/pull/3695#discussion_r1030214615
-			events.AddDeploymentForDetection(component.DetectorMessage{
-				Object: deploymentWrap.GetDeployment(),
-				Action: action,
-			}).AddSensorEvent(deploymentWrap.toEvent(action)) // if resource is being removed, we can create the remove message here without related resources
-		} else {
-			// If re-sync is disabled, we don't need to process deployment relationships here. We pass a deployment
-			// references up the chain, which will be used to trigger the actual deployment event and detection.
-			events.AddDeploymentReference(resolver.ResolveDeploymentIds(deploymentWrap.GetId()),
-				component.WithParentResourceAction(action))
-		}
-	} else {
-		exposureInfos := d.serviceStore.GetExposureInfos(deploymentWrap.GetNamespace(), deploymentWrap.PodLabels)
-		deploymentWrap.updatePortExposureSlice(exposureInfos)
-		if action != central.ResourceAction_REMOVE_RESOURCE {
-			// Make sure to clone and add deploymentWrap to the store if this function is being used at places other than
-			// right after deploymentWrap object creation.
-			deploymentWrap.updateServiceAccountPermissionLevel(d.rbac.GetPermissionLevelForDeployment(deploymentWrap.GetDeployment()))
-			d.endpointManager.OnDeploymentCreateOrUpdate(deploymentWrap)
-		} else {
-			d.endpointManager.OnDeploymentRemove(deploymentWrap)
-		}
-
-		if err := deploymentWrap.updateHash(); err != nil {
-			log.Errorf("UNEXPECTED: could not calculate hash of deployment %s: %v", deploymentWrap.GetId(), err)
-		}
-		events.AddSensorEvent(deploymentWrap.toEvent(action))
-		events.AddDeploymentForDetection(component.DetectorMessage{
+	if action == central.ResourceAction_REMOVE_RESOURCE {
+		// TODO(ROX-14309): move this logic to the resolver
+		// We need to do this here since the resolver relies on the deploymentStore to have the wrap
+		d.endpointManager.OnDeploymentRemove(deploymentWrap)
+		// At the moment we need to also send this deployment to the compatibility module when it's being deleted.
+		// Moving forward, there might be a different way to solve this, for example by changing the compatibility
+		// module to accept only deployment IDs rather than the entire deployment object. For more info on this
+		// check the PR comment here: https://github.com/stackrox/stackrox/pull/3695#discussion_r1030214615
+		events.AddDeploymentForDetection(component.DeploytimeDetectionRequest{
 			Object: deploymentWrap.GetDeployment(),
 			Action: action,
-		})
+		}).AddSensorEvent(deploymentWrap.toEvent(action)) // if resource is being removed, we can create the remove message here without related resources
+	} else {
+		// If re-sync is disabled, we don't need to process deployment relationships here. We pass a deployment
+		// references up the chain, which will be used to trigger the actual deployment event and detection.
+		events.AddDeploymentReference(resolver.ResolveDeploymentIds(deploymentWrap.GetId()),
+			component.WithParentResourceAction(action))
 	}
 
 	// Upsert/Delete at the end to avoid data race with other dispatchers
@@ -266,9 +244,9 @@ func (d *deploymentHandler) getImageIntegrationEvent(registry string) *central.S
 	if credentials == nil {
 		return nil
 	}
-	expiresAt, err := types.TimestampProto(credentials.ExpirestAt)
+	expiresAt, err := protocompat.ConvertTimeToTimestampOrError(credentials.ExpirestAt)
 	if err != nil {
-		log.Errorf("ignoring invalid registry credentials: failed to parse timestamp")
+		log.Error("ignoring invalid registry credentials: failed to parse timestamp")
 		return nil
 	}
 	// Currently, all AWS registry credentials are handled as ECR image integrations, hence
@@ -278,7 +256,7 @@ func (d *deploymentHandler) getImageIntegrationEvent(registry string) *central.S
 		Resource: &central.SensorEvent_ImageIntegration{
 			ImageIntegration: &storage.ImageIntegration{
 				Id:         uuid.NewV4().String(),
-				Type:       "ecr",
+				Type:       registryTypes.ECRType,
 				Categories: []storage.ImageIntegrationCategory{storage.ImageIntegrationCategory_REGISTRY},
 				IntegrationConfig: &storage.ImageIntegration_Ecr{
 					Ecr: &storage.ECRConfig{
@@ -356,7 +334,7 @@ func (d *deploymentHandler) processPodEvent(owningDeploymentID string, k8sPod *v
 		return event
 	}
 
-	started, err := types.TimestampProto(k8sPod.GetCreationTimestamp().Time)
+	started, err := protocompat.ConvertTimeToTimestampOrError(k8sPod.GetCreationTimestamp().Time)
 	if err != nil {
 		log.Errorf("converting start time from Kubernetes (%v) to proto: %v", k8sPod.GetCreationTimestamp().Time, err)
 	}
@@ -388,5 +366,4 @@ func (d *deploymentHandler) processPodEvent(owningDeploymentID string, k8sPod *v
 		},
 	}
 	return event
-
 }

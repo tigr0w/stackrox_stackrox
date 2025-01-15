@@ -12,6 +12,7 @@ import (
 	"github.com/stackrox/rox/pkg/zip"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
+	"sigs.k8s.io/yaml"
 )
 
 var (
@@ -22,7 +23,8 @@ var (
 	}
 
 	kubectlScannerScriptMap = FileNameMap{
-		"common/setup-scanner.sh": "scanner/scripts/setup.sh",
+		"common/setup-scanner.sh":    "scanner/scripts/setup.sh",
+		"common/setup-scanner-v4.sh": "scanner-v4/scripts/setup.sh",
 	}
 
 	centralDBScriptMap = FileNameMap{
@@ -66,7 +68,9 @@ func renderHelmChart(chartFiles []*loader.BufferedFile, mode mode, valuesFiles [
 		contents += "\n"
 
 		subDir := "central"
-		if strings.HasPrefix(path.Base(fileName), "02-scanner-") {
+		if strings.HasPrefix(path.Base(fileName), "02-scanner-v4-") {
+			subDir = "scanner-v4"
+		} else if strings.HasPrefix(path.Base(fileName), "02-scanner-") {
 			subDir = "scanner"
 		}
 		renderedFiles = append(renderedFiles, zip.NewFile(path.Join(subDir, path.Base(fileName)), []byte(contents), 0))
@@ -101,6 +105,9 @@ func renderNewBasicFiles(c Config, mode mode, imageFlavor defaults.ImageFlavor) 
 	if metaVals.KubectlOutput {
 		metaVals.AutoSensePodSecurityPolicies = false
 	}
+	metaVals.TelemetryEnabled = c.K8sConfig.Telemetry.Enabled
+	metaVals.TelemetryKey = c.K8sConfig.Telemetry.StorageKey
+	metaVals.TelemetryEndpoint = c.K8sConfig.Telemetry.StorageEndpoint
 	chartFiles, err := chTpl.InstantiateRaw(metaVals)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to instantiate central services chart template")
@@ -118,6 +125,23 @@ func renderNewBasicFiles(c Config, mode mode, imageFlavor defaults.ImageFlavor) 
 	if c.K8sConfig.DeploymentFormat != v1.DeploymentFormat_KUBECTL {
 		return nil, errors.Errorf("unsupported deployment format %v", c.K8sConfig.DeploymentFormat)
 	}
+
+	// For rendering out deploymend bundles we need to activate Scanner V4, otherwise
+	// no Scanner V4 manifests will be contained in the bundle. Therefore we make sure
+	// here to flip scannerV4.disable to false. To have precedence we need to prepend
+	// the Scanner V4 activation switch to the list of Helm values files.
+	//
+	// This can be removed once Scanner V4 is activated by default.
+	activateScannerV4 := map[string]interface{}{
+		"scannerV4": map[string]interface{}{
+			"disable": false,
+		},
+	}
+	activateScannerV4Bytes, err := yaml.Marshal(activateScannerV4)
+	if err != nil {
+		return nil, errors.Wrap(err, "marshalling Scanner V4 activation switch")
+	}
+	valuesFiles = append([]*zip.File{zip.NewFile("activate-scanner-v4.yaml", activateScannerV4Bytes, 0)}, valuesFiles...)
 
 	renderedFiles, err := renderHelmChart(chartFiles, mode, valuesFiles)
 	if err != nil {

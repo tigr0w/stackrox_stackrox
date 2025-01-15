@@ -1,7 +1,7 @@
 import navSelectors from '../selectors/navigation';
 
 import { getRouteMatcherMapForGraphQL, interactAndWaitForResponses } from './request';
-import { visit } from './visit';
+import { visit, visitWithStaticResponseForPermissions } from './visit';
 
 /*
  * Import relevant alias constants in test files that call visitMainDashboard function
@@ -11,13 +11,13 @@ export const summaryCountsOpname = 'summary_counts';
 export const getAllNamespacesByClusterOpname = 'getAllNamespacesByCluster';
 export const alertCountsBySeverityOpname = 'alertCountsBySeverity';
 export const mostRecentAlertsOpname = 'mostRecentAlerts';
-export const getImagesOpname = 'getImages';
+export const getImagesAtMostRiskOpname = 'getImagesAtMostRisk';
 export const deploymentsWithProcessInfoAlias = 'deploymentswithprocessinfo';
 export const agingImagesQueryOpname = 'agingImagesQuery';
 export const alertsSummaryCountsGroupByCategoryAlias = 'alerts/summary/counts_CATEGORY';
 export const getAggregatedResultsOpname = 'getAggregatedResults';
 
-const routeMatcherMapForSummaryCounts = getRouteMatcherMapForGraphQL([summaryCountsOpname]);
+export const routeMatcherMapForSummaryCounts = getRouteMatcherMapForGraphQL([summaryCountsOpname]);
 const routeMatcherMapForSearchFilter = getRouteMatcherMapForGraphQL([
     getAllNamespacesByClusterOpname,
 ]);
@@ -25,7 +25,9 @@ const routeMatcherMapForViolationsByPolicySeverity = {
     ...getRouteMatcherMapForGraphQL([alertCountsBySeverityOpname]),
     ...getRouteMatcherMapForGraphQL([mostRecentAlertsOpname]),
 };
-const routeMatcherMapForImagesAtMostRisk = getRouteMatcherMapForGraphQL([getImagesOpname]);
+const routeMatcherMapForImagesAtMostRisk = getRouteMatcherMapForGraphQL([
+    getImagesAtMostRiskOpname,
+]);
 const routeMatcherMapForDeploymentsAtMostRisk = {
     [deploymentsWithProcessInfoAlias]: {
         method: 'GET',
@@ -75,21 +77,58 @@ export function visitMainDashboardFromLeftNav() {
 export function visitMainDashboard(staticResponseMap) {
     visit(basePath, routeMatcherMap, staticResponseMap);
 
-    cy.get(`.pf-c-nav__link.pf-m-current:contains("${title}")`);
+    cy.get(`.pf-v5-c-nav__link.pf-m-current:contains("${title}")`);
     cy.get(`h1:contains("${title}")`);
 }
 
 /**
- * @param {{data: Record<string, number>}} staticResponseForSummaryCounts
+ * Visit main dashboard to test conditional rendering for user role permissions specified as response or fixture.
+ * Conditional rendering for permissions might make a subset of requests.
+ *
+ * { body: { resourceToAccess: { … } } }
+ * { fixture: 'fixtures/wherever/whatever.json' }
+ *
+ * @param {{ body: { resourceToAccess: Record<string, string> } } | { fixture: string }} staticResponseForPermissions
+ * @param {Record<string, { method: string, url: string }>} [routeMatcherMapForSubsetOfRequests]
+ * @param {Record<string, { body: unknown } | { fixture: string }>} [staticResponseMapForSubsetOfRequests]
  */
-export function visitMainDashboardWithStaticResponseForSummaryCounts(
-    staticResponseForSummaryCounts
+export function visitMainDashboardWithStaticResponseForPermissions(
+    staticResponseForPermissions,
+    routeMatcherMapForSubsetOfRequests,
+    staticResponseMapForSubsetOfRequests
+) {
+    visitWithStaticResponseForPermissions(
+        basePath,
+        staticResponseForPermissions,
+        routeMatcherMapForSubsetOfRequests,
+        staticResponseMapForSubsetOfRequests
+    );
+
+    cy.get(`h1:contains("${title}")`);
+}
+
+/**
+ * @param {{data: Record<string, number>}} staticResponseForClustersForPermissions
+ */
+export function visitMainDashboardWithStaticResponseForClustersForPermission(
+    staticResponseForClustersForPermissions
 ) {
     // Omit requests for widgets because Dashboard redirects to Clusters page.
-    const staticResponseMapForSummaryCounts = {
-        [summaryCountsOpname]: staticResponseForSummaryCounts,
+    const clustersForPermissionsAlias = 'sac/clusters';
+    const routeMatcherMapForClustersForPermissions = {
+        [clustersForPermissionsAlias]: {
+            method: 'GET',
+            url: '/v1/sac/clusters?',
+        },
     };
-    visit(basePath, routeMatcherMapForSummaryCounts, staticResponseMapForSummaryCounts);
+    const staticResponseMapForClustersForPermissions = {
+        [clustersForPermissionsAlias]: staticResponseForClustersForPermissions,
+    };
+    visit(
+        basePath,
+        routeMatcherMapForClustersForPermissions,
+        staticResponseMapForClustersForPermissions
+    );
 
     // Omit assertion for Dashboard heading.
 }

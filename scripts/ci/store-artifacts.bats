@@ -37,24 +37,36 @@ function setup() {
 }
 
 @test "stores" {
+    if [[ -n "${GITHUB_ACTION:-}" ]]; then
+        skip "not working on GHA"
+    fi
     run store_artifacts /tmp
     assert_success
     assert_output --partial "Destination: ${GS_URL}/tmp"
 }
 
 @test "stores to a different destination" {
+    if [[ -n "${GITHUB_ACTION:-}" ]]; then
+        skip "not working on GHA"
+    fi
     run store_artifacts /tmp different
     assert_success
     assert_output --partial "Destination: ${GS_URL}/different"
 }
 
 @test "stores to unique destinations" {
+    if [[ -n "${GITHUB_ACTION:-}" ]]; then
+        skip "not working on GHA"
+    fi
     run store_artifacts /tmp unique
     assert_success
     assert_output --partial "Destination: ${GS_URL}/unique-2"
 }
 
 @test "stores to unique destinations with many existing" {
+    if [[ -n "${GITHUB_ACTION:-}" ]]; then
+        skip "not working on GHA"
+    fi
     run store_artifacts /tmp many
     assert_success
     assert_output --partial "Destination: ${GS_URL}/many-10"
@@ -74,7 +86,7 @@ make_env() {
         PULL_PULL_SHA="12345"
     fi
     if is_OPENSHIFT_CI; then
-        GS_URL="gs://roxci-artifacts/${REPO_NAME}/${PULL_PULL_SHA:-${PULL_BASE_SHA}}/${BUILD_ID}-${JOB_NAME}"
+        GS_URL="gs://stackrox-ci-artifacts/${REPO_NAME}/${PULL_PULL_SHA:-${PULL_BASE_SHA}}/${BUILD_ID}-${JOB_NAME}"
     fi
     PATH="$BATS_RUN_TMPDIR:$PATH"
     TEST_OUTPUT=1

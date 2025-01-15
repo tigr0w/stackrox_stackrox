@@ -3,16 +3,18 @@ package centralclient
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/installation/store"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/grpc"
 	"github.com/stackrox/rox/pkg/grpc/client/authn/basic"
+	"github.com/stackrox/rox/pkg/images/defaults"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/telemetry/phonehome"
 	"github.com/stackrox/rox/pkg/telemetry/phonehome/telemeter"
@@ -23,7 +25,8 @@ import (
 )
 
 var (
-	apiWhiteList = env.RegisterSetting("ROX_TELEMETRY_API_WHITELIST", env.AllowEmpty())
+	apiWhiteList   = env.RegisterSetting("ROX_TELEMETRY_API_WHITELIST", env.AllowEmpty())
+	userAgentsList = env.RegisterSetting("ROX_TELEMETRY_USERAGENT_LIST", env.WithDefault("ServiceNow"), env.AllowEmpty())
 
 	config *phonehome.Config
 	once   sync.Once
@@ -33,12 +36,18 @@ var (
 	enabled  bool
 )
 
-func getInstanceConfig() (*phonehome.Config, map[string]any, error) {
-	key := env.TelemetryStorageKey.Setting()
-	if key == "" || env.OfflineModeEnv.BooleanSetting() {
-		return nil, nil, nil
+// getKey returns the configured key. If returned key is empty, telemetry should
+// be disabled.
+func getKey() (string, error) {
+	if env.OfflineModeEnv.BooleanSetting() {
+		return "", nil
 	}
+	key, err := phonehome.GetKey(env.TelemetryStorageKey.Setting(),
+		env.TelemetryConfigURL.Setting())
+	return key, errors.Wrap(err, "failed to get telemetry key")
+}
 
+func getInstanceConfig(id string, key string) (*phonehome.Config, map[string]any) {
 	// k8s apiserver is not accessible in cloud service environment.
 	v := &k8sVersion.Info{GitVersion: "unknown"}
 	if rc, err := rest.InClusterConfig(); err == nil {
@@ -50,44 +59,41 @@ func getInstanceConfig() (*phonehome.Config, map[string]any, error) {
 	}
 
 	trackedPaths = strings.Split(apiWhiteList.Setting(), ",")
+	trackedUserAgents = strings.Split(userAgentsList.Setting(), ",")
 
 	orchestrator := storage.ClusterType_KUBERNETES_CLUSTER.String()
 	if env.Openshift.BooleanSetting() {
 		orchestrator = storage.ClusterType_OPENSHIFT_CLUSTER.String()
 	}
 
-	ii, _, err := store.Singleton().Get(
-		sac.WithGlobalAccessScopeChecker(context.Background(),
-			sac.AllowFixedScopes(
-				sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
-				sac.ResourceScopeKeys(resources.InstallationInfo))))
-
-	if err != nil || ii == nil {
-		return nil, nil, errors.Wrap(err, "cannot get installation information")
-	}
-	centralID := ii.Id
-
 	tenantID := env.TenantID.Setting()
 	// Consider on-prem central a tenant of itself:
 	if tenantID == "" {
-		tenantID = centralID
+		tenantID = id
 	}
 
 	return &phonehome.Config{
-			ClientID:     centralID,
-			ClientName:   "Central",
-			GroupType:    "Tenant",
-			GroupID:      tenantID,
-			StorageKey:   key,
-			Endpoint:     env.TelemetryEndpoint.Setting(),
-			PushInterval: env.TelemetryFrequency.DurationSetting(),
+			// Segment does not respect the processing order of events in a
+			// batch. Setting BatchSize to 1, instead of default 250, may reduce
+			// the number of (none) values, appearing on Amplitude charts, by
+			// introducing a slight delay between consequent events.
+			BatchSize:     1,
+			ClientID:      id,
+			ClientName:    "Central",
+			ClientVersion: version.GetMainVersion(),
+			GroupType:     "Tenant",
+			GroupID:       tenantID,
+			StorageKey:    key,
+			Endpoint:      env.TelemetryEndpoint.Setting(),
+			PushInterval:  env.TelemetryFrequency.DurationSetting(),
 		}, map[string]any{
+			"Image Flavor":       defaults.GetImageFlavorNameFromEnv(),
 			"Central version":    version.GetMainVersion(),
 			"Chart version":      version.GetChartVersion(),
 			"Orchestrator":       orchestrator,
 			"Kubernetes version": v.GitVersion,
 			"Managed":            env.ManagedCentral.BooleanSetting(),
-		}, nil
+		}
 }
 
 // InstanceConfig collects the central instance telemetry configuration from
@@ -96,20 +102,32 @@ func getInstanceConfig() (*phonehome.Config, map[string]any, error) {
 // telemetry client. Returns nil if data collection is disabled.
 func InstanceConfig() *phonehome.Config {
 	once.Do(func() {
-		var err error
-		var props map[string]any
-		config, props, err = getInstanceConfig()
+		key, err := getKey()
 		if err != nil {
-			log.Errorf("Failed to get telemetry configuration: %v.", err)
+			log.Errorf("Failed to configure telemetry: %v.", err)
 			return
 		}
-		if config == nil {
-			log.Info("Phonehome telemetry collection disabled.")
+		if key == "" {
 			return
 		}
+
+		ii, _, err := store.Singleton().Get(
+			sac.WithGlobalAccessScopeChecker(context.Background(),
+				sac.AllowFixedScopes(
+					sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
+					sac.ResourceScopeKeys(resources.InstallationInfo))))
+
+		if err != nil || ii == nil {
+			log.Errorf("Failed to get installation information: %v.", err)
+			return
+		}
+
+		var props map[string]any
+		config, props = getInstanceConfig(ii.Id, key)
 		log.Info("Central ID: ", config.ClientID)
 		log.Info("Tenant ID: ", config.GroupID)
 		log.Info("API path telemetry enabled for: ", trackedPaths)
+		log.Info("API User-Agent telemetry enabled for: ", trackedUserAgents)
 
 		config.Gatherer().AddGatherer(func(ctx context.Context) (map[string]any, error) {
 			return props, nil
@@ -198,7 +216,15 @@ func Enable() *phonehome.Config {
 			cfg.AddInterceptorFunc(event, f)
 		}
 	}
-	cfg.Gatherer().Start(telemeter.WithGroups(cfg.GroupType, cfg.GroupID))
+	cfg.Gatherer().Start(
+		telemeter.WithGroups(cfg.GroupType, cfg.GroupID),
+		// Don't capture the time, but call WithNoDuplicates on every gathering
+		// iteration, so that the time is updated.
+		func(co *telemeter.CallOptions) {
+			// Issue a possible duplicate only once a day as a heartbeat.
+			telemeter.WithNoDuplicates(time.Now().Format(time.DateOnly))(co)
+		},
+	)
 	enabled = true
 	log.Info("Telemetry collection has been enabled.")
 	cfg.Telemeter().Track("Telemetry Enabled", nil)

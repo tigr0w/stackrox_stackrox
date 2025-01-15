@@ -9,40 +9,52 @@ import { ProcessIndicator } from './processIndicator.proto';
 export type Alert = DeploymentAlert | ImageAlert | ResourceAlert;
 
 export type DeploymentAlert = {
-    deployment: {
-        id: string;
-        name: string;
-        type: string;
-        namespace: string;
-        namespaceId: string;
-        labels: Record<string, string>;
-        clusterId: string;
-        clusterName: string;
-        containers: {
-            image: ContainerImage;
-            name: string;
-        }[];
-        annotations: Record<string, string>;
-        inactive: boolean;
-    };
+    deployment: AlertDeployment;
 } & BaseAlert;
+
+export type AlertDeployment = {
+    id: string;
+    name: string;
+    type: string;
+    namespace: string;
+    namespaceId: string;
+    labels: Record<string, string>;
+    clusterId: string;
+    clusterName: string;
+    containers: {
+        image: ContainerImage;
+        name: string;
+    }[];
+    annotations: Record<string, string>;
+    inactive: boolean;
+};
 
 export type ImageAlert = {
     image: ContainerImage;
 } & BaseAlert;
 
 export type ResourceAlert = {
-    resource: {
-        resourceType: AlertResourceType;
-        name: string;
-        clusterId: string;
-        clusterName: string;
-        namespace: string;
-        namespaceId: string;
-    };
+    resource: AlertResource;
 } & BaseAlert;
 
-export type AlertResourceType = 'UNKNOWN' | 'SECRETS' | 'CONFIGMAPS';
+export type AlertResource = {
+    resourceType: AlertResourceType;
+    name: string;
+    clusterId: string;
+    clusterName: string;
+    namespace: string;
+    namespaceId: string;
+};
+
+export type AlertResourceType =
+    | 'UNKNOWN'
+    | 'SECRETS'
+    | 'CONFIGMAPS'
+    | 'CLUSTER_ROLES'
+    | 'CLUSTER_ROLE_BINDINGS'
+    | 'NETWORK_POLICIES'
+    | 'SECURITY_CONTEXT_CONSTRAINTS'
+    | 'EGRESS_FIREWALLS';
 
 export function isDeploymentAlert(alert: Alert): alert is DeploymentAlert {
     return 'deployment' in alert && Boolean(alert.deployment);
@@ -114,7 +126,7 @@ type BaseViolation = {
     time: string | null; // ISO 8601 date string
 };
 
-export type ViolationType = 'GENERIC' | 'K8S_EVENT' | 'NETWORK_FLOW';
+export type ViolationType = 'GENERIC' | 'K8S_EVENT' | 'NETWORK_FLOW' | 'NETWORK_POLICY';
 
 export type ProcessViolation = {
     message: string;
@@ -132,7 +144,7 @@ export type ViolationState = 'ACTIVE' | 'SNOOZED' | 'RESOLVED' | 'ATTEMPTED';
 
 export type ListAlert = DeploymentListAlert | ResourceListAlert;
 
-type DeploymentListAlert = {
+export type DeploymentListAlert = {
     commonEntityInfo: CommonEntityInfo & {
         resourceType: 'DEPLOYMENT';
     };
@@ -149,7 +161,14 @@ type DeploymentListAlert = {
 
 export type ResourceListAlert = {
     commonEntityInfo: CommonEntityInfo & {
-        resourceType: 'SECRETS' | 'CONFIGMAPS';
+        resourceType:
+            | 'SECRETS'
+            | 'CONFIGMAPS'
+            | 'CLUSTER_ROLES'
+            | 'CLUSTER_ROLE_BINDINGS'
+            | 'NETWORK_POLICIES'
+            | 'SECURITY_CONTEXT_CONSTRAINTS'
+            | 'EGRESS_FIREWALLS';
     };
     resource: {
         name: string;
@@ -169,7 +188,15 @@ export type CommonEntityInfo = {
  * Unlike AlertResourceType this also includes deployment as a type.
  * This must be kept in sync with AlertResourceType (excluding the deployment value).
  */
-export type ListAlertResourceType = 'DEPLOYMENT' | 'SECRETS' | 'CONFIGMAPS';
+export type ListAlertResourceType =
+    | 'DEPLOYMENT'
+    | 'SECRETS'
+    | 'CONFIGMAPS'
+    | 'CLUSTER_ROLES'
+    | 'CLUSTER_ROLE_BINDINGS'
+    | 'NETWORK_POLICIES'
+    | 'SECURITY_CONTEXT_CONSTRAINTS'
+    | 'EGRESS_FIREWALLS';
 
 export type BaseListAlert = {
     id: string;
@@ -178,7 +205,6 @@ export type BaseListAlert = {
     policy: ListAlertPolicy;
     state: ViolationState;
     enforcementCount: number;
-    tags: string[];
     enforcementAction: EnforcementAction;
     commonEntityInfo: CommonEntityInfo;
 };

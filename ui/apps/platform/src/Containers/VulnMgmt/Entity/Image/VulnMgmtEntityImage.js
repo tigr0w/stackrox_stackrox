@@ -6,14 +6,11 @@ import useCases from 'constants/useCaseTypes';
 import entityTypes from 'constants/entityTypes';
 import { defaultCountKeyMap } from 'constants/workflowPages.constants';
 import workflowStateContext from 'Containers/workflowStateContext';
-import WorkflowEntityPage from 'Containers/Workflow/WorkflowEntityPage';
+import WorkflowEntityPage from '../WorkflowEntityPage';
 import {
-    VULN_CVE_ONLY_FRAGMENT_LEGACY,
     VULN_CVE_ONLY_FRAGMENT,
-    VULN_COMPONENT_ACTIVE_STATUS_LIST_FRAGMENT,
     VULN_IMAGE_COMPONENT_ACTIVE_STATUS_LIST_FRAGMENT,
-} from 'Containers/VulnMgmt/VulnMgmt.fragments';
-import useFeatureFlags from 'hooks/useFeatureFlags';
+} from '../../VulnMgmt.fragments';
 import VulnMgmtImageOverview from './VulnMgmtImageOverview';
 import EntityList from '../../List/VulnMgmtList';
 import {
@@ -30,11 +27,7 @@ const VulnMgmtImage = ({
     sort,
     page,
     refreshTrigger,
-    setRefreshTrigger,
 }) => {
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVMUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-
     const workflowState = useContext(workflowStateContext);
 
     const overviewQuery = gql`
@@ -55,13 +48,9 @@ const VulnMgmtImage = ({
                     }
                 }
                 notes
-                ${
-                    showVMUpdates
-                        ? 'imageVulnerabilityCount(query: $query)'
-                        : 'vulnCount(query: $query)'
-                }
+                imageVulnerabilityCount(query: $query)
                 priority
-                ${showVMUpdates ? 'topVuln: topImageVulnerability' : 'topVuln'} {
+                topVuln: topImageVulnerability {
                     cvss
                     scoreVersion
                 }
@@ -78,7 +67,7 @@ const VulnMgmtImage = ({
                         name
                     }
                     notes
-                    ${showVMUpdates ? 'components: imageComponents' : 'components'} {
+                    components: imageComponents {
                         id
                         priority
                         name
@@ -86,20 +75,18 @@ const VulnMgmtImage = ({
                         version
                         source
                         location
-                        ${showVMUpdates ? 'vulns: imageVulnerabilities' : 'vulns'} {
+                        vulns: imageVulnerabilities {
                             ...cveFields
                         }
                     }
                 }
             }
         }
-        ${showVMUpdates ? VULN_CVE_ONLY_FRAGMENT : VULN_CVE_ONLY_FRAGMENT_LEGACY}
+        ${VULN_CVE_ONLY_FRAGMENT}
     `;
 
     function getListQuery(listFieldName, fragmentName, fragment) {
-        const activeStatusFragment = showVMUpdates
-            ? VULN_IMAGE_COMPONENT_ACTIVE_STATUS_LIST_FRAGMENT
-            : VULN_COMPONENT_ACTIVE_STATUS_LIST_FRAGMENT;
+        const activeStatusFragment = VULN_IMAGE_COMPONENT_ACTIVE_STATUS_LIST_FRAGMENT;
         const fragmentToUse =
             fragmentName === 'componentFields' || fragmentName === 'imageComponentFields'
                 ? activeStatusFragment
@@ -144,7 +131,6 @@ const VulnMgmtImage = ({
             page={page}
             queryOptions={queryOptions}
             entityContext={entityContext}
-            setRefreshTrigger={setRefreshTrigger}
         />
     );
 };

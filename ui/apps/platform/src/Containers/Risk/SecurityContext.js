@@ -1,7 +1,8 @@
 import React from 'react';
 
-import KeyValuePairs from 'Components/KeyValuePairs';
 import CollapsibleCard from 'Components/CollapsibleCard';
+
+import KeyValuePairs from './KeyValuePairs';
 
 const containerSecurityContextMap = {
     privileged: { label: 'Privileged' },
@@ -13,7 +14,7 @@ const getSecurityContext = (container) => {
     if (!container.securityContext) {
         return null;
     }
-    const { privileged, add_capabilities, drop_capabilities } = container.securityContext; // eslint-disable-line
+    const { privileged, add_capabilities, drop_capabilities } = container.securityContext;
     return { privileged, add_capabilities, drop_capabilities };
 };
 
@@ -24,22 +25,20 @@ const SecurityContext = ({ deployment }) => {
             .filter((container) => container.securityContext)
             .map((container) => {
                 const data = getSecurityContext(container);
-                if (data === {}) {
+                if (data === null || !Object.values(data).some((value) => !!value)) {
                     return null;
                 }
                 return (
                     <div key={container.id}>
-                        {data && (
-                            <KeyValuePairs data={data} keyValueMap={containerSecurityContextMap} />
-                        )}
+                        <KeyValuePairs data={data} keyValueMap={containerSecurityContextMap} />
                     </div>
                 );
             });
         if (!containers.length) {
-            containers = <span className="py-3 font-600">None</span>;
+            containers = <span className="py-3">None</span>;
         }
     } else {
-        containers = <span className="py-3 font-600">None</span>;
+        containers = <span className="py-3">None</span>;
     }
     return (
         <div className="px-3 pt-5">

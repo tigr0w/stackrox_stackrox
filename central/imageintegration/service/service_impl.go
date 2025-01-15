@@ -4,14 +4,18 @@ import (
 	"context"
 	"sort"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
+	"github.com/stackrox/rox/central/cloudproviders/gcp"
 	clusterDatastore "github.com/stackrox/rox/central/cluster/datastore"
+	deleConnection "github.com/stackrox/rox/central/delegatedregistryconfig/util/connection"
+	"github.com/stackrox/rox/central/delegatedregistryconfig/util/imageintegration"
 	"github.com/stackrox/rox/central/enrichment"
 	"github.com/stackrox/rox/central/imageintegration/datastore"
 	"github.com/stackrox/rox/central/reprocessor"
-	"github.com/stackrox/rox/central/role/resources"
+	"github.com/stackrox/rox/central/sensor/service/connection"
 	v1 "github.com/stackrox/rox/generated/api/v1"
+	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/endpoints"
@@ -24,14 +28,17 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/nodes/enricher"
 	"github.com/stackrox/rox/pkg/registries"
+	"github.com/stackrox/rox/pkg/registries/types"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/scanners"
+	scannerTypes "github.com/stackrox/rox/pkg/scanners/types"
 	"github.com/stackrox/rox/pkg/secrets"
 	"google.golang.org/grpc"
 )
 
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
-		or.SensorOrAuthorizer(user.With(permissions.View(resources.Integration))): {
+		or.SensorOr(user.With(permissions.View(resources.Integration))): {
 			"/v1.ImageIntegrationService/GetImageIntegration",
 			"/v1.ImageIntegrationService/GetImageIntegrations",
 		},
@@ -57,6 +64,7 @@ type serviceImpl struct {
 	datastore          datastore.DataStore
 	clusterDatastore   clusterDatastore.DataStore
 	reprocessorLoop    reprocessor.Loop
+	connManager        connection.Manager
 }
 
 // RegisterServiceServer registers this service with the given gRPC Server.
@@ -148,6 +156,11 @@ func (s *serviceImpl) PostImageIntegration(ctx context.Context, request *storage
 		return nil, errors.Wrap(errox.InvalidArgs, "id field should be empty when posting a new image integration")
 	}
 
+	// Do not allow manual creation of a scanner v4 integration.
+	if request.GetType() == scannerTypes.ScannerV4 {
+		return nil, errors.Wrap(errox.InvalidArgs, "scanner V4 integration cannot be manually created")
+	}
+
 	if err := s.validateTestAndNormalize(ctx, request); err != nil {
 		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
 	}
@@ -163,6 +176,8 @@ func (s *serviceImpl) PostImageIntegration(ctx context.Context, request *storage
 		_ = s.datastore.RemoveImageIntegration(ctx, request.GetId())
 		return nil, err
 	}
+
+	s.broadcastUpdate(ctx, request)
 	s.reprocessorLoop.ShortCircuit()
 	return request, nil
 }
@@ -172,6 +187,19 @@ func (s *serviceImpl) DeleteImageIntegration(ctx context.Context, request *v1.Re
 	if request.GetId() == "" {
 		return nil, errors.Wrap(errox.InvalidArgs, "image integration id must be provided")
 	}
+
+	// Pull the existing integration to determine if should broadcast the delete to sensors.
+	// Do this to avoid sending blind delete messages to potentially many clusters unnecessarily.
+	ii, existed, err := s.datastore.GetImageIntegration(ctx, request.GetId())
+	if err != nil {
+		return nil, err
+	}
+
+	// Do not allow manual deletion of a scanner v4 integration.
+	if existed && ii.GetType() == scannerTypes.ScannerV4 {
+		return nil, errors.Wrap(errox.InvalidArgs, "scanner V4 integration cannot be deleted")
+	}
+
 	if err := s.datastore.RemoveImageIntegration(ctx, request.GetId()); err != nil {
 		return nil, err
 	}
@@ -179,6 +207,11 @@ func (s *serviceImpl) DeleteImageIntegration(ctx context.Context, request *v1.Re
 	if err := s.integrationManager.Remove(request.GetId()); err != nil {
 		return nil, err
 	}
+
+	if existed {
+		s.broadcastDelete(ctx, ii)
+	}
+
 	return &v1.Empty{}, nil
 }
 
@@ -200,6 +233,8 @@ func (s *serviceImpl) UpdateImageIntegration(ctx context.Context, request *v1.Up
 	if err := s.integrationManager.Upsert(request.GetConfig()); err != nil {
 		return nil, err
 	}
+
+	s.broadcastUpdate(ctx, request.GetConfig())
 	s.reprocessorLoop.ShortCircuit()
 	return &v1.Empty{}, nil
 }
@@ -236,7 +271,7 @@ func (s *serviceImpl) testImageIntegration(request *storage.ImageIntegration) er
 			}
 		}
 		if category == storage.ImageIntegrationCategory_NODE_SCANNER {
-			nodeIntegration, err := imageIntegrationToNodeIntegration(request)
+			nodeIntegration, err := enrichment.ImageIntegrationToNodeIntegration(request)
 			if err != nil {
 				return errors.Wrap(errox.InvalidArgs, errors.Wrap(err, "node scanner integration").Error())
 			}
@@ -249,7 +284,7 @@ func (s *serviceImpl) testImageIntegration(request *storage.ImageIntegration) er
 }
 
 func (s *serviceImpl) testRegistryIntegration(integration *storage.ImageIntegration) error {
-	registry, err := s.registryFactory.CreateRegistry(integration)
+	registry, err := s.registryFactory.CreateRegistry(integration, types.WithGCPTokenManager(gcp.Singleton()))
 	if err != nil {
 		return errors.Wrap(errox.InvalidArgs, err.Error())
 	}
@@ -310,6 +345,27 @@ func (s *serviceImpl) validateIntegration(ctx context.Context, request *storage.
 }
 
 func (s *serviceImpl) reconcileUpdateImageIntegrationRequest(ctx context.Context, updateRequest *v1.UpdateImageIntegrationRequest) error {
+	var integration *storage.ImageIntegration
+	var exists bool
+	var err error
+
+	// Use the presence of ID to determine if this request is for an updated integration.
+	if updateRequest.GetConfig().GetId() != "" {
+		integration, exists, err = s.datastore.GetImageIntegration(ctx, updateRequest.GetConfig().GetId())
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errors.Wrapf(errox.NotFound, "image integration %q not found", updateRequest.GetConfig().GetId())
+		}
+
+		newType := updateRequest.GetConfig().GetType()
+		oldType := integration.GetType()
+		if newType != oldType && (newType == scannerTypes.ScannerV4 || oldType == scannerTypes.ScannerV4) {
+			return errors.Wrap(errox.InvalidArgs, "cannot change integration type to/from scanner V4")
+		}
+	}
+
 	if updateRequest.GetUpdatePassword() {
 		return nil
 	}
@@ -318,13 +374,6 @@ func (s *serviceImpl) reconcileUpdateImageIntegrationRequest(ctx context.Context
 	}
 	if updateRequest.GetConfig().GetId() == "" {
 		return errors.Wrap(errox.InvalidArgs, "id required for stored credential reconciliation")
-	}
-	integration, exists, err := s.datastore.GetImageIntegration(ctx, updateRequest.GetConfig().GetId())
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return errors.Wrapf(errox.NotFound, "image integration %s not found", updateRequest.GetConfig().GetId())
 	}
 	if err := s.reconcileImageIntegrationWithExisting(updateRequest.GetConfig(), integration); err != nil {
 		return errors.Wrap(errox.InvalidArgs, err.Error())
@@ -337,4 +386,58 @@ func (s *serviceImpl) reconcileImageIntegrationWithExisting(updatedConfig, store
 		return errors.New("the request doesn't have a valid integration config type")
 	}
 	return secrets.ReconcileScrubbedStructWithExisting(updatedConfig, storedConfig)
+}
+
+// broadcastUpdate will send the updated image integration to all Sensors that can handle
+// the update if the integration is valid for broadcasting (not auto generated, is a registry, etc.).
+func (s *serviceImpl) broadcastUpdate(ctx context.Context, ii *storage.ImageIntegration) {
+	if !imageintegration.ValidForSync(ii) {
+		return
+	}
+
+	msg := &central.MsgToSensor{
+		Msg: &central.MsgToSensor_ImageIntegrations{
+			ImageIntegrations: &central.ImageIntegrations{
+				UpdatedIntegrations: []*storage.ImageIntegration{ii},
+			},
+		},
+	}
+
+	s.broadcast(ctx, "updated", ii, msg)
+}
+
+// broadcastDelete will send the deleted image integration to all Sensors that can handle
+// the update.
+func (s *serviceImpl) broadcastDelete(ctx context.Context, ii *storage.ImageIntegration) {
+	if !imageintegration.ValidForSync(ii) {
+		return
+	}
+
+	msg := &central.MsgToSensor{
+		Msg: &central.MsgToSensor_ImageIntegrations{
+			ImageIntegrations: &central.ImageIntegrations{
+				DeletedIntegrationIds: []string{ii.GetId()},
+			},
+		},
+	}
+
+	s.broadcast(ctx, "deleted", ii, msg)
+}
+
+func (s *serviceImpl) broadcast(ctx context.Context, action string, ii *storage.ImageIntegration, msg *central.MsgToSensor) {
+	log.Infof("Broadcasting %v image integration %q (%v)", action, ii.GetName(), ii.GetId())
+	for _, conn := range s.connManager.GetActiveConnections() {
+		if !deleConnection.ValidForDelegation(conn) {
+			continue
+		}
+
+		clusterID := conn.ClusterID()
+
+		log.Debugf("Sending %v image integration %q (%v) to cluster %q", action, ii.GetName(), ii.GetId(), clusterID)
+
+		err := conn.InjectMessage(ctx, msg)
+		if err != nil {
+			log.Warnf("Failed to send %v image integration %q (%v) to cluster %q", action, ii.GetName(), ii.GetId(), clusterID)
+		}
+	}
 }

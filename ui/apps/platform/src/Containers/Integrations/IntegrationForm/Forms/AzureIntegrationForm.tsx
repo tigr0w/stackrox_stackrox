@@ -1,6 +1,7 @@
 import React, { ReactElement } from 'react';
 import { TextInput, PageSection, Form, Checkbox } from '@patternfly/react-core';
 import * as yup from 'yup';
+import merge from 'lodash/merge';
 
 import { ImageIntegrationBase } from 'services/ImageIntegrationsService';
 
@@ -89,13 +90,14 @@ export const defaultValues: AzureIntegrationFormValues = {
     updatePassword: true,
 };
 
-function ClairifyIntegrationForm({
+function AzureIntegrationForm({
     initialValues = null,
     isEditable = false,
 }: IntegrationFormProps<AzureIntegration>): ReactElement {
-    const formInitialValues = { ...defaultValues, ...initialValues };
+    const formInitialValues = structuredClone(defaultValues);
     if (initialValues) {
-        formInitialValues.config = { ...formInitialValues.config, ...initialValues };
+        merge(formInitialValues.config, initialValues);
+
         // We want to clear the password because backend returns '******' to represent that there
         // are currently stored credentials
         formInitialValues.config.docker.password = '';
@@ -150,7 +152,7 @@ function ClairifyIntegrationForm({
                             id="config.name"
                             placeholder="(ex. Azure Registry)"
                             value={values.config.name}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -168,7 +170,7 @@ function ClairifyIntegrationForm({
                             id="config.docker.endpoint"
                             placeholder="(ex. <registry>.azurecr.io)"
                             value={values.config.docker.endpoint}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -184,7 +186,7 @@ function ClairifyIntegrationForm({
                             type="text"
                             id="config.docker.username"
                             value={values.config.docker.username}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -199,7 +201,7 @@ function ClairifyIntegrationForm({
                                 label="Update stored credentials"
                                 id="updatePassword"
                                 isChecked={values.updatePassword}
-                                onChange={onUpdateCredentialsChange}
+                                onChange={(event, value) => onUpdateCredentialsChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             />
@@ -217,7 +219,7 @@ function ClairifyIntegrationForm({
                             type="password"
                             id="config.docker.password"
                             value={values.config.docker.password}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable || !values.updatePassword}
                             placeholder={
@@ -233,11 +235,11 @@ function ClairifyIntegrationForm({
                         errors={errors}
                     >
                         <Checkbox
-                            label="Create Integration Without Testing"
+                            label="Create integration without testing"
                             id="config.skipTestIntegration"
                             aria-label="skip test integration"
                             isChecked={values.config.skipTestIntegration}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -269,4 +271,4 @@ function ClairifyIntegrationForm({
     );
 }
 
-export default ClairifyIntegrationForm;
+export default AzureIntegrationForm;

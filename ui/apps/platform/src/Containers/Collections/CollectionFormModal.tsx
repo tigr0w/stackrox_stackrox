@@ -14,6 +14,7 @@ import {
 import { ExternalLinkAltIcon } from '@patternfly/react-icons';
 import { useMediaQuery } from 'react-responsive';
 
+import ExternalLink from 'Components/PatternFly/IconText/ExternalLink';
 import useSelectToggle from 'hooks/patternfly/useSelectToggle';
 import { collectionsBasePath } from 'routePaths';
 import { Collection } from 'services/CollectionsService';
@@ -22,12 +23,14 @@ import CollectionFormDrawer, { CollectionFormDrawerProps } from './CollectionFor
 import CollectionLoadError from './CollectionLoadError';
 import { CollectionPageAction } from './collections.utils';
 
+export type CollectionFormModalAction = Extract<
+    { type: 'create' } | { type: 'view'; collectionId: string },
+    CollectionPageAction
+>;
+
 export type CollectionsFormModalProps = {
     hasWriteAccessForCollections: boolean;
-    modalAction: Extract<
-        { type: 'create' } | { type: 'view'; collectionId: string },
-        CollectionPageAction
-    >;
+    modalAction: CollectionFormModalAction;
     onClose: () => void;
     onSubmit?: CollectionFormDrawerProps['onSubmit'];
     configError?: CollectionFormDrawerProps['configError'];
@@ -70,7 +73,7 @@ function CollectionsFormModal({
     configError,
     setConfigError,
 }: CollectionsFormModalProps) {
-    const isXLargeScreen = useMediaQuery({ query: '(min-width: 1200px)' }); // --pf-global--breakpoint--xl
+    const isXLargeScreen = useMediaQuery({ query: '(min-width: 1200px)' }); // --pf-v5-global--breakpoint--xl
     const {
         isOpen: isDrawerOpen,
         toggleSelect: toggleDrawer,
@@ -78,7 +81,7 @@ function CollectionsFormModal({
         openSelect: openDrawer,
     } = useSelectToggle(isXLargeScreen);
 
-    const { data, loading, error } = useCollection(
+    const { data, isLoading, error } = useCollection(
         modalAction.type === 'view' ? modalAction.collectionId : undefined
     );
 
@@ -88,7 +91,7 @@ function CollectionsFormModal({
 
     if (error) {
         content = (
-            <Bullseye className="pf-u-p-2xl">
+            <Bullseye className="pf-v5-u-p-2xl">
                 <CollectionLoadError
                     title="There was an error loading this collection"
                     error={error}
@@ -96,10 +99,10 @@ function CollectionsFormModal({
             </Bullseye>
         );
         modalTitle = 'Collection error';
-    } else if (loading) {
+    } else if (isLoading) {
         content = (
-            <Bullseye className="pf-u-p-2xl">
-                <Spinner isSVG />
+            <Bullseye className="pf-v5-u-p-2xl">
+                <Spinner />
             </Bullseye>
         );
         modalTitle = 'Loading collection';
@@ -123,22 +126,20 @@ function CollectionsFormModal({
     }
 
     const modalHeaderButtons =
-        error || loading ? (
+        error || isLoading ? (
             ''
         ) : (
             <>
                 {hasWriteAccessForCollections && modalAction.type === 'view' && (
-                    <Button
-                        variant="link"
-                        component="a"
-                        href={`${collectionsBasePath}/${modalAction.collectionId}?action=edit`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        icon={<ExternalLinkAltIcon />}
-                        iconPosition="right"
-                    >
-                        Edit collection
-                    </Button>
+                    <ExternalLink>
+                        <a
+                            href={`${collectionsBasePath}/${modalAction.collectionId}?action=edit`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            Edit collection
+                        </a>
+                    </ExternalLink>
                 )}
                 {isDrawerOpen ? (
                     <Button variant="secondary" onClick={closeDrawer}>
@@ -161,7 +162,7 @@ function CollectionsFormModal({
             width="90vw"
             hasNoBodyWrapper
             header={
-                <Flex className="pf-u-pb-md" alignItems={{ default: 'alignItemsCenter' }}>
+                <Flex className="pf-v5-u-pb-md" alignItems={{ default: 'alignItemsCenter' }}>
                     <FlexItem grow={{ default: 'grow' }}>
                         <Title headingLevel="h2">{modalTitle}</Title>
                     </FlexItem>
@@ -171,8 +172,9 @@ function CollectionsFormModal({
         >
             {configError && (
                 <Alert
-                    className="pf-u-mx-lg pf-u-mb-md"
+                    className="pf-v5-u-mx-lg pf-v5-u-mb-md"
                     title={configError.message}
+                    component="p"
                     variant="danger"
                     isInline
                 >

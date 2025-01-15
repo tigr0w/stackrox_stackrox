@@ -1,5 +1,7 @@
 import static util.Helpers.withRetry
 
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 import io.grpc.StatusRuntimeException
@@ -10,7 +12,8 @@ import io.stackrox.proto.api.v1.NotifierServiceOuterClass
 import io.stackrox.proto.storage.AuthProviderOuterClass.AuthProvider
 import io.stackrox.proto.storage.GroupOuterClass.GroupProperties
 import io.stackrox.proto.storage.GroupOuterClass.Group
-import io.stackrox.proto.storage.IntegrationHealthOuterClass.IntegrationHealth.Status
+import io.stackrox.proto.storage.DeclarativeConfigHealthOuterClass.DeclarativeConfigHealth.Status
+import io.stackrox.proto.storage.DeclarativeConfigHealthOuterClass.DeclarativeConfigHealth.ResourceType
 import io.stackrox.proto.storage.NotifierOuterClass.Notifier
 import io.stackrox.proto.storage.NotifierOuterClass.Splunk
 import io.stackrox.proto.storage.RoleOuterClass.Access
@@ -21,33 +24,32 @@ import io.stackrox.proto.storage.TraitsOuterClass.Traits
 
 import services.AuthProviderService
 import services.GroupService
-import services.IntegrationHealthService
+import services.DeclarativeConfigHealthService
 import services.NotifierService
 import services.RoleService
 
-import org.junit.Rule
-import org.junit.rules.Timeout
-import spock.lang.Retry
 import spock.lang.Tag
 
-@Retry(count = 0)
+@Tag("Parallel")
+@Tag("PZ")
 class DeclarativeConfigTest extends BaseSpecification {
     static final private String DEFAULT_NAMESPACE = "stackrox"
 
     static final private String CONFIGMAP_NAME = "declarative-configurations"
 
     // The keys are used within the config map to indicate the specific resources.
-    static final private String PERMISSION_SET_KEY = "permission-set"
-    static final private String ACCESS_SCOPE_KEY = "access-scope"
-    static final private String ROLE_KEY = "role"
-    static final private String AUTH_PROVIDER_KEY = "auth-provider"
-    static final private String NOTIFIER_KEY = "notifier"
+    static final private String PERMISSION_SET_KEY = "declarative-config-test--permission-set"
+    static final private String ACCESS_SCOPE_KEY = "declarative-config-test--access-scope"
+    static final private String ROLE_KEY = "declarative-config-test--role"
+    static final private String AUTH_PROVIDER_KEY = "declarative-config-test--auth-provider"
+    static final private String NOTIFIER_KEY = "declarative-config-test--notifier"
 
     static final private int CREATED_RESOURCES = 7
+    static final private int MOUNTED_RESOURCES = 2
 
-    static final private int RETRIES = 30
-    static final private int DELETION_RETRIES = 45
-    static final private int PAUSE_SECS = 10
+    static final private int RETRIES = 60
+    static final private int DELETION_RETRIES = 60
+    static final private int PAUSE_SECS = 3
 
     // Values used within testing for permission sets.
     // These include:
@@ -192,10 +194,6 @@ oidc:
 name: ${AUTH_PROVIDER_KEY}
 minimumRole: "None"
 uiEndpoint: localhost:8000
-groups:
-- key: "email"
-  value: "someone@example.com"
-  role: "Admin"
 oidc:
   issuer: example.com
   mode: fragment
@@ -227,13 +225,42 @@ splunk:
                     .putAllSourceTypes(["audit": "stackrox-audit-message", "alert": "stackrox-alert"])
             ).build()
 
-    // Overwrite the default timeout, as these tests may take longer than 800 seconds to finish.
-    @Rule
-    @SuppressWarnings(["JUnitPublicProperty"])
-    Timeout globalTimeout = new Timeout(1200, TimeUnit.SECONDS)
+    private ScheduledFuture<?> annotateTaskHandle
+
+    def setup() {
+        // We use this hack to speed up declarative config volume reconciliation.
+        // The reason this works is because kubelet reconciles volume from secret when:
+        // 1) Something about the pod changes
+        // 2) Somewhat around 1 minute passes
+        // Updating value of annotation thus triggers reconciliation of declarative config.
+        annotateTaskHandle = Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(new Runnable() {
+            @Override
+            void run() {
+                try {
+                    def value = String.valueOf(System.currentTimeMillis())
+                    orchestrator.addPodAnnotationByApp(DEFAULT_NAMESPACE, "central", "test", value)
+                } catch (Exception e) {
+                    log.error( "Failed adding annotation to central", e)
+                }
+            }
+        }, 0, 1, TimeUnit.SECONDS)
+    }
 
     def cleanup() {
         orchestrator.deleteConfigMap(CONFIGMAP_NAME, DEFAULT_NAMESPACE)
+
+        // Ensure we do not have stale integration health info and only the Config Map one exists.
+        withRetry(DELETION_RETRIES, PAUSE_SECS) {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            assert response.getHealthsCount() == MOUNTED_RESOURCES
+            def configMapHealth = response.getHealths(0)
+            assert configMapHealth
+            assert configMapHealth.getResourceType() == ResourceType.CONFIG_MAP
+            assert configMapHealth.getErrorMessage() == ""
+            assert configMapHealth.getStatus() == Status.HEALTHY
+        }
+
+        annotateTaskHandle.cancel(true)
     }
 
     @Tag("BAT")
@@ -248,10 +275,10 @@ splunk:
         // has been triggered.
         // If the tests are flaky, we have to increase this value.
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            // Expect 6 integration health status for the created resources and one for the config map.
-            assert response.integrationHealthCount == CREATED_RESOURCES + 1
-            for (integrationHealth in response.integrationHealthList) {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            // Expect 7 integration health status for the created resources and 2 for declarative config mounts.
+            assert response.healthsCount == CREATED_RESOURCES + MOUNTED_RESOURCES
+            for (integrationHealth in response.healthsList) {
                 assert integrationHealth.hasLastTimestamp()
                 assert integrationHealth.getErrorMessage() == ""
                 assert integrationHealth.getStatus() == Status.HEALTHY
@@ -274,13 +301,23 @@ splunk:
         assert authProvider
 
         // Verify the groups are created successfully, and specify the origin declarative.
-        def expectedGroups = [VALID_DEFAULT_GROUP, VALID_DECLARATIVE_GROUP]
-        def foundGroups = verifyDeclarativeGroups(authProvider.getId(), expectedGroups)
-        assert foundGroups == expectedGroups.size() :
-                "expected to find ${expectedGroups.size()} groups, but only found ${foundGroups}"
+        def expectedGroups = [VALID_DECLARATIVE_GROUP, VALID_DEFAULT_GROUP]
+                .sort { it.roleName }
+        def groupsResponse = GroupService.getGroups(
+                GroupServiceOuterClass.GetGroupsRequest.newBuilder().setAuthProviderId(authProvider.getId()).build())
 
-        def notifier = verifyDeclarativeNotifier(VALID_NOTIFIER)
-        assert notifier
+        def retrievedGroups = groupsResponse.getGroupsList().collect()
+        retrievedGroups.sort { it.roleName }
+        verifyAll(retrievedGroups) {
+            it.roleName == expectedGroups.roleName
+            it.props.key == expectedGroups.props.key
+            it.props.value == expectedGroups.props.value
+            it.props.traits.origin == expectedGroups.props.traits.origin
+            it.props.authProviderId.every { it == authProvider.id }
+        }
+
+        // Verify the notifier is created successfully, and does specify the origin declarative.
+        assert verifyDeclarativeNotifier(VALID_NOTIFIER)
 
         when:
         // Update the config map to contain an invalid permission set YAML.
@@ -291,8 +328,8 @@ splunk:
         // The errors will be surface after at least three consecutive occurrences, hence we need to retry multiple
         // times here.
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def permissionSetHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def permissionSetHealth = response.getHealthsList().find {
                 it.getName().contains(PERMISSION_SET_KEY)
             }
             assert permissionSetHealth
@@ -312,8 +349,8 @@ splunk:
         // The errors will be surface after at least three consecutive occurrences, hence we need to retry multiple
         // times here.
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def accessScopeHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def accessScopeHealth = response.getHealthsList().find {
                 it.getName().contains(ACCESS_SCOPE_KEY)
             }
             assert accessScopeHealth
@@ -331,8 +368,8 @@ splunk:
         then:
         // Verify the integration health for the role is unhealthy and contains an error message.
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def roleHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def roleHealth = response.getHealthsList().find {
                 it.getName().contains(ROLE_KEY)
             }
             assert roleHealth
@@ -352,8 +389,8 @@ splunk:
         // The errors will be surface after at least three consecutive occurrences, hence we need to retry multiple
         // times here.
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def roleHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def roleHealth = response.getHealthsList().find {
                 it.getName().contains(AUTH_PROVIDER_KEY)
             }
             assert roleHealth
@@ -376,11 +413,11 @@ splunk:
 
         then:
         withRetry(DELETION_RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            assert response.getIntegrationHealthCount() == 1
-            def configMapHealth = response.getIntegrationHealth(0)
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            assert response.getHealthsCount() == MOUNTED_RESOURCES
+            def configMapHealth = response.getHealths(0)
             assert configMapHealth
-            assert configMapHealth.getName().contains("Config Map")
+            assert configMapHealth.getResourceType() == ResourceType.CONFIG_MAP
             assert configMapHealth.getErrorMessage() == ""
             assert configMapHealth.getStatus() == Status.HEALTHY
         }
@@ -437,13 +474,13 @@ splunk:
 
         then:
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            // Expect 6 integration health status for the created resources and one for the config map.
-            assert response.integrationHealthCount == CREATED_RESOURCES
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            // Expect 5 integration health status for the created resources and 2 for declarative config mounts.
+            assert response.healthsCount == CREATED_RESOURCES - 2 + MOUNTED_RESOURCES
 
-            for (integrationHealth in response.getIntegrationHealthList()) {
+            for (integrationHealth in response.getHealthsList()) {
                 // Config map health will be healthy and do not indicate an error.
-                if (integrationHealth.getName().contains("Config Map")) {
+                if (integrationHealth.getResourceType() == ResourceType.CONFIG_MAP) {
                     assert integrationHealth
                     assert integrationHealth.hasLastTimestamp()
                     assert integrationHealth.getErrorMessage() == ""
@@ -488,9 +525,9 @@ splunk:
         then:
         // Only the config map health status should exist, all others should be removed.
         withRetry(DELETION_RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            assert response.getIntegrationHealthCount() == 1
-            def configMapHealth = response.getIntegrationHealth(0)
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            assert response.getHealthsCount() == MOUNTED_RESOURCES
+            def configMapHealth = response.getHealths(0)
             assert configMapHealth
             assert configMapHealth.getName().contains("Config Map")
             assert configMapHealth.getErrorMessage() == ""
@@ -510,10 +547,10 @@ splunk:
         // has been triggered.
         // If the tests are flaky, we have to increase this value.
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            // Expect 6 integration health status for the created resources and one for the config map.
-            assert response.integrationHealthCount == CREATED_RESOURCES + 1
-            for (integrationHealth in response.integrationHealthList) {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            // Expect 7 integration health status for the created resources and 2 for declarative config mounts.
+            assert response.healthsCount == CREATED_RESOURCES + MOUNTED_RESOURCES
+            for (integrationHealth in response.healthsList) {
                 assert integrationHealth.hasLastTimestamp()
                 assert integrationHealth.getErrorMessage() == ""
                 assert integrationHealth.getStatus() == Status.HEALTHY
@@ -528,8 +565,8 @@ splunk:
         // The errors will be surface after at least three consecutive occurrences, hence we need to retry multiple
         // times here.
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def permissionSetHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def permissionSetHealth = response.getHealthsList().find {
                 it.getName().contains(PERMISSION_SET_KEY)
             }
             assert permissionSetHealth
@@ -548,8 +585,8 @@ splunk:
 
         then:
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def permissionSetHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def permissionSetHealth = response.getHealthsList().find {
                 it.getName().contains(PERMISSION_SET_KEY)
             }
             assert permissionSetHealth
@@ -563,8 +600,8 @@ splunk:
 
         then:
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def accessScopeHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def accessScopeHealth = response.getHealthsList().find {
                 it.getName().contains(ACCESS_SCOPE_KEY)
             }
             assert accessScopeHealth
@@ -583,8 +620,8 @@ splunk:
 
         then:
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def accessScopeHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def accessScopeHealth = response.getHealthsList().find {
                 it.getName().contains(ACCESS_SCOPE_KEY)
             }
             assert accessScopeHealth
@@ -594,11 +631,14 @@ splunk:
         }
 
         when:
-        def authProvidersResponse = AuthProviderService.getAuthProviders()
-        def authProvider = authProvidersResponse.getAuthProvidersList().find {
-            it.getName() == AUTH_PROVIDER_KEY
+        def authProvider = null
+        withRetry(RETRIES, PAUSE_SECS) {
+            def authProvidersResponse = AuthProviderService.getAuthProviders()
+            authProvider = authProvidersResponse.getAuthProvidersList().find {
+                it.getName() == AUTH_PROVIDER_KEY
+            }
+            assert authProvider
         }
-        assert authProvider
         def imperativeGroup = Group.newBuilder()
                 .setRoleName(ROLE_KEY)
                 .setProps(GroupProperties.newBuilder()
@@ -618,8 +658,8 @@ splunk:
 
         then:
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def roleHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def roleHealth = response.getHealthsList().find {
                 it.getName().contains(ROLE_KEY)
             }
             assert roleHealth
@@ -638,8 +678,8 @@ splunk:
 
         then:
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            def roleHealth = response.getIntegrationHealthList().find {
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            def roleHealth = response.getHealthsList().find {
                 it.getName().contains(ROLE_KEY)
             }
             assert roleHealth
@@ -653,13 +693,14 @@ splunk:
 
         then:
         withRetry(RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
             // After auth provider deletion we should be left only with integration health for:
             // - access scope
             // - role
             // - permission set
-            // - config map
-            assert response.getIntegrationHealthCount() == 5
+            // - notifier
+            // - 2 config maps
+            assert response.getHealthsCount() == 6
         }
 
         when:
@@ -676,11 +717,11 @@ splunk:
         then:
         // Only the config map health status should exist, all others should be removed.
         withRetry(DELETION_RETRIES, PAUSE_SECS) {
-            def response = IntegrationHealthService.getDeclarativeConfigHealthInfo()
-            assert response.getIntegrationHealthCount() == 1
-            def configMapHealth = response.getIntegrationHealth(0)
+            def response = DeclarativeConfigHealthService.getDeclarativeConfigHealthInfo()
+            assert response.getHealthsCount() == MOUNTED_RESOURCES
+            def configMapHealth = response.getHealths(0)
             assert configMapHealth
-            assert configMapHealth.getName().contains("Config Map")
+            assert configMapHealth.getResourceType() == ResourceType.CONFIG_MAP
             assert configMapHealth.getErrorMessage() == ""
             assert configMapHealth.getStatus() == Status.HEALTHY
         }
@@ -693,6 +734,7 @@ splunk:
     //  - access scope with valid configuration.
     //  - role with valid configuration, referencing the previously created permission set / access scope.
     //  - auth provider with valid configuration, and two groups (one default, one separate)
+    //  - notifier with valid configuration.
     private createDefaultSetOfResources(String configMapName, String namespace) {
         orchestrator.createConfigMap(configMapName,
                 [
@@ -722,20 +764,24 @@ splunk:
     private Role verifyDeclarativeRole(Role expectedRole, String permissionSetID, String accessScopeID) {
         def role = RoleService.getRole(expectedRole.getName())
         assert role : "declarative role ${expectedRole.getName()} does not exist"
-        assert role.getName() == expectedRole.getName()
-        assert role.getDescription() == expectedRole.getDescription()
-        assert role.getTraits().getOrigin() == expectedRole.getTraits().getOrigin()
-        assert role.getAccessScopeId() == accessScopeID
-        assert role.getPermissionSetId() == permissionSetID
+        verifyAll(role) {
+            getName() == expectedRole.getName()
+            getDescription() == expectedRole.getDescription()
+            getTraits().getOrigin() == expectedRole.getTraits().getOrigin()
+            getAccessScopeId() == accessScopeID
+            getPermissionSetId() == permissionSetID
+        }
         return role
     }
 
     private Role verifyDeclarativeRole(Role expectedRole) {
         def role = RoleService.getRole(expectedRole.getName())
         assert role : "declarative role ${expectedRole.getName()} does not exist"
-        assert role.getName() == expectedRole.getName()
-        assert role.getDescription() == expectedRole.getDescription()
-        assert role.getTraits().getOrigin() == expectedRole.getTraits().getOrigin()
+        verifyAll(role) {
+            getName() == expectedRole.getName()
+            getDescription() == expectedRole.getDescription()
+            getTraits().getOrigin() == expectedRole.getTraits().getOrigin()
+        }
         return role
     }
 
@@ -748,10 +794,12 @@ splunk:
             it.getName() == expectedPermissionSet.getName()
         }
         assert permissionSet
-        assert permissionSet.getDescription() == expectedPermissionSet.getDescription()
-        assert permissionSet.getTraits().getOrigin() == expectedPermissionSet.getTraits().getOrigin()
-        assert permissionSet.getResourceToAccessMap() == expectedPermissionSet.getResourceToAccessMap()
-        assert permissionSet.getId()
+        verifyAll(permissionSet) {
+            getDescription() == expectedPermissionSet.getDescription()
+            getTraits().getOrigin() == expectedPermissionSet.getTraits().getOrigin()
+            getResourceToAccessMap() == expectedPermissionSet.getResourceToAccessMap()
+            getId() != ""
+        }
         return permissionSet
     }
 
@@ -764,58 +812,42 @@ splunk:
             it.getName() == expectedAccessScope.getName()
         }
         assert accessScope
-        assert accessScope.getDescription() == expectedAccessScope.getDescription()
-        assert accessScope.getTraits().getOrigin() == expectedAccessScope.getTraits().getOrigin()
-        assert accessScope.getRules() == expectedAccessScope.getRules()
-        assert accessScope.getId()
-        return accessScope
-    }
-
-    // verifyDeclarativeGroups will verify that the expected groups exist within the API and share the same
-    // values.
-    // The number of groups found within the list of expected groups will be returned.
-    private int verifyDeclarativeGroups(String authProviderID, List<Group> expectedGroups) {
-        def groupsResponse = GroupService.getGroups(
-                GroupServiceOuterClass.GetGroupsRequest.newBuilder().setAuthProviderId(authProviderID).build())
-        assert groupsResponse.getGroupsCount() == expectedGroups.size()
-
-        def foundGroups = 0
-        for (group in groupsResponse.getGroupsList()) {
-            for (expectedGroup in expectedGroups) {
-                if (group.getRoleName() == expectedGroup.getRoleName()) {
-                    foundGroups++
-                    assert group.getProps().getKey() == expectedGroup.getProps().getKey()
-                    assert group.getProps().getValue() == expectedGroup.getProps().getValue()
-                    assert group.getProps().getAuthProviderId() == authProviderID
-                    assert group.getProps().getTraits().getOrigin() == expectedGroup.getProps().getTraits().getOrigin()
-                }
-            }
+        verifyAll(accessScope) {
+            getDescription() == expectedAccessScope.getDescription()
+            getTraits().getOrigin() == expectedAccessScope.getTraits().getOrigin()
+            getRules() == expectedAccessScope.getRules()
+            getId() != ""
         }
-        return foundGroups
+        return accessScope
     }
 
     // verifyDeclarativeAuthProvider will verify that the expected auth provider exists within the API and
     // shares the same values.
     // The retrieved auth provider from the API will be returned, which will have the ID field populated.
     private AuthProvider verifyDeclarativeAuthProvider(AuthProvider expectedAuthProvider) {
-        def authProviderResponse = AuthProviderService.getAuthProviderService().
-                getAuthProviders(
-                        AuthproviderService.GetAuthProvidersRequest.newBuilder()
-                                .setName(expectedAuthProvider.getName()).build()
-                )
-        assert authProviderResponse.getAuthProvidersCount() == 1 :
-                "expected one auth provider with name ${expectedAuthProvider.getName()} but " +
-                        "got ${authProviderResponse.getAuthProvidersCount()}"
-        def authProvider = authProviderResponse.getAuthProviders(0)
+        def authProvider = null
+        withRetry(RETRIES, PAUSE_SECS) {
+            def authProviderResponse = AuthProviderService.getAuthProviderService().
+                    getAuthProviders(
+                            AuthproviderService.GetAuthProvidersRequest.newBuilder()
+                                    .setName(expectedAuthProvider.getName()).build()
+                    )
+            assert authProviderResponse.getAuthProvidersCount() == 1 :
+                    "expected one auth provider with name ${expectedAuthProvider.getName()} but " +
+                            "got ${authProviderResponse.getAuthProvidersCount()}"
+            authProvider = authProviderResponse.getAuthProviders(0)
+        }
         assert authProvider
-        assert authProvider.getName() == expectedAuthProvider.getName()
-        assert authProvider.getType() == expectedAuthProvider.getType()
-        assert authProvider.getLoginUrl()
-        assert authProvider.getUiEndpoint() == expectedAuthProvider.getUiEndpoint()
-        assert authProvider.getTraits().getOrigin() == expectedAuthProvider.getTraits().getOrigin()
-        assert authProvider.getActive()
-        assert authProvider.getEnabled()
-        assert authProvider.getConfigMap() == expectedAuthProvider.getConfigMap()
+        verifyAll(authProvider) {
+            getName() == expectedAuthProvider.getName()
+            getType() == expectedAuthProvider.getType()
+            getLoginUrl() != ""
+            getUiEndpoint() == expectedAuthProvider.getUiEndpoint()
+            getTraits().getOrigin() == expectedAuthProvider.getTraits().getOrigin()
+            getActive()
+            getEnabled()
+            getConfigMap() == expectedAuthProvider.getConfigMap()
+        }
         return authProvider
     }
 
@@ -828,12 +860,13 @@ splunk:
                         .newBuilder().build())
                 .notifiersList.find { it.getName() == VALID_NOTIFIER.getName() }
         assert notifier
-        assert notifier.getName() == expectedNotifier.getName()
-        assert notifier.getTraits().getOrigin() == expectedNotifier.getTraits().getOrigin()
-        assert notifier.getType() == "splunk"
-        // Skipping the HTTP token since it will be obscured by the API.
-        assert notifier.getSplunk().getHttpEndpoint() == expectedNotifier.getSplunk().getHttpEndpoint()
-        assert notifier.getSplunk().getSourceTypesMap() == expectedNotifier.getSplunk().getSourceTypesMap()
+        verifyAll(notifier) {
+            getTraits().getOrigin() == expectedNotifier.getTraits().getOrigin()
+            getType() == "splunk"
+            // Skipping the HTTP token since it will be obscured by the API.
+            getSplunk().getHttpEndpoint() == expectedNotifier.getSplunk().getHttpEndpoint()
+            getSplunk().getSourceTypesMap() == expectedNotifier.getSplunk().getSourceTypesMap()
+        }
         return notifier
     }
 }

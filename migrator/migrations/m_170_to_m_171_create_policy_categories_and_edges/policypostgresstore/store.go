@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/hashicorp/go-multierror"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
@@ -13,6 +13,7 @@ import (
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/search"
 	pgSearch "github.com/stackrox/rox/pkg/search/postgres"
 	"github.com/stackrox/rox/pkg/sync"
@@ -123,7 +124,7 @@ func (s *storeImpl) copyFromPolicies(ctx context.Context, tx *postgres.Tx, objs 
 			"in the loop is not used as it only consists of the parent ID and the index.  Putting this here as a stop gap "+
 			"to simply use the object.  %s", obj)
 
-		serialized, marshalErr := obj.Marshal()
+		serialized, marshalErr := obj.MarshalVT()
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -146,7 +147,7 @@ func (s *storeImpl) copyFromPolicies(ctx context.Context, tx *postgres.Tx, objs 
 
 			obj.GetEnforcementActions(),
 
-			pgutils.NilOrTime(obj.GetLastUpdated()),
+			protocompat.NilOrTime(obj.GetLastUpdated()),
 
 			obj.GetSORTName(),
 
@@ -187,7 +188,7 @@ func (s *storeImpl) copyFromPolicies(ctx context.Context, tx *postgres.Tx, objs 
 
 func insertIntoPolicies(_ context.Context, batch *pgx.Batch, obj *storage.Policy) error {
 
-	serialized, marshalErr := obj.Marshal()
+	serialized, marshalErr := obj.MarshalVT()
 	if marshalErr != nil {
 		return marshalErr
 	}
@@ -202,7 +203,7 @@ func insertIntoPolicies(_ context.Context, batch *pgx.Batch, obj *storage.Policy
 		obj.GetLifecycleStages(),
 		obj.GetSeverity(),
 		obj.GetEnforcementActions(),
-		pgutils.NilOrTime(obj.GetLastUpdated()),
+		protocompat.NilOrTime(obj.GetLastUpdated()),
 		obj.GetSORTName(),
 		obj.GetSORTLifecycleStage(),
 		obj.GetSORTEnforcement(),
@@ -292,7 +293,7 @@ func (s *storeImpl) DeleteMany(ctx context.Context, identifiers []string) error 
 
 // UpsertMany saves the state of multiple objects in the storage.
 func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.Policy) error {
-	return pgutils.Retry(func() error {
+	return pgutils.Retry(ctx, func() error {
 		// Lock since copyFrom requires a delete first before being executed.  If multiple processes are updating
 		// same subset of rows, both deletes could occur before the copyFrom resulting in unique constraint
 		// violations
@@ -314,7 +315,7 @@ func (s *storeImpl) Count(ctx context.Context) (int, error) {
 
 // Upsert saves the current state of an object in storage.
 func (s *storeImpl) Upsert(ctx context.Context, obj *storage.Policy) error {
-	return pgutils.Retry(func() error {
+	return pgutils.Retry(ctx, func() error {
 		return s.upsert(ctx, obj)
 	})
 }

@@ -14,25 +14,35 @@ import {
     VisualizationSurface,
 } from '@patternfly/react-topology';
 
-import { networkBasePathPF } from 'routePaths';
-import { getQueryObject, getQueryString } from 'utils/queryStringUtils';
+import { networkBasePath } from 'routePaths';
+import usePermissions from 'hooks/usePermissions';
+import useFetchDeploymentCount from 'hooks/useFetchDeploymentCount';
 import DeploymentSideBar from './deployment/DeploymentSideBar';
 import NamespaceSideBar from './namespace/NamespaceSideBar';
-import CidrBlockSideBar from './cidr/CidrBlockSideBar';
-import ExternalEntitiesSideBar from './externalEntities/ExternalEntitiesSideBar';
+import GenericEntitiesSideBar from './genericEntities/GenericEntitiesSideBar';
 import ExternalGroupSideBar from './external/ExternalGroupSideBar';
-import NetworkPolicySimulatorSidePanel from './simulation/NetworkPolicySimulatorSidePanel';
+import NetworkPolicySimulatorSidePanel, {
+    clearSimulationQuery,
+} from './simulation/NetworkPolicySimulatorSidePanel';
 import { getNodeById } from './utils/networkGraphUtils';
-import { CustomModel, CustomNodeModel } from './types/topology.type';
+import { CustomModel, CustomNodeModel, isNodeOfType } from './types/topology.type';
 import { Simulation } from './utils/getSimulation';
 import LegendContent from './components/LegendContent';
 
+import { EdgeState } from './components/EdgeStateSelect';
+import { deploymentTabs } from './utils/deploymentUtils';
+import EmptyUnscopedState from './components/EmptyUnscopedState';
 import {
     NetworkPolicySimulator,
     SetNetworkPolicyModification,
 } from './hooks/useNetworkPolicySimulator';
-import { EdgeState } from './components/EdgeStateSelect';
-import { deploymentTabs } from './utils/deploymentUtils';
+import { NetworkScopeHierarchy } from './types/networkScopeHierarchy';
+import { getSearchFilterFromScopeHierarchy } from './utils/simulatorUtils';
+import {
+    CidrBlockIcon,
+    ExternalEntitiesIcon,
+    InternalEntitiesIcon,
+} from './common/NetworkGraphIcons';
 
 // TODO: move these type defs to a central location
 export const UrlDetailType = {
@@ -41,6 +51,7 @@ export const UrlDetailType = {
     CIDR_BLOCK: 'cidr',
     EXTERNAL_ENTITIES: 'internet',
     EXTERNAL_GROUP: 'external',
+    INTERNAL_ENTITIES: 'internal',
 } as const;
 export type UrlDetailTypeKey = keyof typeof UrlDetailType;
 export type UrlDetailTypeValue = (typeof UrlDetailType)[UrlDetailTypeKey];
@@ -51,32 +62,29 @@ function getUrlParamsForEntity(type, id): [UrlDetailTypeValue, string] {
 }
 
 export type TopologyComponentProps = {
+    isReadyForVisualization: boolean;
     model: CustomModel;
     simulation: Simulation;
-    selectedClusterId: string;
     selectedNode?: CustomNodeModel;
     simulator: NetworkPolicySimulator;
     setNetworkPolicyModification: SetNetworkPolicyModification;
     edgeState: EdgeState;
+    scopeHierarchy: NetworkScopeHierarchy;
 };
 
-// @TODO: Consider a better approach to managing the side panel related state (simulation + URL path for entities)
-function clearSimulationQuery(search: string): string {
-    const modifiedSearchFilter = getQueryObject(search);
-    delete modifiedSearchFilter.simulation;
-    const queryString = getQueryString(modifiedSearchFilter);
-    return queryString;
-}
-
 const TopologyComponent = ({
+    isReadyForVisualization,
     model,
     simulation,
-    selectedClusterId,
     selectedNode,
     simulator,
     setNetworkPolicyModification,
     edgeState,
+    scopeHierarchy,
 }: TopologyComponentProps) => {
+    const { hasReadAccess } = usePermissions();
+    const hasReadAccessForNetworkPolicy = hasReadAccess('NetworkPolicy');
+
     const firstRenderRef = useRef(true);
     const history = useHistory();
     const controller = useVisualizationController();
@@ -84,7 +92,7 @@ const TopologyComponent = ({
 
     const closeSidebar = useCallback(() => {
         const queryString = clearSimulationQuery(history.location.search);
-        history.push(`${networkBasePathPF}${queryString}`);
+        history.push(`${networkBasePath}${queryString}`);
     }, [history]);
 
     function onNodeClick(ids: string[]) {
@@ -101,16 +109,20 @@ const TopologyComponent = ({
             const queryString = clearSimulationQuery(history.location.search);
             // if found, and it's not the logical grouping of all external sources, then trigger URL update
             if (newDetailId !== 'EXTERNAL') {
-                const newURL = `${networkBasePathPF}/${newDetailType}/${encodeURIComponent(
+                const newURL = `${networkBasePath}/${newDetailType}/${encodeURIComponent(
                     newDetailId
                 )}${queryString}`;
                 history.push(newURL);
             } else {
                 // otherwise, return to the graph-only state
-                history.push(`${networkBasePathPF}${queryString}`);
+                history.push(`${networkBasePath}${queryString}`);
             }
         }
     }
+
+    const { deploymentCount } = useFetchDeploymentCount(
+        getSearchFilterFromScopeHierarchy(scopeHierarchy)
+    );
 
     function onNodeSelect(id: string) {
         onNodeClick([id]);
@@ -134,7 +146,7 @@ const TopologyComponent = ({
     }, [controller]);
 
     const panNodeIntoView = useCallback(
-        (node) => {
+        (node: CustomNodeModel) => {
             const selectedNodeElement = controller.getNodeById(node.id);
             if (selectedNodeElement) {
                 // the offset is to make sure the label also makes it inside the viewport
@@ -161,7 +173,7 @@ const TopologyComponent = ({
         controller.fromModel(model);
         if (selectedNode) {
             panNodeIntoView(selectedNode);
-        } else if (history.location.pathname !== networkBasePathPF && !selectedNode) {
+        } else if (history.location.pathname !== networkBasePath && !selectedNode) {
             // if the path does not reflect the selected node state, sync URL to state
             closeSidebar();
         }
@@ -169,19 +181,25 @@ const TopologyComponent = ({
 
     const selectedIds = selectedNode ? [selectedNode.id] : [];
 
+    const labelledById = 'TopologySideBarLabelledBy';
     return (
         <TopologyView
             sideBar={
-                <TopologySideBar resizable onClose={closeSidebar}>
-                    {simulation.isOn && simulation.type === 'networkPolicy' && (
-                        <NetworkPolicySimulatorSidePanel
-                            selectedClusterId={selectedClusterId}
-                            simulator={simulator}
-                            setNetworkPolicyModification={setNetworkPolicyModification}
-                        />
-                    )}
+                <TopologySideBar aria-labelledby={labelledById} resizable onClose={closeSidebar}>
+                    {hasReadAccessForNetworkPolicy &&
+                        simulation.isOn &&
+                        simulation.type === 'networkPolicy' && (
+                            <NetworkPolicySimulatorSidePanel
+                                labelledById={labelledById}
+                                simulator={simulator}
+                                setNetworkPolicyModification={setNetworkPolicyModification}
+                                scopeHierarchy={scopeHierarchy}
+                                scopeDeploymentCount={deploymentCount ?? 0}
+                            />
+                        )}
                     {selectedNode && selectedNode?.data?.type === 'NAMESPACE' && (
                         <NamespaceSideBar
+                            labelledById={labelledById}
                             namespaceId={selectedNode.id}
                             nodes={model?.nodes || []}
                             edges={model?.edges || []}
@@ -190,6 +208,7 @@ const TopologyComponent = ({
                     )}
                     {selectedNode && selectedNode?.data?.type === 'DEPLOYMENT' && (
                         <DeploymentSideBar
+                            labelledById={labelledById}
                             deploymentId={selectedNode.id}
                             nodes={model?.nodes || []}
                             edges={model?.edges || []}
@@ -200,26 +219,47 @@ const TopologyComponent = ({
                     )}
                     {selectedNode && selectedNode?.data?.type === 'EXTERNAL_GROUP' && (
                         <ExternalGroupSideBar
+                            labelledById={labelledById}
                             id={selectedNode.id}
                             nodes={model?.nodes || []}
                             edges={model?.edges || []}
                             onNodeSelect={onNodeSelect}
                         />
                     )}
-                    {selectedNode && selectedNode?.data?.type === 'CIDR_BLOCK' && (
-                        <CidrBlockSideBar
+                    {selectedNode && isNodeOfType('CIDR_BLOCK', selectedNode) && (
+                        <GenericEntitiesSideBar
+                            labelledById={labelledById}
                             id={selectedNode.id}
                             nodes={model?.nodes || []}
                             edges={model?.edges || []}
                             onNodeSelect={onNodeSelect}
+                            EntityHeaderIcon={<CidrBlockIcon />}
+                            sidebarTitle={selectedNode.data.externalSource.cidr ?? ''}
+                            flowTableLabel="Cidr block flows"
                         />
                     )}
-                    {selectedNode && selectedNode?.data?.type === 'EXTERNAL_ENTITIES' && (
-                        <ExternalEntitiesSideBar
+                    {selectedNode && isNodeOfType('EXTERNAL_ENTITIES', selectedNode) && (
+                        <GenericEntitiesSideBar
+                            labelledById={labelledById}
                             id={selectedNode.id}
                             nodes={model?.nodes || []}
                             edges={model?.edges || []}
                             onNodeSelect={onNodeSelect}
+                            EntityHeaderIcon={<ExternalEntitiesIcon />}
+                            sidebarTitle={'Connected Entities Outside Your Cluster'}
+                            flowTableLabel="External entities flows"
+                        />
+                    )}
+                    {selectedNode && isNodeOfType('INTERNAL_ENTITIES', selectedNode) && (
+                        <GenericEntitiesSideBar
+                            labelledById={labelledById}
+                            id={selectedNode.id}
+                            nodes={model?.nodes || []}
+                            edges={model?.edges || []}
+                            onNodeSelect={onNodeSelect}
+                            EntityHeaderIcon={<InternalEntitiesIcon />}
+                            sidebarTitle={'Unknown entity connections within your clusters'}
+                            flowTableLabel="Internal entities flows"
                         />
                     )}
                 </TopologySideBar>
@@ -227,24 +267,34 @@ const TopologyComponent = ({
             sideBarOpen={!!selectedNode || simulation.isOn}
             sideBarResizable
             controlBar={
-                <TopologyControlBar
-                    controlButtons={createTopologyControlButtons({
-                        ...defaultControlButtonsOptions,
-                        zoomInCallback,
-                        zoomOutCallback,
-                        fitToScreenCallback,
-                        resetViewCallback,
-                    })}
-                />
+                isReadyForVisualization ? (
+                    <TopologyControlBar
+                        controlButtons={createTopologyControlButtons({
+                            ...defaultControlButtonsOptions,
+                            zoomInCallback,
+                            zoomOutCallback,
+                            fitToScreenCallback,
+                            resetViewCallback,
+                        })}
+                    />
+                ) : undefined
             }
         >
-            <VisualizationSurface state={{ selectedIds }} />
-            <Popover
-                aria-label="Network graph legend"
-                bodyContent={<LegendContent />}
-                hasAutoWidth
-                reference={() => document.getElementById('legend') as HTMLButtonElement}
-            />
+            {isReadyForVisualization ? (
+                <>
+                    <VisualizationSurface state={{ selectedIds }} />
+                    <Popover
+                        aria-label="Network graph legend"
+                        bodyContent={<LegendContent />}
+                        hasAutoWidth
+                        triggerRef={() => document.getElementById('legend') as HTMLButtonElement}
+                    />
+                </>
+            ) : (
+                <div className="pf-v5-u-h-100 pf-v5-u-w-100 pf-v5-u-background-color-100">
+                    <EmptyUnscopedState />
+                </div>
+            )}
         </TopologyView>
     );
 };

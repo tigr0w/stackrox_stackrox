@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ExternalBackupsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE external_backups CASCADE")
 	s.T().Log("external_backups", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ExternalBackupsStoreSuite) TestStore() {
 	foundExternalBackup, exists, err = store.Get(ctx, externalBackup.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(externalBackup, foundExternalBackup)
+	protoassert.Equal(s.T(), externalBackup, foundExternalBackup)
 
-	externalBackupCount, err := store.Count(ctx)
+	externalBackupCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, externalBackupCount)
-	externalBackupCount, err = store.Count(withNoAccessCtx)
+	externalBackupCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(externalBackupCount)
 
@@ -75,11 +78,6 @@ func (s *ExternalBackupsStoreSuite) TestStore() {
 	s.True(externalBackupExists)
 	s.NoError(store.Upsert(ctx, externalBackup))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, externalBackup), sac.ErrResourceAccessDenied)
-
-	foundExternalBackup, exists, err = store.Get(ctx, externalBackup.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(externalBackup, foundExternalBackup)
 
 	s.NoError(store.Delete(ctx, externalBackup.GetId()))
 	foundExternalBackup, exists, err = store.Get(ctx, externalBackup.GetId())
@@ -100,15 +98,15 @@ func (s *ExternalBackupsStoreSuite) TestStore() {
 	s.NoError(store.UpsertMany(ctx, externalBackups))
 	allExternalBackup, err := store.GetAll(ctx)
 	s.NoError(err)
-	s.ElementsMatch(externalBackups, allExternalBackup)
+	protoassert.ElementsMatch(s.T(), externalBackups, allExternalBackup)
 
-	externalBackupCount, err = store.Count(ctx)
+	externalBackupCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, externalBackupCount)
 
 	s.NoError(store.DeleteMany(ctx, externalBackupIDs))
 
-	externalBackupCount, err = store.Count(ctx)
+	externalBackupCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, externalBackupCount)
 }

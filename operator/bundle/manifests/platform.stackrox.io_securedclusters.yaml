@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.11.3
+    controller-gen.kubebuilder.io/version: v0.16.5
   creationTimestamp: null
   name: securedclusters.platform.stackrox.io
 spec:
@@ -17,22 +17,27 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SecuredCluster is the configuration template for the secured
-          cluster services. These include Sensor, which is responsible for the connection
-          to Central, and Collector, which performs host-level collection of process
-          and network events.<p> **Important:** Please see the _Installation Prerequisites_
-          on the main RHACS operator page before deploying, or consult the RHACS documentation
-          on creating cluster init bundles.
+        description: |-
+          SecuredCluster is the configuration template for the secured cluster services. These include Sensor, which is
+          responsible for the connection to Central, and Collector, which performs host-level collection of process and
+          network events.<p>
+          **Important:** Please see the _Installation Prerequisites_ on the main RHACS operator page before deploying, or
+          consult the RHACS documentation on creating cluster init bundles.
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -41,9 +46,9 @@ spec:
               of a secured cluster.
             properties:
               admissionControl:
-                description: Settings for the Admission Control component, which is
-                  necessary for preventive policy enforcement, and for Kubernetes
-                  event monitoring.
+                description: |-
+                  Settings for the Admission Control component, which is necessary for preventive policy enforcement,
+                  and for Kubernetes event monitoring.
                 properties:
                   bypass:
                     default: BreakGlassAnnotation
@@ -61,6 +66,27 @@ spec:
                     - ScanIfMissing
                     - DoNotScanInline
                     type: string
+                  hostAliases:
+                    description: HostAliases allows configuring additional hostnames
+                      to resolve in the pod's hosts file.
+                    items:
+                      description: |-
+                        HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                        pod's hosts file.
+                      properties:
+                        hostnames:
+                          description: Hostnames for the above IP address.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        ip:
+                          description: IP address of the host file entry.
+                          type: string
+                      required:
+                      - ip
+                      type: object
+                    type: array
                   listenOnCreates:
                     default: true
                     description: Set this to 'true' to enable preventive policy enforcement
@@ -73,9 +99,10 @@ spec:
                     type: boolean
                   listenOnUpdates:
                     default: true
-                    description: "Set this to 'true' to enable preventive policy enforcement
-                      for object updates. \n Note: this will not have any effect unless
-                      'Listen On Creates' is set to 'true' as well."
+                    description: |-
+                      Set this to 'true' to enable preventive policy enforcement for object updates.
+
+                      Note: this will not have any effect unless 'Listen On Creates' is set to 'true' as well.
                     type: boolean
                   nodeSelector:
                     additionalProperties:
@@ -83,25 +110,34 @@ spec:
                     description: If you want this component to only run on specific
                       nodes, you can configure a node selector here.
                     type: object
+                  replicas:
+                    default: 3
+                    description: The number of replicas of the admission control pod.
+                    format: int32
+                    minimum: 1
+                    type: integer
                   resources:
-                    description: Allows overriding the default resource settings for
-                      this component. Please consult the documentation for an overview
-                      of default resource requirements and a sizing guide.
+                    description: |-
+                      Allows overriding the default resource settings for this component. Please consult the documentation
+                      for an overview of default resource requirements and a sizing guide.
                     properties:
                       claims:
-                        description: "Claims lists the names of resources, defined
-                          in spec.resourceClaims, that are used by this container.
-                          \n This is an alpha field and requires enabling the DynamicResourceAllocation
-                          feature gate. \n This field is immutable. It can only be
-                          set for containers."
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
                         items:
                           description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                           properties:
                             name:
-                              description: Name must match the name of one entry in
-                                pod.spec.resourceClaims of the Pod where this field
-                                is used. It makes that resource available inside a
-                                container.
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
                               type: string
                           required:
                           - name
@@ -117,8 +153,9 @@ spec:
                           - type: string
                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                           x-kubernetes-int-or-string: true
-                        description: 'Limits describes the maximum amount of compute
-                          resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                       requests:
                         additionalProperties:
@@ -127,19 +164,20 @@ spec:
                           - type: string
                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                           x-kubernetes-int-or-string: true
-                        description: 'Requests describes the minimum amount of compute
-                          resources required. If Requests is omitted for a container,
-                          it defaults to Limits if that is explicitly specified, otherwise
-                          to an implementation-defined value. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
                   timeoutSeconds:
-                    default: 20
-                    description: Maximum timeout period for admission review, upon
-                      which admission review will fail open. Use it to set request
-                      timeouts when you enable inline image scanning. The default
-                      kubectl timeout is 30 seconds; taking padding into account,
-                      this should not exceed 25 seconds.
+                    default: 10
+                    description: |-
+                      Maximum timeout period for admission review, upon which admission review will fail open.
+                      Use it to set request timeouts when you enable inline image scanning.
+                      The default kubectl timeout is 30 seconds; taking padding into account, this should not exceed 25 seconds.
+                      On OpenShift webhook timeouts cannot exceed 13 seconds, hence with padding this value shall not exceed 10 seconds.
                     format: int32
                     maximum: 25
                     minimum: 1
@@ -148,41 +186,39 @@ spec:
                     description: If you want this component to only run on specific
                       nodes, you can configure tolerations of tainted nodes.
                     items:
-                      description: The pod this Toleration is attached to tolerates
-                        any taint that matches the triple <key,value,effect> using
-                        the matching operator <operator>.
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
                       properties:
                         effect:
-                          description: Effect indicates the taint effect to match.
-                            Empty means match all taint effects. When specified, allowed
-                            values are NoSchedule, PreferNoSchedule and NoExecute.
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
                           type: string
                         key:
-                          description: Key is the taint key that the toleration applies
-                            to. Empty means match all taint keys. If the key is empty,
-                            operator must be Exists; this combination means to match
-                            all values and all keys.
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
                           type: string
                         operator:
-                          description: Operator represents a key's relationship to
-                            the value. Valid operators are Exists and Equal. Defaults
-                            to Equal. Exists is equivalent to wildcard for value,
-                            so that a pod can tolerate all taints of a particular
-                            category.
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists and Equal. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
                           type: string
                         tolerationSeconds:
-                          description: TolerationSeconds represents the period of
-                            time the toleration (which must be of effect NoExecute,
-                            otherwise this field is ignored) tolerates the taint.
-                            By default, it is not set, which means tolerate the taint
-                            forever (do not evict). Zero and negative values will
-                            be treated as 0 (evict immediately) by the system.
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
                           format: int64
                           type: integer
                         value:
-                          description: Value is the taint value the toleration matches
-                            to. If the operator is Exists, the value should be empty,
-                            otherwise just a regular string.
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
                           type: string
                       type: object
                     type: array
@@ -193,11 +229,10 @@ spec:
                 properties:
                   collection:
                     default: Auto
-                    description: Whether collection of Kubernetes audit logs should
-                      be enabled or disabled. Currently, this is only supported on
-                      OpenShift 4, and trying to enable it on non-OpenShift 4 clusters
-                      will result in an error. Use the 'Auto' setting to enable it
-                      on compatible environments, and disable it elsewhere.
+                    description: |-
+                      Whether collection of Kubernetes audit logs should be enabled or disabled. Currently, this is only
+                      supported on OpenShift 4, and trying to enable it on non-OpenShift 4 clusters will result in an error.
+                      Use the 'Auto' setting to enable it on compatible environments, and disable it elsewhere.
                     enum:
                     - Auto
                     - Disabled
@@ -205,12 +240,14 @@ spec:
                     type: string
                 type: object
               centralEndpoint:
-                description: 'The endpoint of the Red Hat Advanced Cluster Security
-                  Central instance to connect to, including the port number. If using
-                  a non-gRPC capable load balancer, use the WebSocket protocol by
-                  prefixing the endpoint address with wss://. Note: when leaving this
-                  blank, Sensor will attempt to connect to a Central instance running
-                  in the same namespace.'
+                description: |-
+                  The endpoint of the Red Hat Advanced Cluster Security Central instance to connect to,
+                  including the port number. If no port is specified and the endpoint contains an https://
+                  protocol specification, then the port 443 is implicitly assumed.
+                  If using a non-gRPC capable load balancer, use the WebSocket protocol by prefixing the endpoint
+                  address with wss://.
+                  Note: when leaving this blank, Sensor will attempt to connect to a Central instance running in the same
+                  namespace.
                 type: string
               clusterLabels:
                 additionalProperties:
@@ -219,11 +256,10 @@ spec:
                   Hat Advanced Cluster Security.
                 type: object
               clusterName:
-                description: 'The unique name of this cluster, as it will be shown
-                  in the Red Hat Advanced Cluster Security UI. Note: Once a name is
-                  set here, you will not be able to change it again. You will need
-                  to delete and re-create this object in order to register a cluster
-                  with a new name.'
+                description: |-
+                  The unique name of this cluster, as it will be shown in the Red Hat Advanced Cluster Security UI.
+                  Note: Once a name is set here, you will not be able to change it again. You will need to delete
+                  and re-create this object in order to register a cluster with a new name.
                 type: string
               customize:
                 description: Customizations to apply on all Central Services components.
@@ -245,15 +281,16 @@ spec:
                             C_IDENTIFIER.
                           type: string
                         value:
-                          description: 'Variable references $(VAR_NAME) are expanded
-                            using the previously defined environment variables in
-                            the container and any service environment variables. If
-                            a variable cannot be resolved, the reference in the input
-                            string will be unchanged. Double $$ are reduced to a single
-                            $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                          description: |-
+                            Variable references $(VAR_NAME) are expanded
+                            using the previously defined environment variables in the container and
+                            any service environment variables. If a variable cannot be resolved,
+                            the reference in the input string will be unchanged. Double $$ are reduced
+                            to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
                             "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
-                            Escaped references will never be expanded, regardless
-                            of whether the variable exists or not. Defaults to "".'
+                            Escaped references will never be expanded, regardless of whether the variable
+                            exists or not.
+                            Defaults to "".
                           type: string
                         valueFrom:
                           description: Source for the environment variable's value.
@@ -266,9 +303,13 @@ spec:
                                   description: The key to select.
                                   type: string
                                 name:
-                                  description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                                    TODO: Add other useful fields. apiVersion, kind,
-                                    uid?'
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
                                   type: string
                                 optional:
                                   description: Specify whether the ConfigMap or its
@@ -279,11 +320,9 @@ spec:
                               type: object
                               x-kubernetes-map-type: atomic
                             fieldRef:
-                              description: 'Selects a field of the pod: supports metadata.name,
-                                metadata.namespace, `metadata.labels[''<KEY>'']`,
-                                `metadata.annotations[''<KEY>'']`, spec.nodeName,
-                                spec.serviceAccountName, status.hostIP, status.podIP,
-                                status.podIPs.'
+                              description: |-
+                                Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                                spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
                               properties:
                                 apiVersion:
                                   description: Version of the schema the FieldPath
@@ -298,10 +337,9 @@ spec:
                               type: object
                               x-kubernetes-map-type: atomic
                             resourceFieldRef:
-                              description: 'Selects a resource of the container: only
-                                resources limits and requests (limits.cpu, limits.memory,
-                                limits.ephemeral-storage, requests.cpu, requests.memory
-                                and requests.ephemeral-storage) are currently supported.'
+                              description: |-
+                                Selects a resource of the container: only resources limits and requests
+                                (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
                               properties:
                                 containerName:
                                   description: 'Container name: required for volumes,
@@ -331,9 +369,13 @@ spec:
                                     be a valid secret key.
                                   type: string
                                 name:
-                                  description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                                    TODO: Add other useful fields. apiVersion, kind,
-                                    uid?'
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
                                   type: string
                                 optional:
                                   description: Specify whether the Secret or its key
@@ -369,66 +411,170 @@ spec:
                   type: object
                 type: array
               misc:
-                description: Miscellaneous settings.
+                description: |-
+                  Deprecated field. This field will be removed in a future release.
+                  Miscellaneous settings.
                 properties:
                   createSCCs:
-                    description: Set this to true to have the operator create SecurityContextConstraints
-                      (SCCs) for the operands. This isn't usually needed, and may
-                      interfere with other workloads.
+                    description: |-
+                      Deprecated field. This field will be removed in a future release.
+                      Set this to true to have the operator create SecurityContextConstraints (SCCs) for the operands. This
+                      isn't usually needed, and may interfere with other workloads.
                     type: boolean
                 type: object
+              monitoring:
+                description: Monitoring configuration.
+                properties:
+                  openshift:
+                    description: OpenShiftMonitoring defines settings related to OpenShift
+                      Monitoring
+                    properties:
+                      enabled:
+                        default: true
+                        type: boolean
+                    required:
+                    - enabled
+                    type: object
+                type: object
+              network:
+                description: Network configuration.
+                properties:
+                  policies:
+                    default: Enabled
+                    description: To provide security at the network level the ACS
+                      Operator creates NetworkPolicy resources by default. If you
+                      want to manage your own NetworkPolicy objects then set this
+                      to "Disabled".
+                    enum:
+                    - Enabled
+                    - Disabled
+                    type: string
+                type: object
+              overlays:
+                description: Overlays
+                items:
+                  description: "K8sObjectOverlay is an overlay that applies a set
+                    of patches to a resource.\nIt targets a resource by its API version,
+                    kind, and name, and applies\na list of patches to this resource.\n\n#
+                    Examples\n\n## Adding an annotation to a resource\n\n\tapiVersion:
+                    v1\n\tkind: ServiceAccount\n\tname: central\n\tpatches:\n\t- path:
+                    metadata.annotations.eks\\.amazonaws\\.com/role-arn\n\t  value:
+                    \"\\\"arn:aws:iam:1234:role\\\"\"\n\n## Adding an environment
+                    variable to a deployment\n\n\tapiVersion: apps/v1\n\tkind: Deployment\n\tname:
+                    central\n\tpatches:\n\t- path: spec.template.spec.containers[name:central].env[-1]\n\t
+                    \ value: |\n\t    name: MY_ENV_VAR\n\t    value: value\n\n## Adding
+                    an ingress to a network policy\n\n\tapiVersion: networking.k8s.io/v1\n\tkind:
+                    NetworkPolicy\n\tname: allow-ext-to-central\n\tpatches:\n\t- path:
+                    spec.ingress[-1]\n\t  value: |\n\t    ports:\n\t    - port: 999\n\t
+                    \     protocol: TCP\n\n## Changing the value of a configMap\n\n\tapiVersion:
+                    v1\n\tkind: ConfigMap\n\tname: central-endpoints\n\tpatches:\n\t-
+                    path: data\n\t  value: |\n\t    endpoints.yaml: |\n\t    disableDefault:
+                    false\n\n## Adding a container to a deployment\n\n\tapiVersion:
+                    apps/v1\n\tkind: Deployment\n\tname: central\n\tpatches:\n\t  -
+                    path: spec.template.spec.containers[-1]\n\t    value: |\n\t      name:
+                    nginx\n\t      image: nginx\n\t      ports:\n\t      - containerPort:
+                    8000\n\t        name: http\n\t        protocol: TCP"
+                  properties:
+                    apiVersion:
+                      description: Resource API version.
+                      type: string
+                    kind:
+                      description: Resource kind.
+                      type: string
+                    name:
+                      description: Name of resource.
+                      type: string
+                    optional:
+                      description: |-
+                        Optional marks the overlay as optional.
+                        When Optional is true, and the specified resource does not exist in the output manifests, the overlay will be skipped, and a warning will be logged.
+                        When Optional is false, and the specified resource does not exist in the output manifests, an error will be thrown.
+                      type: boolean
+                    patches:
+                      description: List of patches to apply to resource.
+                      items:
+                        description: K8sObjectOverlayPatch defines a patch to apply
+                          to a resource.
+                        properties:
+                          path:
+                            description: |-
+                              Path of the form a.[key1:value1].b.[:value2]
+                              Where [key1:value1] is a selector for a key-value pair to identify a list element and [:value] is a value
+                              selector to identify a list element in a leaf list.
+                              All path intermediate nodes must exist.
+                            type: string
+                          value:
+                            description: |-
+                              Value to add, delete or replace.
+                              For add, the path should be a new leaf.
+                              For delete, value should be unset.
+                              For replace, path should reference an existing node.
+                              All values are strings but are converted into appropriate type based on schema.
+                            type: string
+                        type: object
+                      type: array
+                  type: object
+                type: array
               perNode:
                 description: Settings for the components running on each node in the
                   cluster (Collector and Compliance).
                 properties:
                   collector:
-                    description: Settings for the Collector container, which is responsible
-                      for collecting process and networking activity at the host level.
+                    description: |-
+                      Settings for the Collector container, which is responsible for collecting process and networking
+                      activity at the host level.
                     properties:
                       collection:
-                        default: EBPF
-                        description: The method for system-level data collection.
-                          EBPF is recommended. If you select "NoCollection", you will
-                          not be able to see any information about network activity
-                          and process executions. The remaining settings in these
-                          section will not have any effect. Note that CORE_BPF is
-                          on Tech Preview stage.
+                        default: CORE_BPF
+                        description: |-
+                          The method for system-level data collection. CORE_BPF is recommended.
+                          If you select "NoCollection", you will not be able to see any information about network activity
+                          and process executions. The remaining settings in these section will not have any effect.
+                          The value is a subject of conversion by the operator if needed, e.g. to
+                          remove deprecated methods.
                         enum:
                         - EBPF
                         - CORE_BPF
                         - NoCollection
+                        - KernelModule
                         type: string
+                      forceCollection:
+                        default: false
+                        description: Deprecated field. This field will be removed
+                          in a future release.
+                        type: boolean
                       imageFlavor:
                         default: Regular
-                        description: The image flavor to use for collector. "Regular"
-                          images are bigger in size, but contain probes for most kernels.
-                          If you use the "Slim" image flavor, you must ensure that
-                          your Central instance is connected to the internet, or regularly
-                          receives Collector Support Package updates (for further
+                        description: |-
+                          The image flavor to use for collector. "Regular" images are bigger in size, but contain probes
+                          for most kernels. If you use the "Slim" image flavor, you must ensure that your Central instance
+                          is connected to the internet, or regularly receives Collector Support Package updates (for further
                           instructions, please refer to the documentation).
                         enum:
                         - Regular
                         - Slim
                         type: string
                       resources:
-                        description: Allows overriding the default resource settings
-                          for this component. Please consult the documentation for
-                          an overview of default resource requirements and a sizing
-                          guide.
+                        description: |-
+                          Allows overriding the default resource settings for this component. Please consult the documentation
+                          for an overview of default resource requirements and a sizing guide.
                         properties:
                           claims:
-                            description: "Claims lists the names of resources, defined
-                              in spec.resourceClaims, that are used by this container.
-                              \n This is an alpha field and requires enabling the
-                              DynamicResourceAllocation feature gate. \n This field
-                              is immutable. It can only be set for containers."
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
                             items:
                               description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                               properties:
                                 name:
-                                  description: Name must match the name of one entry
-                                    in pod.spec.resourceClaims of the Pod where this
-                                    field is used. It makes that resource available
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
                                     inside a container.
                                   type: string
                               required:
@@ -445,8 +591,9 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Limits describes the maximum amount of compute
-                              resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                           requests:
                             additionalProperties:
@@ -455,11 +602,11 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Requests describes the minimum amount of
-                              compute resources required. If Requests is omitted for
-                              a container, it defaults to Limits if that is explicitly
-                              specified, otherwise to an implementation-defined value.
-                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
                     type: object
@@ -468,24 +615,26 @@ spec:
                       for checking host-level configurations.
                     properties:
                       resources:
-                        description: Allows overriding the default resource settings
-                          for this component. Please consult the documentation for
-                          an overview of default resource requirements and a sizing
-                          guide.
+                        description: |-
+                          Allows overriding the default resource settings for this component. Please consult the documentation
+                          for an overview of default resource requirements and a sizing guide.
                         properties:
                           claims:
-                            description: "Claims lists the names of resources, defined
-                              in spec.resourceClaims, that are used by this container.
-                              \n This is an alpha field and requires enabling the
-                              DynamicResourceAllocation feature gate. \n This field
-                              is immutable. It can only be set for containers."
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
                             items:
                               description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                               properties:
                                 name:
-                                  description: Name must match the name of one entry
-                                    in pod.spec.resourceClaims of the Pod where this
-                                    field is used. It makes that resource available
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
                                     inside a container.
                                   type: string
                               required:
@@ -502,8 +651,9 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Limits describes the maximum amount of compute
-                              resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                           requests:
                             additionalProperties:
@@ -512,37 +662,60 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Requests describes the minimum amount of
-                              compute resources required. If Requests is omitted for
-                              a container, it defaults to Limits if that is explicitly
-                              specified, otherwise to an implementation-defined value.
-                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
                     type: object
+                  hostAliases:
+                    description: HostAliases allows configuring additional hostnames
+                      to resolve in the pod's hosts file.
+                    items:
+                      description: |-
+                        HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                        pod's hosts file.
+                      properties:
+                        hostnames:
+                          description: Hostnames for the above IP address.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        ip:
+                          description: IP address of the host file entry.
+                          type: string
+                      required:
+                      - ip
+                      type: object
+                    type: array
                   nodeInventory:
                     description: Settings for the Node-Inventory container, which
                       is responsible for scanning the Nodes' filesystem.
                     properties:
                       resources:
-                        description: Allows overriding the default resource settings
-                          for this component. Please consult the documentation for
-                          an overview of default resource requirements and a sizing
-                          guide.
+                        description: |-
+                          Allows overriding the default resource settings for this component. Please consult the documentation
+                          for an overview of default resource requirements and a sizing guide.
                         properties:
                           claims:
-                            description: "Claims lists the names of resources, defined
-                              in spec.resourceClaims, that are used by this container.
-                              \n This is an alpha field and requires enabling the
-                              DynamicResourceAllocation feature gate. \n This field
-                              is immutable. It can only be set for containers."
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
                             items:
                               description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                               properties:
                                 name:
-                                  description: Name must match the name of one entry
-                                    in pod.spec.resourceClaims of the Pod where this
-                                    field is used. It makes that resource available
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
                                     inside a container.
                                   type: string
                               required:
@@ -559,8 +732,9 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Limits describes the maximum amount of compute
-                              resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                           requests:
                             additionalProperties:
@@ -569,35 +743,59 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Requests describes the minimum amount of
-                              compute resources required. If Requests is omitted for
-                              a container, it defaults to Limits if that is explicitly
-                              specified, otherwise to an implementation-defined value.
-                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
                     type: object
                   taintToleration:
                     default: TolerateTaints
-                    description: To ensure comprehensive monitoring of your cluster
-                      activity, Red Hat Advanced Cluster Security will run services
-                      on every node in the cluster, including tainted nodes by default.
-                      If you do not want this behavior, please select 'AvoidTaints'
-                      here.
+                    description: |-
+                      To ensure comprehensive monitoring of your cluster activity, Red Hat Advanced Cluster Security
+                      will run services on every node in the cluster, including tainted nodes by default. If you do
+                      not want this behavior, please select 'AvoidTaints' here.
                     enum:
                     - TolerateTaints
                     - AvoidTaints
                     type: string
                 type: object
+              registryOverride:
+                description: Set this parameter to override the default registry in
+                  images. For example, nginx:latest -> <registry override>/library/nginx:latest
+                type: string
               scanner:
-                description: Settings for the Scanner component, which is responsible
-                  for vulnerability scanning of container images stored in a cluster-local
-                  image repository.
+                description: |-
+                  Settings for the Scanner component, which is responsible for vulnerability scanning of container
+                  images stored in a cluster-local image repository.
                 properties:
                   analyzer:
                     description: Settings pertaining to the analyzer deployment, such
                       as for autoscaling.
                     properties:
+                      hostAliases:
+                        description: HostAliases allows configuring additional hostnames
+                          to resolve in the pod's hosts file.
+                        items:
+                          description: |-
+                            HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                            pod's hosts file.
+                          properties:
+                            hostnames:
+                              description: Hostnames for the above IP address.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            ip:
+                              description: IP address of the host file entry.
+                              type: string
+                          required:
+                          - ip
+                          type: object
+                        type: array
                       nodeSelector:
                         additionalProperties:
                           type: string
@@ -605,24 +803,26 @@ spec:
                           nodes, you can configure a node selector here.
                         type: object
                       resources:
-                        description: Allows overriding the default resource settings
-                          for this component. Please consult the documentation for
-                          an overview of default resource requirements and a sizing
-                          guide.
+                        description: |-
+                          Allows overriding the default resource settings for this component. Please consult the documentation
+                          for an overview of default resource requirements and a sizing guide.
                         properties:
                           claims:
-                            description: "Claims lists the names of resources, defined
-                              in spec.resourceClaims, that are used by this container.
-                              \n This is an alpha field and requires enabling the
-                              DynamicResourceAllocation feature gate. \n This field
-                              is immutable. It can only be set for containers."
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
                             items:
                               description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                               properties:
                                 name:
-                                  description: Name must match the name of one entry
-                                    in pod.spec.resourceClaims of the Pod where this
-                                    field is used. It makes that resource available
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
                                     inside a container.
                                   type: string
                               required:
@@ -639,8 +839,9 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Limits describes the maximum amount of compute
-                              resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                           requests:
                             additionalProperties:
@@ -649,11 +850,11 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Requests describes the minimum amount of
-                              compute resources required. If Requests is omitted for
-                              a container, it defaults to Limits if that is explicitly
-                              specified, otherwise to an implementation-defined value.
-                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
                       scaling:
@@ -662,9 +863,9 @@ spec:
                         properties:
                           autoScaling:
                             default: Enabled
-                            description: When enabled, the number of analyzer replicas
-                              is managed dynamically based on the load, within the
-                              limits specified below.
+                            description: |-
+                              When enabled, the number of component replicas is managed dynamically based on the load, within the limits
+                              specified below.
                             enum:
                             - Enabled
                             - Disabled
@@ -692,42 +893,39 @@ spec:
                         description: If you want this component to only run on specific
                           nodes, you can configure tolerations of tainted nodes.
                         items:
-                          description: The pod this Toleration is attached to tolerates
-                            any taint that matches the triple <key,value,effect> using
-                            the matching operator <operator>.
+                          description: |-
+                            The pod this Toleration is attached to tolerates any taint that matches
+                            the triple <key,value,effect> using the matching operator <operator>.
                           properties:
                             effect:
-                              description: Effect indicates the taint effect to match.
-                                Empty means match all taint effects. When specified,
-                                allowed values are NoSchedule, PreferNoSchedule and
-                                NoExecute.
+                              description: |-
+                                Effect indicates the taint effect to match. Empty means match all taint effects.
+                                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
                               type: string
                             key:
-                              description: Key is the taint key that the toleration
-                                applies to. Empty means match all taint keys. If the
-                                key is empty, operator must be Exists; this combination
-                                means to match all values and all keys.
+                              description: |-
+                                Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
                               type: string
                             operator:
-                              description: Operator represents a key's relationship
-                                to the value. Valid operators are Exists and Equal.
-                                Defaults to Equal. Exists is equivalent to wildcard
-                                for value, so that a pod can tolerate all taints of
-                                a particular category.
+                              description: |-
+                                Operator represents a key's relationship to the value.
+                                Valid operators are Exists and Equal. Defaults to Equal.
+                                Exists is equivalent to wildcard for value, so that a pod can
+                                tolerate all taints of a particular category.
                               type: string
                             tolerationSeconds:
-                              description: TolerationSeconds represents the period
-                                of time the toleration (which must be of effect NoExecute,
-                                otherwise this field is ignored) tolerates the taint.
-                                By default, it is not set, which means tolerate the
-                                taint forever (do not evict). Zero and negative values
-                                will be treated as 0 (evict immediately) by the system.
+                              description: |-
+                                TolerationSeconds represents the period of time the toleration (which must be
+                                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                negative values will be treated as 0 (evict immediately) by the system.
                               format: int64
                               type: integer
                             value:
-                              description: Value is the taint value the toleration
-                                matches to. If the operator is Exists, the value should
-                                be empty, otherwise just a regular string.
+                              description: |-
+                                Value is the taint value the toleration matches to.
+                                If the operator is Exists, the value should be empty, otherwise just a regular string.
                               type: string
                           type: object
                         type: array
@@ -736,6 +934,27 @@ spec:
                     description: Settings pertaining to the database used by the Red
                       Hat Advanced Cluster Security Scanner.
                     properties:
+                      hostAliases:
+                        description: HostAliases allows configuring additional hostnames
+                          to resolve in the pod's hosts file.
+                        items:
+                          description: |-
+                            HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                            pod's hosts file.
+                          properties:
+                            hostnames:
+                              description: Hostnames for the above IP address.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            ip:
+                              description: IP address of the host file entry.
+                              type: string
+                          required:
+                          - ip
+                          type: object
+                        type: array
                       nodeSelector:
                         additionalProperties:
                           type: string
@@ -743,24 +962,26 @@ spec:
                           nodes, you can configure a node selector here.
                         type: object
                       resources:
-                        description: Allows overriding the default resource settings
-                          for this component. Please consult the documentation for
-                          an overview of default resource requirements and a sizing
-                          guide.
+                        description: |-
+                          Allows overriding the default resource settings for this component. Please consult the documentation
+                          for an overview of default resource requirements and a sizing guide.
                         properties:
                           claims:
-                            description: "Claims lists the names of resources, defined
-                              in spec.resourceClaims, that are used by this container.
-                              \n This is an alpha field and requires enabling the
-                              DynamicResourceAllocation feature gate. \n This field
-                              is immutable. It can only be set for containers."
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
                             items:
                               description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                               properties:
                                 name:
-                                  description: Name must match the name of one entry
-                                    in pod.spec.resourceClaims of the Pod where this
-                                    field is used. It makes that resource available
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
                                     inside a container.
                                   type: string
                               required:
@@ -777,8 +998,9 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Limits describes the maximum amount of compute
-                              resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                           requests:
                             additionalProperties:
@@ -787,64 +1009,417 @@ spec:
                               - type: string
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
-                            description: 'Requests describes the minimum amount of
-                              compute resources required. If Requests is omitted for
-                              a container, it defaults to Limits if that is explicitly
-                              specified, otherwise to an implementation-defined value.
-                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
                       tolerations:
                         description: If you want this component to only run on specific
                           nodes, you can configure tolerations of tainted nodes.
                         items:
-                          description: The pod this Toleration is attached to tolerates
-                            any taint that matches the triple <key,value,effect> using
-                            the matching operator <operator>.
+                          description: |-
+                            The pod this Toleration is attached to tolerates any taint that matches
+                            the triple <key,value,effect> using the matching operator <operator>.
                           properties:
                             effect:
-                              description: Effect indicates the taint effect to match.
-                                Empty means match all taint effects. When specified,
-                                allowed values are NoSchedule, PreferNoSchedule and
-                                NoExecute.
+                              description: |-
+                                Effect indicates the taint effect to match. Empty means match all taint effects.
+                                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
                               type: string
                             key:
-                              description: Key is the taint key that the toleration
-                                applies to. Empty means match all taint keys. If the
-                                key is empty, operator must be Exists; this combination
-                                means to match all values and all keys.
+                              description: |-
+                                Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
                               type: string
                             operator:
-                              description: Operator represents a key's relationship
-                                to the value. Valid operators are Exists and Equal.
-                                Defaults to Equal. Exists is equivalent to wildcard
-                                for value, so that a pod can tolerate all taints of
-                                a particular category.
+                              description: |-
+                                Operator represents a key's relationship to the value.
+                                Valid operators are Exists and Equal. Defaults to Equal.
+                                Exists is equivalent to wildcard for value, so that a pod can
+                                tolerate all taints of a particular category.
                               type: string
                             tolerationSeconds:
-                              description: TolerationSeconds represents the period
-                                of time the toleration (which must be of effect NoExecute,
-                                otherwise this field is ignored) tolerates the taint.
-                                By default, it is not set, which means tolerate the
-                                taint forever (do not evict). Zero and negative values
-                                will be treated as 0 (evict immediately) by the system.
+                              description: |-
+                                TolerationSeconds represents the period of time the toleration (which must be
+                                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                negative values will be treated as 0 (evict immediately) by the system.
                               format: int64
                               type: integer
                             value:
-                              description: Value is the taint value the toleration
-                                matches to. If the operator is Exists, the value should
-                                be empty, otherwise just a regular string.
+                              description: |-
+                                Value is the taint value the toleration matches to.
+                                If the operator is Exists, the value should be empty, otherwise just a regular string.
                               type: string
                           type: object
                         type: array
                     type: object
                   scannerComponent:
                     default: AutoSense
-                    description: If you do not want to deploy the Red Hat Advanced
-                      Cluster Security Scanner, you can disable it here (not recommended).
-                      If you do so, all the settings in this section will have no
-                      effect.
+                    description: |-
+                      If you do not want to deploy the Red Hat Advanced Cluster Security Scanner, you can disable it here
+                      (not recommended).
+                      If you do so, all the settings in this section will have no effect.
                     enum:
+                    - AutoSense
+                    - Disabled
+                    type: string
+                type: object
+              scannerV4:
+                default:
+                  scannerComponent: Default
+                description: Settings for the Scanner V4 components, which can run
+                  in addition to the previously existing Scanner components
+                properties:
+                  db:
+                    description: Settings pertaining to the DB deployment.
+                    properties:
+                      hostAliases:
+                        description: HostAliases allows configuring additional hostnames
+                          to resolve in the pod's hosts file.
+                        items:
+                          description: |-
+                            HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                            pod's hosts file.
+                          properties:
+                            hostnames:
+                              description: Hostnames for the above IP address.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            ip:
+                              description: IP address of the host file entry.
+                              type: string
+                          required:
+                          - ip
+                          type: object
+                        type: array
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: If you want this component to only run on specific
+                          nodes, you can configure a node selector here.
+                        type: object
+                      persistence:
+                        description: |-
+                          Configures how Scanner V4 should store its persistent data.
+                          You can use a persistent volume claim (the recommended default), a host path,
+                          or an emptyDir volume if Scanner V4 is running on a secured cluster without default StorageClass.
+                        properties:
+                          hostPath:
+                            description: |-
+                              Stores persistent data on a directory on the host. This is not recommended, and should only
+                              be used together with a node selector (only available in YAML view).
+                            properties:
+                              path:
+                                description: The path on the host running Central.
+                                type: string
+                            type: object
+                          persistentVolumeClaim:
+                            description: |-
+                              Uses a Kubernetes persistent volume claim (PVC) to manage the storage location of persistent data.
+                              Recommended for most users.
+                            properties:
+                              claimName:
+                                default: scanner-v4-db
+                                description: |-
+                                  The name of the PVC to manage persistent data. If no PVC with the given name exists, it will be
+                                  created. Defaults to "scanner-v4-db" if not set.
+                                type: string
+                              size:
+                                description: |-
+                                  The size of the persistent volume when created through the claim. If a claim was automatically created,
+                                  this can be used after the initial deployment to resize (grow) the volume (only supported by some
+                                  storage class controllers).
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                type: string
+                              storageClassName:
+                                description: |-
+                                  The name of the storage class to use for the PVC. If your cluster is not configured with a default storage
+                                  class, you must select a value here.
+                                type: string
+                            type: object
+                        type: object
+                      resources:
+                        description: |-
+                          Allows overriding the default resource settings for this component. Please consult the documentation
+                          for an overview of default resource requirements and a sizing guide.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      tolerations:
+                        description: If you want this component to only run on specific
+                          nodes, you can configure tolerations of tainted nodes.
+                        items:
+                          description: |-
+                            The pod this Toleration is attached to tolerates any taint that matches
+                            the triple <key,value,effect> using the matching operator <operator>.
+                          properties:
+                            effect:
+                              description: |-
+                                Effect indicates the taint effect to match. Empty means match all taint effects.
+                                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                              type: string
+                            key:
+                              description: |-
+                                Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                              type: string
+                            operator:
+                              description: |-
+                                Operator represents a key's relationship to the value.
+                                Valid operators are Exists and Equal. Defaults to Equal.
+                                Exists is equivalent to wildcard for value, so that a pod can
+                                tolerate all taints of a particular category.
+                              type: string
+                            tolerationSeconds:
+                              description: |-
+                                TolerationSeconds represents the period of time the toleration (which must be
+                                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                negative values will be treated as 0 (evict immediately) by the system.
+                              format: int64
+                              type: integer
+                            value:
+                              description: |-
+                                Value is the taint value the toleration matches to.
+                                If the operator is Exists, the value should be empty, otherwise just a regular string.
+                              type: string
+                          type: object
+                        type: array
+                    type: object
+                  indexer:
+                    description: Settings pertaining to the indexer deployment.
+                    properties:
+                      hostAliases:
+                        description: HostAliases allows configuring additional hostnames
+                          to resolve in the pod's hosts file.
+                        items:
+                          description: |-
+                            HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                            pod's hosts file.
+                          properties:
+                            hostnames:
+                              description: Hostnames for the above IP address.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            ip:
+                              description: IP address of the host file entry.
+                              type: string
+                          required:
+                          - ip
+                          type: object
+                        type: array
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: If you want this component to only run on specific
+                          nodes, you can configure a node selector here.
+                        type: object
+                      resources:
+                        description: |-
+                          Allows overriding the default resource settings for this component. Please consult the documentation
+                          for an overview of default resource requirements and a sizing guide.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      scaling:
+                        description: Controls the number of replicas and autoscaling
+                          for this component.
+                        properties:
+                          autoScaling:
+                            default: Enabled
+                            description: |-
+                              When enabled, the number of component replicas is managed dynamically based on the load, within the limits
+                              specified below.
+                            enum:
+                            - Enabled
+                            - Disabled
+                            type: string
+                          maxReplicas:
+                            default: 5
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          minReplicas:
+                            default: 2
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          replicas:
+                            default: 3
+                            description: When autoscaling is disabled, the number
+                              of replicas will always be configured to match this
+                              value.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                        type: object
+                      tolerations:
+                        description: If you want this component to only run on specific
+                          nodes, you can configure tolerations of tainted nodes.
+                        items:
+                          description: |-
+                            The pod this Toleration is attached to tolerates any taint that matches
+                            the triple <key,value,effect> using the matching operator <operator>.
+                          properties:
+                            effect:
+                              description: |-
+                                Effect indicates the taint effect to match. Empty means match all taint effects.
+                                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                              type: string
+                            key:
+                              description: |-
+                                Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                              type: string
+                            operator:
+                              description: |-
+                                Operator represents a key's relationship to the value.
+                                Valid operators are Exists and Equal. Defaults to Equal.
+                                Exists is equivalent to wildcard for value, so that a pod can
+                                tolerate all taints of a particular category.
+                              type: string
+                            tolerationSeconds:
+                              description: |-
+                                TolerationSeconds represents the period of time the toleration (which must be
+                                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                negative values will be treated as 0 (evict immediately) by the system.
+                              format: int64
+                              type: integer
+                            value:
+                              description: |-
+                                Value is the taint value the toleration matches to.
+                                If the operator is Exists, the value should be empty, otherwise just a regular string.
+                              type: string
+                          type: object
+                        type: array
+                    type: object
+                  monitoring:
+                    description: |-
+                      Configures monitoring endpoint for Scanner V4. The monitoring endpoint
+                      allows other services to collect metrics from Scanner V4, provided in
+                      Prometheus compatible format.
+                    properties:
+                      exposeEndpoint:
+                        description: |-
+                          Expose the monitoring endpoint. A new service, "monitoring",
+                          with port 9090, will be created as well as a network policy allowing
+                          inbound connections to the port.
+                        enum:
+                        - Enabled
+                        - Disabled
+                        type: string
+                    type: object
+                  scannerComponent:
+                    default: Default
+                    description: If you want to enable the Scanner V4 component set
+                      this to "AutoSense"
+                    enum:
+                    - Default
                     - AutoSense
                     - Disabled
                     type: string
@@ -852,6 +1427,27 @@ spec:
               sensor:
                 description: Settings for the Sensor component.
                 properties:
+                  hostAliases:
+                    description: HostAliases allows configuring additional hostnames
+                      to resolve in the pod's hosts file.
+                    items:
+                      description: |-
+                        HostAlias holds the mapping between IP and hostnames that will be injected as an entry in the
+                        pod's hosts file.
+                      properties:
+                        hostnames:
+                          description: Hostnames for the above IP address.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        ip:
+                          description: IP address of the host file entry.
+                          type: string
+                      required:
+                      - ip
+                      type: object
+                    type: array
                   nodeSelector:
                     additionalProperties:
                       type: string
@@ -859,24 +1455,27 @@ spec:
                       nodes, you can configure a node selector here.
                     type: object
                   resources:
-                    description: Allows overriding the default resource settings for
-                      this component. Please consult the documentation for an overview
-                      of default resource requirements and a sizing guide.
+                    description: |-
+                      Allows overriding the default resource settings for this component. Please consult the documentation
+                      for an overview of default resource requirements and a sizing guide.
                     properties:
                       claims:
-                        description: "Claims lists the names of resources, defined
-                          in spec.resourceClaims, that are used by this container.
-                          \n This is an alpha field and requires enabling the DynamicResourceAllocation
-                          feature gate. \n This field is immutable. It can only be
-                          set for containers."
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
                         items:
                           description: ResourceClaim references one entry in PodSpec.ResourceClaims.
                           properties:
                             name:
-                              description: Name must match the name of one entry in
-                                pod.spec.resourceClaims of the Pod where this field
-                                is used. It makes that resource available inside a
-                                container.
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
                               type: string
                           required:
                           - name
@@ -892,8 +1491,9 @@ spec:
                           - type: string
                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                           x-kubernetes-int-or-string: true
-                        description: 'Limits describes the maximum amount of compute
-                          resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                       requests:
                         additionalProperties:
@@ -902,51 +1502,50 @@ spec:
                           - type: string
                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                           x-kubernetes-int-or-string: true
-                        description: 'Requests describes the minimum amount of compute
-                          resources required. If Requests is omitted for a container,
-                          it defaults to Limits if that is explicitly specified, otherwise
-                          to an implementation-defined value. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
                   tolerations:
                     description: If you want this component to only run on specific
                       nodes, you can configure tolerations of tainted nodes.
                     items:
-                      description: The pod this Toleration is attached to tolerates
-                        any taint that matches the triple <key,value,effect> using
-                        the matching operator <operator>.
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
                       properties:
                         effect:
-                          description: Effect indicates the taint effect to match.
-                            Empty means match all taint effects. When specified, allowed
-                            values are NoSchedule, PreferNoSchedule and NoExecute.
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
                           type: string
                         key:
-                          description: Key is the taint key that the toleration applies
-                            to. Empty means match all taint keys. If the key is empty,
-                            operator must be Exists; this combination means to match
-                            all values and all keys.
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
                           type: string
                         operator:
-                          description: Operator represents a key's relationship to
-                            the value. Valid operators are Exists and Equal. Defaults
-                            to Equal. Exists is equivalent to wildcard for value,
-                            so that a pod can tolerate all taints of a particular
-                            category.
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists and Equal. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
                           type: string
                         tolerationSeconds:
-                          description: TolerationSeconds represents the period of
-                            time the toleration (which must be of effect NoExecute,
-                            otherwise this field is ignored) tolerates the taint.
-                            By default, it is not set, which means tolerate the taint
-                            forever (do not evict). Zero and negative values will
-                            be treated as 0 (evict immediately) by the system.
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
                           format: int64
                           type: integer
                         value:
-                          description: Value is the taint value the toleration matches
-                            to. If the operator is Exists, the value should be empty,
-                            otherwise just a regular string.
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
                           type: string
                       type: object
                     type: array
@@ -978,9 +1577,9 @@ spec:
             description: SecuredClusterStatus defines the observed state of SecuredCluster
             properties:
               clusterName:
-                description: The assigned cluster name per the spec. This cannot be
-                  changed afterwards. If you need to change the cluster name, please
-                  delete and recreate this resource.
+                description: |-
+                  The assigned cluster name per the spec. This cannot be changed afterwards. If you need to change the
+                  cluster name, please delete and recreate this resource.
                 type: string
               conditions:
                 items:

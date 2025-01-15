@@ -4,21 +4,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/clientconn"
+	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/telemetry/phonehome"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/roxctl/common/auth"
-	"github.com/stackrox/rox/roxctl/common/flags"
 	"github.com/stackrox/rox/roxctl/common/logger"
 	"golang.org/x/net/http2"
 )
 
 var (
 	http1NextProtos = []string{"http/1.1", "http/1.0"}
+
+	// RoxctlCommand is the reconstructed roxctl command line.
+	RoxctlCommand string
+
+	// RoxctlCommandIndex is the index of the current API call for the command.
+	RoxctlCommandIndex atomic.Uint32
 )
 
 // RoxctlHTTPClient abstracts all HTTP-related functionalities required within roxctl
@@ -36,7 +46,7 @@ type roxctlClientImpl struct {
 }
 
 func getURL(path string) (string, error) {
-	endpoint, usePlaintext, err := flags.EndpointAndPlaintextSetting()
+	endpoint, _, usePlaintext, err := ConnectNames()
 	if err != nil {
 		return "", errors.Wrap(err, "could not get endpoint")
 	}
@@ -65,10 +75,15 @@ func GetRoxctlHTTPClient(am auth.Method, timeout time.Duration, forceHTTP1 bool,
 		}
 	}
 
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
+	retryClient := retryablehttp.NewClient()
+	retryClient.RetryMax = env.ClientMaxRetries.IntegerSetting()
+	retryClient.HTTPClient.Transport = transport
+	retryClient.HTTPClient.Timeout = timeout
+	retryClient.RetryWaitMin = 10 * time.Second
+	// Silence the default log output of the HTTP retry client to not pollute output.
+	retryClient.Logger = nil
+
+	client := retryClient.StandardClient()
 	return &roxctlClientImpl{http: client, am: am, forceHTTP1: forceHTTP1, useInsecure: useInsecure}, nil
 }
 
@@ -96,9 +111,36 @@ func (client *roxctlClientImpl) DoReqAndVerifyStatusCode(path string, method str
 	return resp, nil
 }
 
+func sanitizeHeaderValue(value string) string {
+	return strings.Map(func(r rune) rune {
+		// Allowed characters for a header value are all visible ASCII, which
+		// are the runes in the range [33, 126].
+		// They include field separators like brackets and such. See RFC7230.
+		if r >= 33 && r <= 126 {
+			return r
+		}
+		return ' '
+	}, value)
+}
+
+func setCustomHeaders(headers func(string, ...string)) {
+	headers(clientconn.RoxctlCommandHeader, RoxctlCommand)
+	headers(clientconn.RoxctlCommandIndexHeader, fmt.Sprint(RoxctlCommandIndex.Add(1)))
+	if e := env.ExecutionEnvironment.Setting(); e != "" {
+		headers(clientconn.ExecutionEnvironment, sanitizeHeaderValue(e))
+	}
+}
+
 // Do executes a http.Request
 func (client *roxctlClientImpl) Do(req *http.Request) (*http.Response, error) {
+	setCustomHeaders(phonehome.Headers(req.Header).Set)
+
 	resp, err := client.http.Do(req)
+	// The url.Error returned by go-retryablehttp needs to be unwrapped to retrieve the correct timeout settings.
+	// See https://github.com/hashicorp/go-retryablehttp/issues/142.
+	if _, ok := err.(*url.Error); ok {
+		err = errors.Unwrap(err)
+	}
 	return resp, errors.Wrap(err, "error when doing http request")
 }
 

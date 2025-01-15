@@ -1,6 +1,6 @@
 import React, { ReactElement } from 'react';
 import { Alert, Card, CardBody } from '@patternfly/react-core';
-import { TableComposable, Tbody, Th, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Th, Tr } from '@patternfly/react-table';
 
 import { Cluster } from 'types/cluster.proto';
 
@@ -57,12 +57,12 @@ function CredentialExpirationCard({
             />
             {errorMessageFetching ? (
                 <CardBody>
-                    <Alert isInline variant="warning" title={errorMessageFetching} />
+                    <Alert isInline variant="warning" title={errorMessageFetching} component="p" />
                 </CardBody>
             ) : counts !== null &&
               (counts.HEALTHY === 0 || counts.UNHEALTHY !== 0 || counts.DEGRADED !== 0) ? (
                 <CardBody>
-                    <TableComposable variant="compact">
+                    <Table variant="compact">
                         <TheadClustersHealth
                             dataLabelHealthy={dataLabelHealthy}
                             dataLabelUnhealthy={dataLabelUnhealthy}
@@ -82,7 +82,7 @@ function CredentialExpirationCard({
                                 <TdTotal count={clusters.length} />
                             </Tr>
                         </Tbody>
-                    </TableComposable>
+                    </Table>
                 </CardBody>
             ) : null}
         </Card>

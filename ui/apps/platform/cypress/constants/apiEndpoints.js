@@ -68,7 +68,7 @@ export const integrationHealth = {
     signatureIntegrations: '/v1/signatureintegrations',
     notifiers: '/v1/integrationhealth/notifiers',
     externalBackups: '/v1/integrationhealth/externalbackups',
-    vulnDefinitions: '/v1/integrationhealth/vulndefinitions',
+    vulnDefinitions: '/v1/integrationhealth/vulndefinitions?component=*',
 };
 
 export const integrations = {
@@ -78,6 +78,7 @@ export const integrations = {
     externalBackups: '/v1/externalbackups',
     apiTokens: 'v1/apitokens?revoked=false',
     clusterInitBundles: '/v1/cluster-init/init-bundles',
+    machineAccessConfigs: '/v1/auth/m2m',
 };
 
 export const integration = {
@@ -89,10 +90,4 @@ export const integration = {
         generate: 'v1/cluster-init/init-bundles',
         revoke: '/v1/cluster-init/init-bundles/revoke',
     },
-};
-
-export const riskAcceptance = {
-    getImageVulnerabilities: graphql('getImageVulnerabilities'),
-    deferVulnerability: graphql('deferVulnerability'),
-    markVulnerabilityFalsePositive: graphql('markVulnerabilityFalsePositive'),
 };

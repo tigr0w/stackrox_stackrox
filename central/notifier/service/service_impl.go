@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/notifier/datastore"
 	"github.com/stackrox/rox/central/notifier/policycleaner"
-	"github.com/stackrox/rox/central/role/resources"
+	"github.com/stackrox/rox/central/notifiers/splunk"
+	notifierUtils "github.com/stackrox/rox/central/notifiers/utils"
+	"github.com/stackrox/rox/central/notifiers/validation"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
@@ -21,8 +23,8 @@ import (
 	"github.com/stackrox/rox/pkg/integrationhealth"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/notifier"
-	"github.com/stackrox/rox/pkg/notifiers"
-	"github.com/stackrox/rox/pkg/notifiers/splunk"
+	pkgNotifiers "github.com/stackrox/rox/pkg/notifiers"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/secrets"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -46,6 +48,8 @@ var (
 	})
 )
 
+const errSecureNotifierString = "Error securing notifier"
+
 // ClusterService is the struct that manages the cluster API
 type serviceImpl struct {
 	v1.UnimplementedNotifierServiceServer
@@ -53,6 +57,7 @@ type serviceImpl struct {
 	storage   datastore.DataStore
 	processor notifier.Processor
 	reporter  integrationhealth.Reporter
+	cryptoKey string
 
 	policyCleaner policycleaner.PolicyCleaner
 }
@@ -131,11 +136,22 @@ func (s *serviceImpl) UpdateNotifier(ctx context.Context, request *v1.UpdateNoti
 	if err := s.reconcileUpdateNotifierRequest(ctx, request); err != nil {
 		return nil, err
 	}
-	notifierCreator, ok := notifiers.Registry[request.GetNotifier().GetType()]
+	notifierCreator, ok := pkgNotifiers.Registry[request.GetNotifier().GetType()]
 	if !ok {
 		return nil, errors.Wrapf(errox.InvalidArgs, "notifier type %v is not a valid notifier type", request.GetNotifier().GetType())
 	}
 	upgradeNotifierConfig(request.GetNotifier())
+	if err := validation.ValidateNotifierConfig(request.GetNotifier(), request.GetUpdatePassword()); err != nil {
+		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
+	}
+	if request.GetUpdatePassword() {
+		err := notifierUtils.SecureNotifier(request.GetNotifier(), s.cryptoKey)
+		if err != nil {
+			// Don't send out error from crypto lib but log it.
+			log.Errorf("%s: %s", errSecureNotifierString, err.Error())
+			return nil, errors.New(errSecureNotifierString)
+		}
+	}
 	notifier, err := notifierCreator(request.GetNotifier())
 	if err != nil {
 		return nil, err
@@ -156,7 +172,16 @@ func (s *serviceImpl) PostNotifier(ctx context.Context, request *storage.Notifie
 		return nil, errors.Wrap(errox.InvalidArgs, "id field should be empty when posting a new notifier")
 	}
 	upgradeNotifierConfig(request)
-	notifier, err := notifiers.CreateNotifier(request)
+	if err := validation.ValidateNotifierConfig(request, true); err != nil {
+		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
+	}
+	err := notifierUtils.SecureNotifier(request, s.cryptoKey)
+	if err != nil {
+		// Don't send out error from crypto lib but log it.
+		log.Errorf("%s: %s", errSecureNotifierString, err.Error())
+		return nil, errors.New(errSecureNotifierString)
+	}
+	notifier, err := pkgNotifiers.CreateNotifier(request)
 	if err != nil {
 		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
 	}
@@ -183,10 +208,21 @@ func (s *serviceImpl) TestUpdatedNotifier(ctx context.Context, request *v1.Updat
 	if err := validateNotifier(request.GetNotifier()); err != nil {
 		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
 	}
+	if err := validation.ValidateNotifierConfig(request.GetNotifier(), request.GetUpdatePassword()); err != nil {
+		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
+	}
 	if err := s.reconcileUpdateNotifierRequest(ctx, request); err != nil {
 		return nil, err
 	}
-	notifier, err := notifiers.CreateNotifier(request.GetNotifier())
+	if request.GetUpdatePassword() {
+		err := notifierUtils.SecureNotifier(request.GetNotifier(), s.cryptoKey)
+		if err != nil {
+			// Don't send out error from crypto lib but log it.
+			log.Errorf("%s: %s", errSecureNotifierString, err.Error())
+			return nil, errors.New(errSecureNotifierString)
+		}
+	}
+	notifier, err := pkgNotifiers.CreateNotifier(request.GetNotifier())
 	if err != nil {
 		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
 	}
@@ -197,6 +233,8 @@ func (s *serviceImpl) TestUpdatedNotifier(ctx context.Context, request *v1.Updat
 	}()
 
 	if err := notifier.Test(ctx); err != nil {
+		log.Warnf("test notifier %q of type %q failed: %s: %v", request.GetNotifier().GetId(), request.GetNotifier().GetType(), err.Error(), err.Unwrap())
+
 		return nil, errors.Wrap(errox.InvalidArgs, err.Error())
 	}
 	return &v1.Empty{}, nil
