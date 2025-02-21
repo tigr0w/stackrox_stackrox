@@ -4,15 +4,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	storeMocks "github.com/stackrox/rox/central/authprovider/datastore/internal/store/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/authproviders"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 // Separate tests for testing that things are rejected by SAC.
@@ -53,6 +55,21 @@ func (s *authProviderDataStoreEnforceTestSuite) SetupTest() {
 
 func (s *authProviderDataStoreEnforceTestSuite) TearDownTest() {
 	s.mockCtrl.Finish()
+}
+
+func (s *authProviderDataStoreEnforceTestSuite) TestEnforcesAuthProviderExistsWithName() {
+	s.storage.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+
+	const testProviderName = "Test Auth Provider"
+
+	_, err := s.dataStore.AuthProviderExistsWithName(s.hasNoneCtx, testProviderName)
+	s.ErrorIs(err, sac.ErrResourceAccessDenied)
+
+	_, err = s.dataStore.AuthProviderExistsWithName(s.hasReadCtx, testProviderName)
+	s.NoError(err)
+
+	_, err = s.dataStore.AuthProviderExistsWithName(s.hasWriteCtx, testProviderName)
+	s.NoError(err)
 }
 
 func (s *authProviderDataStoreEnforceTestSuite) TestEnforcesGetAll() {
@@ -144,15 +161,42 @@ func (s *authProviderDataStoreTestSuite) TestAllowsAdd() {
 	s.storage.EXPECT().Upsert(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	s.storage.EXPECT().Exists(gomock.Any(), gomock.Any()).Return(false, nil).Times(1)
 
-	err := s.dataStore.AddAuthProvider(s.hasWriteCtx, &storage.AuthProvider{})
+	err := s.dataStore.AddAuthProvider(s.hasWriteCtx, &storage.AuthProvider{
+		Id:       "test",
+		Name:     "test",
+		LoginUrl: "test",
+	})
 	s.NoError(err, "expected no error trying to write with permissions")
 }
 
 func (s *authProviderDataStoreTestSuite) TestErrorOnAdd() {
 	s.storage.EXPECT().Exists(gomock.Any(), gomock.Any()).Return(true, nil)
 
-	err := s.dataStore.AddAuthProvider(s.hasWriteCtx, &storage.AuthProvider{})
+	err := s.dataStore.AddAuthProvider(s.hasWriteCtx, &storage.AuthProvider{
+		Id:       "test",
+		Name:     "test",
+		LoginUrl: "test",
+	})
 	s.Error(err)
+}
+
+func (s *authProviderDataStoreTestSuite) TestAuthProviderExistsWithName() {
+	testProviderName := "Test Auth Provider"
+	s.storage.EXPECT().
+		Search(gomock.Any(), gomock.Any()).
+		Times(1).
+		Return([]search.Result{{ID: "1234"}}, nil)
+	exists, err := s.dataStore.AuthProviderExistsWithName(s.hasReadCtx, testProviderName)
+	s.NoError(err)
+	s.True(exists)
+
+	s.storage.EXPECT().
+		Search(gomock.Any(), gomock.Any()).
+		Times(1).
+		Return(nil, nil)
+	exists, err = s.dataStore.AuthProviderExistsWithName(s.hasReadCtx, testProviderName)
+	s.NoError(err)
+	s.False(exists)
 }
 
 func (s *authProviderDataStoreTestSuite) TestGetFiltered() {
@@ -173,21 +217,29 @@ func (s *authProviderDataStoreTestSuite) TestGetFiltered() {
 	})
 	s.NoError(err)
 	s.Len(filteredAuthProviders, 1)
-	s.ElementsMatch(filteredAuthProviders, []*storage.AuthProvider{authProviders[0]})
+	protoassert.ElementsMatch(s.T(), filteredAuthProviders, []*storage.AuthProvider{authProviders[0]})
 }
 
 func (s *authProviderDataStoreTestSuite) TestAllowsUpdate() {
 	s.storage.EXPECT().Upsert(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{}, true, nil).Times(1)
 
-	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{})
+	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{
+		Id:       "test",
+		Name:     "test",
+		LoginUrl: "test",
+	})
 	s.NoError(err, "expected no error trying to write with permissions")
 }
 
 func (s *authProviderDataStoreTestSuite) TestErrorOnUpdate() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(nil, false, nil).Times(1)
 
-	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{})
+	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{
+		Id:       "test",
+		Name:     "test",
+		LoginUrl: "test",
+	})
 	s.Error(err)
 }
 
@@ -201,35 +253,46 @@ func (s *authProviderDataStoreTestSuite) TestAllowsRemove() {
 
 func (s *authProviderDataStoreTestSuite) TestUpdateMutableToImmutable() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			MutabilityMode: storage.Traits_ALLOW_MUTATE,
 		},
 	}, true, nil).Times(1)
 	s.storage.EXPECT().Upsert(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 
-	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{})
+	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{
+		Id:       "id",
+		Name:     "test",
+		LoginUrl: "test",
+	})
 	s.NoError(err)
 }
 
 func (s *authProviderDataStoreTestSuite) TestUpdateImmutableNoForce() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			MutabilityMode: storage.Traits_ALLOW_MUTATE_FORCED,
 		},
 	}, true, nil).Times(1)
 
-	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{})
+	err := s.dataStore.UpdateAuthProvider(s.hasWriteCtx, &storage.AuthProvider{
+		Id:       "id",
+		Name:     "test",
+		LoginUrl: "test",
+	})
 	s.ErrorIs(err, errox.InvalidArgs)
 }
 
 func (s *authProviderDataStoreTestSuite) TestDeleteImmutableNoForce() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			MutabilityMode: storage.Traits_ALLOW_MUTATE_FORCED,
 		},
@@ -241,8 +304,9 @@ func (s *authProviderDataStoreTestSuite) TestDeleteImmutableNoForce() {
 
 func (s *authProviderDataStoreTestSuite) TestDeleteImmutableForce() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			MutabilityMode: storage.Traits_ALLOW_MUTATE,
 		},
@@ -255,8 +319,9 @@ func (s *authProviderDataStoreTestSuite) TestDeleteImmutableForce() {
 
 func (s *authProviderDataStoreTestSuite) TestDeleteDeclarativeViaAPI() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_DECLARATIVE,
 		},
@@ -268,8 +333,9 @@ func (s *authProviderDataStoreTestSuite) TestDeleteDeclarativeViaAPI() {
 
 func (s *authProviderDataStoreTestSuite) TestDeleteDeclarativeSuccess() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_DECLARATIVE,
 		},
@@ -282,8 +348,9 @@ func (s *authProviderDataStoreTestSuite) TestDeleteDeclarativeSuccess() {
 
 func (s *authProviderDataStoreTestSuite) TestUpdateDeclarativeViaAPI() {
 	ap := &storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_DECLARATIVE,
 		},
@@ -296,8 +363,9 @@ func (s *authProviderDataStoreTestSuite) TestUpdateDeclarativeViaAPI() {
 
 func (s *authProviderDataStoreTestSuite) TestUpdateDeclarativeSuccess() {
 	ap := &storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_DECLARATIVE,
 		},
@@ -311,8 +379,9 @@ func (s *authProviderDataStoreTestSuite) TestUpdateDeclarativeSuccess() {
 
 func (s *authProviderDataStoreTestSuite) TestDeleteImperativeDeclaratively() {
 	s.storage.EXPECT().Get(gomock.Any(), gomock.Any()).Return(&storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_IMPERATIVE,
 		},
@@ -324,8 +393,9 @@ func (s *authProviderDataStoreTestSuite) TestDeleteImperativeDeclaratively() {
 
 func (s *authProviderDataStoreTestSuite) TestUpdateImperativeDeclaratively() {
 	ap := &storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_IMPERATIVE,
 		},
@@ -338,8 +408,9 @@ func (s *authProviderDataStoreTestSuite) TestUpdateImperativeDeclaratively() {
 
 func (s *authProviderDataStoreTestSuite) TestAddDeclarativeViaAPI() {
 	ap := &storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_DECLARATIVE,
 		},
@@ -351,8 +422,9 @@ func (s *authProviderDataStoreTestSuite) TestAddDeclarativeViaAPI() {
 
 func (s *authProviderDataStoreTestSuite) TestAddDeclarativeSuccess() {
 	ap := &storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_DECLARATIVE,
 		},
@@ -366,8 +438,9 @@ func (s *authProviderDataStoreTestSuite) TestAddDeclarativeSuccess() {
 
 func (s *authProviderDataStoreTestSuite) TestAddImperativeDeclaratively() {
 	ap := &storage.AuthProvider{
-		Id:   "id",
-		Name: "name",
+		Id:       "id",
+		Name:     "name",
+		LoginUrl: "test",
 		Traits: &storage.Traits{
 			Origin: storage.Traits_IMPERATIVE,
 		},
@@ -375,4 +448,50 @@ func (s *authProviderDataStoreTestSuite) TestAddImperativeDeclaratively() {
 
 	err := s.dataStore.AddAuthProvider(s.hasWriteDeclarativeCtx, ap)
 	s.ErrorIs(err, errox.NotAuthorized)
+}
+
+func (s *authProviderDataStoreTestSuite) TestValidateAuthProvider() {
+	cases := map[string]struct {
+		ap  *storage.AuthProvider
+		err error
+	}{
+		"empty auth provider should return error": {
+			ap:  &storage.AuthProvider{},
+			err: errox.InvalidArgs,
+		},
+		"empty ID should return an error": {
+			ap: &storage.AuthProvider{
+				Name:     "test",
+				LoginUrl: "test",
+			},
+			err: errox.InvalidArgs,
+		},
+		"empty name should return an error": {
+			ap: &storage.AuthProvider{
+				Id:       "test-id",
+				LoginUrl: "test",
+			},
+			err: errox.InvalidArgs,
+		},
+		"empty login URL should return an error": {
+			ap: &storage.AuthProvider{
+				Id:   "test-id",
+				Name: "test",
+			},
+			err: errox.InvalidArgs,
+		},
+		"all required fields set should not return an error": {
+			ap: &storage.AuthProvider{
+				Id:       "test-id",
+				Name:     "test",
+				LoginUrl: "test",
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		s.Run(name, func() {
+			s.ErrorIs(validateAuthProvider(tc.ap), tc.err)
+		})
+	}
 }

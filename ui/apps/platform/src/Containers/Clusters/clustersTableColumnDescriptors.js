@@ -1,5 +1,6 @@
 import React from 'react';
 import { Trash2 } from 'react-feather';
+import { Link } from 'react-router-dom';
 
 import RowActionButton from 'Components/RowActionButton';
 import {
@@ -8,6 +9,7 @@ import {
     wrapClassName,
     rtTrActionsClassName,
 } from 'Components/Table';
+import { clustersBasePath } from 'routePaths';
 
 import { formatCloudProvider } from './cluster.helpers';
 import ClusterDeletion from './Components/ClusterDeletion';
@@ -19,7 +21,7 @@ import OperatorIndicator from './Components/OperatorIndicator';
 
 export function getColumnsForClusters({
     clusterIdToRetentionInfo,
-    hasReadWriteAccessForCluster,
+    hasWriteAccessForCluster,
     metadata,
     rowActions,
 }) {
@@ -29,7 +31,7 @@ export function getColumnsForClusters({
                 <RowActionButton
                     text="Delete cluster"
                     icon={<Trash2 className="my-1 h-4 w-4" />}
-                    className="hover:bg-alert-200 text-alert-600 hover:text-alert-700"
+                    className="pf-v5-u-danger-color-100"
                     onClick={rowActions.onDeleteHandler(cluster)}
                 />
             </div>
@@ -46,7 +48,7 @@ export function getColumnsForClusters({
             className: `w-1/7 ${wrapClassName} ${defaultColumnClassName}`,
             Cell: ({ original }) => (
                 <span className="flex items-center" data-testid="cluster-name">
-                    {original.name}
+                    <Link to={`${clustersBasePath}/${original.id}`}>{original.name}</Link>
                     {(original.managedBy === 'MANAGER_TYPE_HELM_CHART' ||
                         (original.managedBy === 'MANAGER_TYPE_UNKNOWN' &&
                             !!original.helmConfig)) && (
@@ -67,6 +69,7 @@ export function getColumnsForClusters({
             Cell: ({ original }) => formatCloudProvider(original.status?.providerMetadata),
             headerClassName: `w-1/7 ${defaultHeaderClassName}`,
             className: `w-1/7 ${wrapClassName} ${defaultColumnClassName}`,
+            sortable: false,
         },
         {
             Header: 'Cluster Status',
@@ -78,6 +81,7 @@ export function getColumnsForClusters({
             },
             headerClassName: `w-1/4 ${defaultHeaderClassName}`,
             className: `w-1/4 ${wrapClassName} ${defaultColumnClassName}`,
+            sortable: false,
         },
         {
             Header: 'Sensor Upgrade',
@@ -95,18 +99,23 @@ export function getColumnsForClusters({
             ),
             headerClassName: `w-1/7 ${defaultHeaderClassName}`,
             className: `w-1/7 ${wrapClassName} ${defaultColumnClassName}`,
+            sortable: false,
         },
         {
             Header: 'Credential Expiration',
             Cell: ({ original }) => (
                 <CredentialExpiration
                     certExpiryStatus={original.status?.certExpiryStatus}
+                    autoRefreshEnabled={original.sensorCapabilities?.includes(
+                        'SecuredClusterCertificatesRefresh'
+                    )}
                     currentDatetime={new Date()}
                     isList
                 />
             ),
             headerClassName: `w-1/7 ${defaultHeaderClassName}`,
             className: `w-1/7 ${wrapClassName} ${defaultColumnClassName}`,
+            sortable: false,
         },
         {
             Header: 'Cluster Deletion',
@@ -117,10 +126,11 @@ export function getColumnsForClusters({
             ),
             headerClassName: `w-1/7 ${defaultHeaderClassName}`,
             className: `w-1/7 ${wrapClassName} ${defaultColumnClassName}`,
+            sortable: false,
         },
     ];
 
-    if (hasReadWriteAccessForCluster) {
+    if (hasWriteAccessForCluster) {
         clusterColumns.push({
             Header: '',
             accessor: '',

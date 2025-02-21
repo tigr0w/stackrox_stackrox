@@ -2,37 +2,32 @@ import com.google.protobuf.util.JsonFormat
 import groovy.io.FileType
 import io.grpc.StatusRuntimeException
 
+import io.stackrox.proto.api.v1.NamespaceServiceOuterClass
 import io.stackrox.proto.api.v1.PolicyServiceOuterClass
-import io.stackrox.proto.api.v1.SummaryServiceOuterClass
 import io.stackrox.proto.storage.PolicyOuterClass
 import io.stackrox.proto.storage.ScopeOuterClass
 
+import services.AlertService
 import services.ClusterService
 import services.GraphQLService
+import services.ImageService
+import services.NamespaceService
+import services.NodeService
 import services.PolicyService
-import services.SummaryService
 import util.Env
 
 import spock.lang.Tag
 import spock.lang.Unroll
 import spock.lang.IgnoreIf
 
-// ROX-14228 skipping tests for 1st release on power & z
-@IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
 class UpgradesTest extends BaseSpecification {
     private final static String CLUSTERID = Env.mustGet("UPGRADE_CLUSTER_ID")
     private final static String POLICIES_JSON_PATH =
             Env.get("POLICIES_JSON_RELATIVE_PATH", "../pkg/defaults/policies/files")
 
-    private static final String VULNERABILITY_RESOURCE_TYPE =
-        isPostgresRun() ?
-            "nodeVulnerabilities" :
-            "vulnerabilities"
+    private static final String VULNERABILITY_RESOURCE_TYPE = "nodeVulnerabilities"
 
-    private static final String COMPONENT_RESOURCE_TYPE =
-        isPostgresRun() ?
-            "nodeComponents" :
-            "components"
+    private static final String COMPONENT_RESOURCE_TYPE = "nodeComponents"
 
     private static final COMPLIANCE_QUERY = """query getAggregatedResults(
         \$groupBy: [ComplianceAggregation_Scope!],
@@ -65,18 +60,32 @@ class UpgradesTest extends BaseSpecification {
         cluster != null
         assert(cluster.getDynamicConfig().getDisableAuditLogs() == true)
     }
-
     @Tag("Upgrade")
-    def "Verify that summary API returns non-zero values on upgrade"() {
+    def "Verify that APIs returns non-zero values on upgrade"() {
         expect:
-        "Summary API returns non-zero values on upgrade"
-        SummaryServiceOuterClass.SummaryCountsResponse resp = SummaryService.getCounts()
-        assert resp.numAlerts != 0
-        assert resp.numDeployments != 0
-        assert resp.numSecrets != 0
-        assert resp.numClusters != 0
-        assert resp.numImages != 0
-        assert resp.numNodes != 0
+        "Namespace API returns non-zero values on upgrade"
+        def namespaces = NamespaceService.getNamespaces()
+        assert namespaces.size() != 0
+        int numDeployments = 0
+        int numSecrets = 0
+        for (NamespaceServiceOuterClass.Namespace ns: namespaces) {
+            numDeployments += ns.getNumDeployments()
+            numSecrets += ns.getNumSecrets()
+        }
+        assert numDeployments != 0
+        assert numSecrets != 0
+        "Alert API returns non-zero values on upgrade"
+        def alerts = AlertService.getAlertCounts()
+        assert alerts.getGroupsList().size() != 0
+        "Cluster API returns non-zero values on upgrade"
+        def clusters = ClusterService.getClusters()
+        assert clusters.size() != 0
+        "Node API returns non-zero values on upgrade"
+        def nodes = NodeService.getNodes()
+        assert nodes.size() != 0
+        "Image API returns non-zero values on upgrade"
+        def images = ImageService.getImages()
+        assert images.size() != 0
     }
 
     @Unroll

@@ -1,34 +1,67 @@
 import React from 'react';
-import { Button, ButtonVariant } from '@patternfly/react-core';
-import {
-    ExpandableRowContent,
-    TableComposable,
-    Tbody,
-    Td,
-    Th,
-    Thead,
-    Tr,
-} from '@patternfly/react-table';
+import { Link } from 'react-router-dom';
+import { ExpandableRowContent, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { gql } from '@apollo/client';
-import { min } from 'date-fns';
 
-import LinkShim from 'Components/PatternFly/LinkShim';
+// Omit for 4.7 release until CVE/advisory separatipn is available in 4.8 release.
+// import useFeatureFlags from 'hooks/useFeatureFlags';
 import useSet from 'hooks/useSet';
 import { UseURLSortResult } from 'hooks/useURLSort';
 import VulnerabilitySeverityIconText from 'Components/PatternFly/IconText/VulnerabilitySeverityIconText';
-import { VulnerabilitySeverity } from 'types/cve.proto';
+import { VulnerabilityState } from 'types/cve.proto';
 import VulnerabilityFixableIconText from 'Components/PatternFly/IconText/VulnerabilityFixableIconText';
-import { getEntityPagePath } from '../searchUtils';
-import { DynamicColumnIcon } from '../components/DynamicIcon';
+import { DynamicColumnIcon } from 'Components/DynamicIcon';
+import DateDistance from 'Components/DateDistance';
+import TbodyUnified from 'Components/TableStateTemplates/TbodyUnified';
+import ExpandRowTh from 'Components/ExpandRowTh';
+import { TableUIState } from 'utils/getTableUIState';
+import {
+    generateVisibilityForColumns,
+    getHiddenColumnCount,
+    ManagedColumns,
+} from 'hooks/useManagedColumns';
+import { getWorkloadEntityPagePath } from '../../utils/searchUtils';
 
-import EmptyTableResults from '../components/EmptyTableResults';
 import DeploymentComponentVulnerabilitiesTable, {
-    DeploymentComponentVulnerability,
-    ImageMetadataContext,
     deploymentComponentVulnerabilitiesFragment,
 } from './DeploymentComponentVulnerabilitiesTable';
-import { getAnyVulnerabilityIsFixable, getHighestVulnerabilitySeverity } from './table.utils';
-import DatePhraseTd from '../components/DatePhraseTd';
+import PendingExceptionLabelLayout from '../components/PendingExceptionLabelLayout';
+import PartialCVEDataAlert from '../../components/PartialCVEDataAlert';
+import useWorkloadCveViewContext from '../hooks/useWorkloadCveViewContext';
+import { infoForEpssProbability } from './infoForTh';
+import { FormattedDeploymentVulnerability, formatEpssProbabilityAsPercent } from './table.utils';
+
+export const tableId = 'WorkloadCvesDeploymentVulnerabilitiesTable';
+export const defaultColumns = {
+    operatingSystem: {
+        title: 'Operating system',
+        isShownByDefault: true,
+    },
+    cveSeverity: {
+        title: 'CVE severity',
+        isShownByDefault: true,
+    },
+    cveStatus: {
+        title: 'CVE status',
+        isShownByDefault: true,
+    },
+    epssProbability: {
+        title: 'EPSS probability',
+        isShownByDefault: true,
+    },
+    affectedComponents: {
+        title: 'Affected components',
+        isShownByDefault: true,
+    },
+    firstDiscovered: {
+        title: 'First discovered',
+        isShownByDefault: true,
+    },
+    publishedOn: {
+        title: 'Published',
+        isShownByDefault: true,
+    },
+} as const;
 
 export const deploymentWithVulnerabilitiesFragment = gql`
     ${deploymentComponentVulnerabilitiesFragment}
@@ -38,8 +71,17 @@ export const deploymentWithVulnerabilitiesFragment = gql`
             ...ImageMetadataContext
         }
         imageVulnerabilities(query: $query, pagination: $pagination) {
+            vulnerabilityId: id
             cve
+            cveBaseInfo {
+                epss {
+                    epssProbability
+                }
+            }
+            operatingSystem
+            publishedOn
             summary
+            pendingExceptionCount: exceptionCount(requestStatus: $statusesForExceptionCount)
             images(query: $query) {
                 imageId: id
                 imageComponents(query: $query) {
@@ -50,170 +92,201 @@ export const deploymentWithVulnerabilitiesFragment = gql`
     }
 `;
 
-export type DeploymentWithVulnerabilities = {
-    id: string;
-    images: ImageMetadataContext[];
-    imageVulnerabilities: {
-        cve: string;
-        summary: string;
-        images: {
-            imageId: string;
-            imageComponents: DeploymentComponentVulnerability[];
-        }[];
-    }[];
-};
-
-type DeploymentVulnerabilityImageMapping = {
-    imageMetadataContext: ImageMetadataContext;
-    componentVulnerabilities: DeploymentComponentVulnerability[];
-};
-
-function formatVulnerabilityData(deployment: DeploymentWithVulnerabilities): {
-    cve: string;
-    severity: VulnerabilitySeverity;
-    isFixable: boolean;
-    discoveredAtImage: Date | null;
-    summary: string;
-    affectedComponentsText: string;
-    images: DeploymentVulnerabilityImageMapping[];
-}[] {
-    // Create a map of image ID to image metadata for easy lookup
-    // We use 'Partial' here because there is no guarantee that the image will be found
-    const imageMap: Partial<Record<string, ImageMetadataContext>> = {};
-    deployment.images.forEach((image) => {
-        imageMap[image.id] = image;
-    });
-
-    return deployment.imageVulnerabilities.map((vulnerability) => {
-        const { cve, summary, images } = vulnerability;
-        // Severity, Fixability, and Discovered date are all based on the aggregate value of all components
-        const allVulnerableComponents = vulnerability.images.flatMap((img) => img.imageComponents);
-        const highestVulnSeverity = getHighestVulnerabilitySeverity(allVulnerableComponents);
-        const isAnyVulnFixable = getAnyVulnerabilityIsFixable(allVulnerableComponents);
-        const allDiscoveredDates = allVulnerableComponents
-            .flatMap((c) => c.imageVulnerabilities.map((v) => v.discoveredAtImage))
-            .filter((d): d is string => d !== null);
-        const oldestDiscoveredVulnDate = min(...allDiscoveredDates);
-        // TODO This logic is used in many places, could extract to a util
-        const uniqueComponents = new Set(allVulnerableComponents.map((c) => c.name));
-        const affectedComponentsText =
-            uniqueComponents.size === 1
-                ? uniqueComponents.values().next().value
-                : `${uniqueComponents.size} components`;
-
-        const vulnerabilityImages = images
-            .map((img) => ({
-                imageMetadataContext: imageMap[img.imageId],
-                componentVulnerabilities: img.imageComponents,
-            }))
-            // filter out values where the vulnerability->image mapping is missing
-            .filter(
-                (vulnImageMap): vulnImageMap is DeploymentVulnerabilityImageMapping =>
-                    !!vulnImageMap.imageMetadataContext
-            );
-
-        return {
-            cve,
-            severity: highestVulnSeverity,
-            isFixable: isAnyVulnFixable,
-            discoveredAtImage: oldestDiscoveredVulnDate,
-            summary,
-            affectedComponentsText,
-            images: vulnerabilityImages,
-        };
-    });
-}
-
 export type DeploymentVulnerabilitiesTableProps = {
-    deployment: DeploymentWithVulnerabilities;
+    tableState: TableUIState<FormattedDeploymentVulnerability>;
     getSortParams: UseURLSortResult['getSortParams'];
     isFiltered: boolean;
+    vulnerabilityState: VulnerabilityState;
+    onClearFilters: () => void;
+    tableConfig: ManagedColumns<keyof typeof defaultColumns>['columns'];
 };
 
 function DeploymentVulnerabilitiesTable({
-    deployment,
+    tableState,
     getSortParams,
     isFiltered,
+    vulnerabilityState,
+    onClearFilters,
+    tableConfig,
 }: DeploymentVulnerabilitiesTableProps) {
+    const { getAbsoluteUrl } = useWorkloadCveViewContext();
+    const getVisibilityClass = generateVisibilityForColumns(tableConfig);
+    const hiddenColumnCount = getHiddenColumnCount(tableConfig);
     const expandedRowSet = useSet<string>();
+    // Omit for 4.7 release until CVE/advisory separatipn is available in 4.8 release.
+    // const { isFeatureFlagEnabled } = useFeatureFlags();
+    // const isEpssProbabilityColumnEnabled = isFeatureFlagEnabled('ROX_SCANNER_V4');
+    const isEpssProbabilityColumnEnabled = false;
 
-    const vulnerabilities = formatVulnerabilityData(deployment);
+    const colSpan = 7 + (isEpssProbabilityColumnEnabled ? 1 : 0) - hiddenColumnCount;
 
     return (
-        <TableComposable variant="compact">
+        <Table variant="compact">
             <Thead noWrap>
                 <Tr>
-                    <Th>{/* Header for expanded column */}</Th>
+                    <ExpandRowTh />
                     <Th sort={getSortParams('CVE')}>CVE</Th>
-                    <Th>CVE severity</Th>
-                    <Th>
+                    <Th className={getVisibilityClass('operatingSystem')}>Operating system</Th>
+                    <Th
+                        className={getVisibilityClass('cveSeverity')}
+                        sort={getSortParams('Severity')}
+                    >
+                        CVE severity
+                    </Th>
+                    <Th className={getVisibilityClass('cveStatus')}>
                         CVE status
                         {isFiltered && <DynamicColumnIcon />}
                     </Th>
-                    <Th>
+                    {isEpssProbabilityColumnEnabled && (
+                        <Th
+                            className={getVisibilityClass('epssProbability')}
+                            info={infoForEpssProbability}
+                            sort={getSortParams('EPSS Probability')}
+                        >
+                            EPSS probability
+                        </Th>
+                    )}
+                    <Th className={getVisibilityClass('affectedComponents')}>
                         Affected components
                         {isFiltered && <DynamicColumnIcon />}
                     </Th>
-                    <Th>First discovered</Th>
+                    <Th className={getVisibilityClass('firstDiscovered')}>First discovered</Th>
+                    <Th className={getVisibilityClass('publishedOn')}>Published</Th>
                 </Tr>
             </Thead>
-            {vulnerabilities.length === 0 && <EmptyTableResults colSpan={7} />}
-            {vulnerabilities.map((vulnerability, rowIndex) => {
-                const {
-                    cve,
-                    severity,
-                    summary,
-                    isFixable,
-                    images,
-                    affectedComponentsText,
-                    discoveredAtImage,
-                } = vulnerability;
-                const isExpanded = expandedRowSet.has(cve);
+            <TbodyUnified
+                colSpan={colSpan}
+                tableState={tableState}
+                emptyProps={{ message: 'There were no CVEs detected for this deployment' }}
+                filteredEmptyProps={{ onClearFilters }}
+                renderer={({ data }) =>
+                    data.map((vulnerability, rowIndex) => {
+                        const {
+                            vulnerabilityId,
+                            cve,
+                            cveBaseInfo,
+                            operatingSystem,
+                            severity,
+                            summary,
+                            isFixable,
+                            images,
+                            affectedComponentsText,
+                            discoveredAtImage,
+                            publishedOn,
+                            pendingExceptionCount,
+                        } = vulnerability;
+                        const epssProbability = cveBaseInfo?.epss?.epssProbability;
+                        const isExpanded = expandedRowSet.has(vulnerabilityId);
 
-                return (
-                    <Tbody key={cve} isExpanded={isExpanded}>
-                        <Tr>
-                            <Td
-                                expand={{
-                                    rowIndex,
-                                    isExpanded,
-                                    onToggle: () => expandedRowSet.toggle(cve),
-                                }}
-                            />
-                            <Td dataLabel="CVE">
-                                <Button
-                                    variant={ButtonVariant.link}
-                                    isInline
-                                    component={LinkShim}
-                                    href={getEntityPagePath('CVE', cve)}
-                                >
-                                    {cve}
-                                </Button>
-                            </Td>
-                            <Td modifier="nowrap" dataLabel="Severity">
-                                <VulnerabilitySeverityIconText severity={severity} />
-                            </Td>
-                            <Td modifier="nowrap" dataLabel="CVE Status">
-                                <VulnerabilityFixableIconText isFixable={isFixable} />
-                            </Td>
-                            <Td dataLabel="Affected components">{affectedComponentsText}</Td>
-                            <Td modifier="nowrap" dataLabel="First discovered">
-                                <DatePhraseTd date={discoveredAtImage} />
-                            </Td>
-                        </Tr>
-                        <Tr isExpanded={isExpanded}>
-                            <Td />
-                            <Td colSpan={6}>
-                                <ExpandableRowContent>
-                                    <p className="pf-u-mb-md">{summary}</p>
-                                    <DeploymentComponentVulnerabilitiesTable images={images} />
-                                </ExpandableRowContent>
-                            </Td>
-                        </Tr>
-                    </Tbody>
-                );
-            })}
-        </TableComposable>
+                        return (
+                            <Tbody key={vulnerabilityId} isExpanded={isExpanded}>
+                                <Tr>
+                                    <Td
+                                        expand={{
+                                            rowIndex,
+                                            isExpanded,
+                                            onToggle: () => expandedRowSet.toggle(vulnerabilityId),
+                                        }}
+                                    />
+                                    <Td dataLabel="CVE" modifier="nowrap">
+                                        <PendingExceptionLabelLayout
+                                            hasPendingException={pendingExceptionCount > 0}
+                                            cve={cve}
+                                            vulnerabilityState={vulnerabilityState}
+                                        >
+                                            <Link
+                                                to={getAbsoluteUrl(
+                                                    getWorkloadEntityPagePath(
+                                                        'CVE',
+                                                        cve,
+                                                        vulnerabilityState
+                                                    )
+                                                )}
+                                            >
+                                                {cve}
+                                            </Link>
+                                        </PendingExceptionLabelLayout>
+                                    </Td>
+                                    <Td
+                                        className={getVisibilityClass('operatingSystem')}
+                                        modifier="nowrap"
+                                        dataLabel="Operating system"
+                                    >
+                                        {operatingSystem}
+                                    </Td>
+                                    <Td
+                                        className={getVisibilityClass('cveSeverity')}
+                                        modifier="nowrap"
+                                        dataLabel="CVE severity"
+                                    >
+                                        <VulnerabilitySeverityIconText severity={severity} />
+                                    </Td>
+                                    <Td
+                                        className={getVisibilityClass('cveStatus')}
+                                        modifier="nowrap"
+                                        dataLabel="CVE status"
+                                    >
+                                        <VulnerabilityFixableIconText isFixable={isFixable} />
+                                    </Td>
+                                    {isEpssProbabilityColumnEnabled && (
+                                        <Td
+                                            className={getVisibilityClass('epssProbability')}
+                                            modifier="nowrap"
+                                            dataLabel="EPSS probability"
+                                        >
+                                            {formatEpssProbabilityAsPercent(epssProbability)}
+                                        </Td>
+                                    )}
+                                    <Td
+                                        className={getVisibilityClass('affectedComponents')}
+                                        dataLabel="Affected components"
+                                    >
+                                        {affectedComponentsText}
+                                    </Td>
+                                    <Td
+                                        className={getVisibilityClass('firstDiscovered')}
+                                        modifier="nowrap"
+                                        dataLabel="First discovered"
+                                    >
+                                        <DateDistance date={discoveredAtImage} />
+                                    </Td>
+                                    <Td
+                                        className={getVisibilityClass('publishedOn')}
+                                        modifier="nowrap"
+                                        dataLabel="Published"
+                                    >
+                                        {publishedOn ? (
+                                            <DateDistance date={publishedOn} />
+                                        ) : (
+                                            'Not available'
+                                        )}
+                                    </Td>
+                                </Tr>
+                                <Tr isExpanded={isExpanded}>
+                                    <Td />
+                                    <Td colSpan={6}>
+                                        <ExpandableRowContent>
+                                            {summary && images.length > 0 ? (
+                                                <>
+                                                    <p className="pf-v5-u-mb-md">{summary}</p>
+                                                    <DeploymentComponentVulnerabilitiesTable
+                                                        images={images}
+                                                        cve={cve}
+                                                        vulnerabilityState={vulnerabilityState}
+                                                    />
+                                                </>
+                                            ) : (
+                                                <PartialCVEDataAlert />
+                                            )}
+                                        </ExpandableRowContent>
+                                    </Td>
+                                </Tr>
+                            </Tbody>
+                        );
+                    })
+                }
+            />
+        </Table>
     );
 }
 

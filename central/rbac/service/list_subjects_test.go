@@ -4,16 +4,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	roleBindingMocks "github.com/stackrox/rox/central/rbac/k8srolebinding/datastore/mocks"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/fixtures"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func getSubjects() []*storage.Subject {
@@ -194,7 +195,7 @@ func TestSortSubjects(t *testing.T) {
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, c.expected, testSubjects)
+			protoassert.SlicesEqual(t, c.expected, testSubjects)
 		})
 	}
 }
@@ -251,7 +252,7 @@ func TestGetFiltered(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			filteredSubjects, err := GetFilteredSubjects(c.query, c.subjects)
 			require.NoError(t, err)
-			assert.Equal(t, c.expectedSubjects, filteredSubjects)
+			protoassert.SlicesEqual(t, c.expectedSubjects, filteredSubjects)
 		})
 	}
 }
@@ -299,7 +300,7 @@ func (s *SubjectSearcherTestSuite) TestSearcher() {
 			s.mockBindingsStore.EXPECT().SearchRawRoleBindings(s.ctx, tc.query).Times(3).Return(tc.expectedBindings, nil)
 			results, err := s.subjectSearcher.Search(s.ctx, tc.query)
 			s.NoError(err)
-			s.ElementsMatch(tc.expected, s.standardizeResults(results))
+			s.ElementsMatch(tc.expected, results)
 
 			count, err := s.subjectSearcher.Count(s.ctx, tc.query)
 			s.NoError(err)
@@ -307,7 +308,7 @@ func (s *SubjectSearcherTestSuite) TestSearcher() {
 
 			v1SearchResults, err := s.subjectSearcher.SearchSubjects(s.ctx, tc.query)
 			s.NoError(err)
-			s.ElementsMatch(s.resultsToV1SearchResults(tc.expected), v1SearchResults)
+			protoassert.ElementsMatch(s.T(), s.resultsToV1SearchResults(tc.expected), v1SearchResults)
 		})
 	}
 }
@@ -415,13 +416,4 @@ func (s *SubjectSearcherTestSuite) resultsToV1SearchResults(results []search.Res
 		})
 	}
 	return v1SearchResults
-}
-
-func (s *SubjectSearcherTestSuite) standardizeResults(results []search.Result) []search.Result {
-	newResults := make([]search.Result, 0, len(results))
-	for _, r := range results {
-		r.Fields = nil
-		newResults = append(newResults, r)
-	}
-	return newResults
 }

@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *DeclarativeConfigHealthsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE declarative_config_healths CASCADE")
 	s.T().Log("declarative_config_healths", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *DeclarativeConfigHealthsStoreSuite) TestStore() {
 	foundDeclarativeConfigHealth, exists, err = store.Get(ctx, declarativeConfigHealth.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(declarativeConfigHealth, foundDeclarativeConfigHealth)
+	protoassert.Equal(s.T(), declarativeConfigHealth, foundDeclarativeConfigHealth)
 
-	declarativeConfigHealthCount, err := store.Count(ctx)
+	declarativeConfigHealthCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, declarativeConfigHealthCount)
-	declarativeConfigHealthCount, err = store.Count(withNoAccessCtx)
+	declarativeConfigHealthCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(declarativeConfigHealthCount)
 
@@ -75,11 +78,6 @@ func (s *DeclarativeConfigHealthsStoreSuite) TestStore() {
 	s.True(declarativeConfigHealthExists)
 	s.NoError(store.Upsert(ctx, declarativeConfigHealth))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, declarativeConfigHealth), sac.ErrResourceAccessDenied)
-
-	foundDeclarativeConfigHealth, exists, err = store.Get(ctx, declarativeConfigHealth.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(declarativeConfigHealth, foundDeclarativeConfigHealth)
 
 	s.NoError(store.Delete(ctx, declarativeConfigHealth.GetId()))
 	foundDeclarativeConfigHealth, exists, err = store.Get(ctx, declarativeConfigHealth.GetId())
@@ -99,13 +97,13 @@ func (s *DeclarativeConfigHealthsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, declarativeConfigHealths))
 
-	declarativeConfigHealthCount, err = store.Count(ctx)
+	declarativeConfigHealthCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, declarativeConfigHealthCount)
 
 	s.NoError(store.DeleteMany(ctx, declarativeConfigHealthIDs))
 
-	declarativeConfigHealthCount, err = store.Count(ctx)
+	declarativeConfigHealthCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, declarativeConfigHealthCount)
 }

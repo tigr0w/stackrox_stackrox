@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { MemoryRouter, Route, RouteComponentProps } from 'react-router-dom';
-import { renderHook, act } from '@testing-library/react-hooks';
+import { renderHook, act } from '@testing-library/react';
 
 import { URLSearchParams } from 'url';
 import useURLStringUnion from './useURLStringUnion';
@@ -25,6 +25,23 @@ function Wrapper({ children, onRouteRender, initialEntries = [] }: WrapperProps)
     );
 }
 
+const createWrapper = (props) => {
+    return function CreatedWrapper({ children }) {
+        return <Wrapper {...props}>{children}</Wrapper>;
+    };
+};
+
+beforeAll(() => {
+    jest.useFakeTimers();
+});
+
+function actAndRunTicks(callback) {
+    return act(() => {
+        callback();
+        jest.runAllTicks();
+    });
+}
+
 test('should read/write only the specified set of strings to the URL parameter', async () => {
     let params;
     let testLocation;
@@ -32,15 +49,15 @@ test('should read/write only the specified set of strings to the URL parameter',
     const possibleUrlValues = ['Alpha', 'Beta', 'Delta'] as const;
 
     const { result } = renderHook(() => useURLStringUnion('urlKey', possibleUrlValues), {
-        initialProps: {
+        wrapper: createWrapper({
             children: [],
             onRouteRender: ({ location }) => {
                 testLocation = location;
             },
             initialEntries: [''],
-        },
-        wrapper: Wrapper,
+        }),
     });
+    actAndRunTicks(() => {});
 
     // Check that default value is applied correctly
     params = new URLSearchParams(testLocation.search);
@@ -48,7 +65,7 @@ test('should read/write only the specified set of strings to the URL parameter',
     expect(params.get('urlKey')).toBe('Alpha');
 
     // Check that setting the value changes the parameter
-    act(() => {
+    actAndRunTicks(() => {
         const [, setParam] = result.current;
         setParam('Delta');
     });
@@ -70,7 +87,7 @@ test('should read/write only the specified set of strings to the URL parameter',
     ];
 
     invalidValues.forEach((invalid) => {
-        act(() => {
+        actAndRunTicks(() => {
             const [, setParam] = result.current;
             setParam(invalid);
         });
@@ -80,7 +97,7 @@ test('should read/write only the specified set of strings to the URL parameter',
     });
 
     // Check setting a valid value after invalid attempts correctly sets the new value
-    act(() => {
+    actAndRunTicks(() => {
         const [, setParam] = result.current;
         setParam('Beta');
     });
@@ -97,16 +114,16 @@ test('should default to the current URL parameter value on initialization, if it
     const { result: initialValidResult } = renderHook(
         () => useURLStringUnion('urlKey', possibleUrlValues),
         {
-            initialProps: {
+            wrapper: createWrapper({
                 children: [],
                 onRouteRender: ({ location }) => {
                     testLocation = location;
                 },
                 initialEntries: ['?urlKey=Beta'],
-            },
-            wrapper: Wrapper,
+            }),
         }
     );
+    actAndRunTicks(() => {});
 
     // Check that default value is not applied if the URL param already contains a valid value
     const params = new URLSearchParams(testLocation.search);
@@ -121,16 +138,16 @@ test('should use the default value when an invalid value is entered directly int
     const { result: initialInvalidResult } = renderHook(
         () => useURLStringUnion('urlKey', possibleUrlValues),
         {
-            initialProps: {
+            wrapper: createWrapper({
                 children: [],
                 onRouteRender: ({ location }) => {
                     testLocation = location;
                 },
                 initialEntries: ['?urlKey=Bogus'],
-            },
-            wrapper: Wrapper,
+            }),
         }
     );
+    actAndRunTicks(() => {});
 
     // Check that default value is applied correctly when the URL param is invalid
     const params = new URLSearchParams(testLocation.search);

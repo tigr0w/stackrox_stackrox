@@ -5,24 +5,29 @@ import {
     Alert,
     Button,
     Card,
-    CardActions,
     CardBody,
     CardHeader,
-    CardHeaderMain,
     CardTitle,
     Divider,
     Form,
     FormGroup,
+    FormHelperText,
     FormSection,
     Grid,
     GridItem,
-    SelectOption,
+    HelperText,
+    HelperTextItem,
+    Split,
+    SplitItem,
     Switch,
+    Text,
     TextArea,
     TextInput,
     Title,
 } from '@patternfly/react-core';
+import { SelectOption } from '@patternfly/react-core/deprecated';
 import { useFormik } from 'formik';
+import * as yup from 'yup';
 
 import ColorPicker from 'Components/ColorPicker';
 import ClusterLabelsTable from 'Containers/Clusters/ClusterLabelsTable';
@@ -34,6 +39,7 @@ import { selectors } from 'reducers';
 import { initializeAnalytics } from 'global/initializeAnalytics';
 
 import FormSelect from './FormSelect';
+import { convertBetweenBytesAndMB } from '../SystemConfig.utils';
 
 function getCompletePublicConfig(systemConfig: SystemConfig): PublicConfig {
     return {
@@ -72,6 +78,17 @@ export type SystemConfigFormProps = {
     setIsNotEditing: () => void;
 };
 
+const validationSchema = yup.object().shape({
+    privateConfig: yup.object().shape({
+        reportRetentionConfig: yup.object().shape({
+            downloadableReportGlobalRetentionBytes: yup
+                .number()
+                .min(convertBetweenBytesAndMB(50, 'MB'), 'The number must be at least 50 MB')
+                .required(),
+        }),
+    }),
+});
+
 const SystemConfigForm = ({
     systemConfig,
     setSystemConfig,
@@ -84,55 +101,70 @@ const SystemConfigForm = ({
 
     const { privateConfig } = systemConfig;
     const publicConfig = getCompletePublicConfig(systemConfig);
-    const { submitForm, setFieldValue, values, dirty, isValid, isSubmitting, setSubmitting } =
-        useFormik<Values>({
-            initialValues: { privateConfig, publicConfig },
-            onSubmit: () => {
-                // Payload for privateConfig allows strings as number values.
-                saveSystemConfig({
-                    privateConfig: values.privateConfig,
-                    publicConfig: values.publicConfig,
+    const {
+        dirty,
+        errors,
+        isSubmitting,
+        isValid,
+        setFieldValue,
+        setSubmitting,
+        submitForm,
+        values,
+    } = useFormik<Values>({
+        initialValues: { privateConfig, publicConfig },
+        validationSchema,
+        onSubmit: () => {
+            // Payload for privateConfig allows strings as number values.
+            saveSystemConfig({
+                privateConfig: values.privateConfig,
+                publicConfig: values.publicConfig,
+            })
+                .then((data) => {
+                    // Simulate fetchPublicConfig response to update Redux state.
+                    const action: PublicConfigAction = {
+                        type: 'config/FETCH_PUBLIC_CONFIG_SUCCESS',
+                        response: data.publicConfig || {
+                            footer: null,
+                            header: null,
+                            loginNotice: null,
+                            telemetry: null,
+                        },
+                    };
+
+                    const isTelemetryEnabledCurr = data.publicConfig?.telemetry?.enabled;
+                    const isTelemetryEnabledPrev = publicConfig.telemetry?.enabled;
+                    if (isTelemetryEnabledCurr && isTelemetryConfigured) {
+                        initializeAnalytics(
+                            telemetryConfig.storageKeyV1,
+                            telemetryConfig.endpoint,
+                            telemetryConfig.userId
+                        );
+                    }
+
+                    dispatch(action);
+                    setSystemConfig(data);
+                    setErrorMessage(null);
+                    setSubmitting(false);
+                    setIsNotEditing();
+
+                    if (isTelemetryEnabledPrev && !isTelemetryEnabledCurr) {
+                        window.location.reload();
+                    }
                 })
-                    .then((data) => {
-                        // Simulate fetchPublicConfig response to update Redux state.
-                        const action: PublicConfigAction = {
-                            type: 'config/FETCH_PUBLIC_CONFIG_SUCCESS',
-                            response: data.publicConfig || {
-                                footer: null,
-                                header: null,
-                                loginNotice: null,
-                                telemetry: null,
-                            },
-                        };
-
-                        const isTelemetryEnabledCurr = data.publicConfig?.telemetry?.enabled;
-                        const isTelemetryEnabledPrev = publicConfig.telemetry?.enabled;
-                        if (isTelemetryEnabledCurr && isTelemetryConfigured) {
-                            initializeAnalytics(
-                                telemetryConfig.storageKeyV1,
-                                telemetryConfig.userId
-                            );
-                        }
-
-                        dispatch(action);
-                        setSystemConfig(data);
-                        setErrorMessage(null);
-                        setSubmitting(false);
-                        setIsNotEditing();
-
-                        if (isTelemetryEnabledPrev && !isTelemetryEnabledCurr) {
-                            window.location.reload();
-                        }
-                    })
-                    .catch((error) => {
-                        setSubmitting(false);
-                        setErrorMessage(getAxiosErrorMessage(error));
-                    });
-            },
-        });
+                .catch((error) => {
+                    setSubmitting(false);
+                    setErrorMessage(getAxiosErrorMessage(error));
+                });
+        },
+    });
 
     function onChange(value, event) {
         return setFieldValue(event.target.id, value);
+    }
+
+    function onDownloadableReportChange(value, event) {
+        const valueInBytes = convertBetweenBytesAndMB(value, 'MB');
+        return setFieldValue(event.target.id, valueInBytes);
     }
 
     function onCustomChange(value, id) {
@@ -145,6 +177,9 @@ const SystemConfigForm = ({
             'privateConfig.decommissionedClusterRetention.ignoreClusterLabels'
         );
     }
+
+    const downloadableReportRetentionError =
+        errors.privateConfig?.reportRetentionConfig?.downloadableReportGlobalRetentionBytes;
 
     return (
         <Form>
@@ -164,7 +199,8 @@ const SystemConfigForm = ({
                             value={
                                 values?.privateConfig?.alertConfig?.allRuntimeRetentionDurationDays
                             }
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -183,7 +219,8 @@ const SystemConfigForm = ({
                                 values?.privateConfig?.alertConfig
                                     ?.deletedRuntimeRetentionDurationDays
                             }
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -202,7 +239,8 @@ const SystemConfigForm = ({
                                 values?.privateConfig?.alertConfig
                                     ?.resolvedDeployRetentionDurationDays
                             }
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -221,7 +259,8 @@ const SystemConfigForm = ({
                                 values?.privateConfig?.alertConfig
                                     ?.attemptedDeployRetentionDurationDays
                             }
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -240,7 +279,8 @@ const SystemConfigForm = ({
                                 values?.privateConfig?.alertConfig
                                     ?.attemptedRuntimeRetentionDurationDays
                             }
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -256,7 +296,8 @@ const SystemConfigForm = ({
                             id="privateConfig.imageRetentionDurationDays"
                             name="privateConfig.imageRetentionDurationDays"
                             value={values?.privateConfig?.imageRetentionDurationDays}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -272,7 +313,110 @@ const SystemConfigForm = ({
                             id="privateConfig.expiredVulnReqRetentionDurationDays"
                             name="privateConfig.expiredVulnReqRetentionDurationDays"
                             value={values?.privateConfig?.expiredVulnReqRetentionDurationDays}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
+                        />
+                    </FormGroup>
+                </GridItem>
+                <GridItem>
+                    <FormGroup
+                        label="Vulnerability report run history retention"
+                        isRequired
+                        fieldId="privateConfig.reportRetentionConfig.historyRetentionDurationDays"
+                    >
+                        <TextInput
+                            isRequired
+                            type="number"
+                            id="privateConfig.reportRetentionConfig.historyRetentionDurationDays"
+                            name="privateConfig.reportRetentionConfig.historyRetentionDurationDays"
+                            value={
+                                values?.privateConfig?.reportRetentionConfig
+                                    ?.historyRetentionDurationDays
+                            }
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
+                        />
+                    </FormGroup>
+                </GridItem>
+                <GridItem>
+                    <FormGroup
+                        label="Prepared downloadable vulnerability reports retention days"
+                        isRequired
+                        fieldId="privateConfig.reportRetentionConfig.downloadableReportRetentionDays"
+                    >
+                        <TextInput
+                            isRequired
+                            type="number"
+                            id="privateConfig.reportRetentionConfig.downloadableReportRetentionDays"
+                            name="privateConfig.reportRetentionConfig.downloadableReportRetentionDays"
+                            value={
+                                values?.privateConfig?.reportRetentionConfig
+                                    ?.downloadableReportRetentionDays
+                            }
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
+                        />
+                    </FormGroup>
+                </GridItem>
+                <GridItem>
+                    <FormGroup
+                        label="Prepared downloadable vulnerability reports limit"
+                        isRequired
+                        fieldId="privateConfig.reportRetentionConfig.downloadableReportGlobalRetentionBytes"
+                    >
+                        <Split hasGutter className="pf-v5-u-align-items-center">
+                            <SplitItem isFilled>
+                                <TextInput
+                                    isRequired
+                                    type="number"
+                                    id="privateConfig.reportRetentionConfig.downloadableReportGlobalRetentionBytes"
+                                    name="privateConfig.reportRetentionConfig.downloadableReportGlobalRetentionBytes"
+                                    value={convertBetweenBytesAndMB(
+                                        values?.privateConfig?.reportRetentionConfig
+                                            ?.downloadableReportGlobalRetentionBytes,
+                                        'B'
+                                    )}
+                                    onChange={(event, value) =>
+                                        onDownloadableReportChange(value, event)
+                                    }
+                                    min={50}
+                                    validated={
+                                        downloadableReportRetentionError ? 'error' : 'default'
+                                    }
+                                />
+                            </SplitItem>
+                            <SplitItem>
+                                <Text>MB</Text>
+                            </SplitItem>
+                        </Split>
+                        <FormHelperText>
+                            <HelperText>
+                                <HelperTextItem
+                                    variant={downloadableReportRetentionError ? 'error' : 'default'}
+                                >
+                                    {downloadableReportRetentionError}
+                                </HelperTextItem>
+                            </HelperText>
+                        </FormHelperText>
+                    </FormGroup>
+                </GridItem>
+                <GridItem>
+                    <FormGroup
+                        label="Administration events retention days"
+                        isRequired
+                        fieldId="privateConfig.administrationEventsConfig.retentionDurationDays"
+                    >
+                        <TextInput
+                            isRequired
+                            type="number"
+                            id="privateConfig.administrationEventsConfig.retentionDurationDays"
+                            name="privateConfig.administrationEventsConfig.retentionDurationDays"
+                            value={
+                                values?.privateConfig?.administrationEventsConfig
+                                    ?.retentionDurationDays
+                            }
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -294,7 +438,8 @@ const SystemConfigForm = ({
                                 values?.privateConfig?.decommissionedClusterRetention
                                     ?.retentionDurationDays
                             }
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
+                            min={0}
                         />
                     </FormGroup>
                 </GridItem>
@@ -319,19 +464,28 @@ const SystemConfigForm = ({
             <Grid hasGutter>
                 <GridItem sm={12} md={6}>
                     <Card isFlat data-testid="header-config">
-                        <CardHeader>
-                            <CardHeaderMain>
-                                <CardTitle component="h3">Header configuration</CardTitle>
-                            </CardHeaderMain>
-                            <CardActions>
-                                <Switch
-                                    id="publicConfig.header.enabled"
-                                    label="Enabled"
-                                    labelOff="Disabled"
-                                    isChecked={values?.publicConfig?.header?.enabled}
-                                    onChange={onChange}
-                                />
-                            </CardActions>
+                        <CardHeader
+                            actions={{
+                                actions: (
+                                    <>
+                                        <Switch
+                                            id="publicConfig.header.enabled"
+                                            label="Enabled"
+                                            labelOff="Disabled"
+                                            isChecked={values?.publicConfig?.header?.enabled}
+                                            onChange={(event, value) => onChange(value, event)}
+                                        />
+                                    </>
+                                ),
+                                hasNoOffset: false,
+                                className: undefined,
+                            }}
+                        >
+                            {
+                                <>
+                                    <CardTitle component="h3">Header configuration</CardTitle>
+                                </>
+                            }
                         </CardHeader>
                         <Divider component="div" />
                         <CardBody>
@@ -348,7 +502,7 @@ const SystemConfigForm = ({
                                                 id="publicConfig.header.text"
                                                 name="publicConfig.header.text"
                                                 value={values?.publicConfig?.header?.text}
-                                                onChange={onChange}
+                                                onChange={(event, value) => onChange(value, event)}
                                             />
                                         </FormGroup>
                                     </GridItem>
@@ -408,19 +562,28 @@ const SystemConfigForm = ({
                 </GridItem>
                 <GridItem sm={12} md={6}>
                     <Card isFlat data-testid="footer-config">
-                        <CardHeader>
-                            <CardHeaderMain>
-                                <CardTitle component="h3">Footer configuration</CardTitle>
-                            </CardHeaderMain>
-                            <CardActions>
-                                <Switch
-                                    id="publicConfig.footer.enabled"
-                                    label="Enabled"
-                                    labelOff="Disabled"
-                                    isChecked={values?.publicConfig?.footer?.enabled}
-                                    onChange={onChange}
-                                />
-                            </CardActions>
+                        <CardHeader
+                            actions={{
+                                actions: (
+                                    <>
+                                        <Switch
+                                            id="publicConfig.footer.enabled"
+                                            label="Enabled"
+                                            labelOff="Disabled"
+                                            isChecked={values?.publicConfig?.footer?.enabled}
+                                            onChange={(event, value) => onChange(value, event)}
+                                        />
+                                    </>
+                                ),
+                                hasNoOffset: false,
+                                className: undefined,
+                            }}
+                        >
+                            {
+                                <>
+                                    <CardTitle component="h3">Footer configuration</CardTitle>
+                                </>
+                            }
                         </CardHeader>
                         <Divider component="div" />
                         <CardBody>
@@ -437,7 +600,7 @@ const SystemConfigForm = ({
                                                 id="publicConfig.footer.text"
                                                 name="publicConfig.footer.text"
                                                 value={values?.publicConfig?.footer?.text}
-                                                onChange={onChange}
+                                                onChange={(event, value) => onChange(value, event)}
                                             />
                                         </FormGroup>
                                     </GridItem>
@@ -497,19 +660,28 @@ const SystemConfigForm = ({
                 </GridItem>
                 <GridItem md={6}>
                     <Card isFlat data-testid="login-notice-config">
-                        <CardHeader>
-                            <CardHeaderMain>
-                                <CardTitle component="h3">Login configuration</CardTitle>
-                            </CardHeaderMain>
-                            <CardActions>
-                                <Switch
-                                    id="publicConfig.loginNotice.enabled"
-                                    label="Enabled"
-                                    labelOff="Disabled"
-                                    isChecked={values?.publicConfig?.loginNotice?.enabled}
-                                    onChange={onChange}
-                                />
-                            </CardActions>
+                        <CardHeader
+                            actions={{
+                                actions: (
+                                    <>
+                                        <Switch
+                                            id="publicConfig.loginNotice.enabled"
+                                            label="Enabled"
+                                            labelOff="Disabled"
+                                            isChecked={values?.publicConfig?.loginNotice?.enabled}
+                                            onChange={(event, value) => onChange(value, event)}
+                                        />
+                                    </>
+                                ),
+                                hasNoOffset: false,
+                                className: undefined,
+                            }}
+                        >
+                            {
+                                <>
+                                    <CardTitle component="h3">Login configuration</CardTitle>
+                                </>
+                            }
                         </CardHeader>
                         <Divider component="div" />
                         <CardBody>
@@ -524,7 +696,7 @@ const SystemConfigForm = ({
                                         id="publicConfig.loginNotice.text"
                                         name="publicConfig.loginNotice.text"
                                         value={values?.publicConfig?.loginNotice?.text}
-                                        onChange={onChange}
+                                        onChange={(event, value) => onChange(value, event)}
                                     />
                                 </FormGroup>
                             </FormSection>
@@ -534,25 +706,34 @@ const SystemConfigForm = ({
                 {isTelemetryConfigured && (
                     <GridItem md={6}>
                         <Card isFlat data-testid="telemetry-config">
-                            <CardHeader>
-                                <CardHeaderMain>
-                                    <CardTitle component="h3">
-                                        Online Telemetry Data Collection
-                                    </CardTitle>
-                                </CardHeaderMain>
-                                <CardActions>
-                                    <Switch
-                                        id="publicConfig.telemetry.enabled"
-                                        label="Enabled"
-                                        labelOff="Disabled"
-                                        isChecked={values?.publicConfig?.telemetry?.enabled}
-                                        onChange={onChange}
-                                    />
-                                </CardActions>
+                            <CardHeader
+                                actions={{
+                                    actions: (
+                                        <>
+                                            <Switch
+                                                id="publicConfig.telemetry.enabled"
+                                                label="Enabled"
+                                                labelOff="Disabled"
+                                                isChecked={values?.publicConfig?.telemetry?.enabled}
+                                                onChange={(event, value) => onChange(value, event)}
+                                            />
+                                        </>
+                                    ),
+                                    hasNoOffset: false,
+                                    className: undefined,
+                                }}
+                            >
+                                {
+                                    <>
+                                        <CardTitle component="h3">
+                                            Online Telemetry Data Collection
+                                        </CardTitle>
+                                    </>
+                                }
                             </CardHeader>
                             <Divider component="div" />
                             <CardBody>
-                                <p className="pf-u-mb-sm">
+                                <p className="pf-v5-u-mb-sm">
                                     Online telemetry data collection allows Red Hat to use
                                     anonymized information to enhance your user experience. Consult
                                     the documentation to see what is collected, and for information
@@ -564,7 +745,12 @@ const SystemConfigForm = ({
                 )}
             </Grid>
             {typeof errorMessage === 'string' && (
-                <Alert variant="danger" isInline title="Failed to save system configuration">
+                <Alert
+                    variant="danger"
+                    isInline
+                    title="Failed to save system configuration"
+                    component="p"
+                >
                     {errorMessage}
                 </Alert>
             )}

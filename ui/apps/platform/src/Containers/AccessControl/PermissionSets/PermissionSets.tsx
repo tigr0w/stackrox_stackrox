@@ -4,7 +4,6 @@ import { useHistory, useLocation, useParams } from 'react-router-dom';
 import {
     Alert,
     AlertActionCloseButton,
-    AlertVariant,
     Bullseye,
     Button,
     PageSection,
@@ -34,15 +33,13 @@ import { getNewPermissionSet, getCompletePermissionSet } from './permissionSets.
 import AccessControlHeaderActionBar from '../AccessControlHeaderActionBar';
 import AccessControlBreadcrumbs from '../AccessControlBreadcrumbs';
 import AccessControlHeading from '../AccessControlHeading';
-import AccessControlNoPermission from '../AccessControlNoPermission';
 import usePermissions from '../../../hooks/usePermissions';
 import { isUserResource } from '../traits';
 
 const entityType = 'PERMISSION_SET';
 
 function PermissionSets(): ReactElement {
-    const { hasReadAccess, hasReadWriteAccess } = usePermissions();
-    const hasReadAccessForPage = hasReadAccess('Access');
+    const { hasReadWriteAccess } = usePermissions();
     const hasWriteAccessForPage = hasReadWriteAccess('Access');
     const history = useHistory();
     const { search } = useLocation();
@@ -73,7 +70,8 @@ function PermissionSets(): ReactElement {
                 setAlertPermissionSets(
                     <Alert
                         title="Fetch permission sets failed"
-                        variant={AlertVariant.danger}
+                        component="p"
+                        variant="danger"
                         isInline
                     >
                         {error.message}
@@ -97,7 +95,8 @@ function PermissionSets(): ReactElement {
                 setAlertRoles(
                     <Alert
                         title="Fetch resources failed"
-                        variant={AlertVariant.warning}
+                        component="p"
+                        variant="warning"
                         isInline
                         actionClose={actionClose}
                     >
@@ -120,7 +119,8 @@ function PermissionSets(): ReactElement {
                 setAlertRoles(
                     <Alert
                         title="Fetch roles failed"
-                        variant={AlertVariant.warning}
+                        component="p"
+                        variant="warning"
                         isInline
                         actionClose={actionClose}
                     >
@@ -132,15 +132,6 @@ function PermissionSets(): ReactElement {
                 setCounterFetching((counterPrev) => counterPrev - 1);
             });
     }, []);
-
-    // Return "no access" page immediately if user doesn't have enough permissions.
-    if (!hasReadAccessForPage) {
-        return (
-            <>
-                <AccessControlNoPermission subPage="permission sets" entityType={entityType} />
-            </>
-        );
-    }
 
     function handleCreate() {
         history.push(getEntityPath(entityType, undefined, { action: 'create' }));
@@ -226,13 +217,12 @@ function PermissionSets(): ReactElement {
             <PageSection variant={isList ? PageSectionVariants.default : PageSectionVariants.light}>
                 {counterFetching !== 0 ? (
                     <Bullseye>
-                        <Spinner isSVG />
+                        <Spinner />
                     </Bullseye>
                 ) : isList ? (
                     <PermissionSetsList
                         permissionSets={permissionSets}
                         roles={roles}
-                        handleCreate={handleCreate}
                         handleDelete={handleDelete}
                     />
                 ) : typeof entityId === 'string' && !permissionSet ? (

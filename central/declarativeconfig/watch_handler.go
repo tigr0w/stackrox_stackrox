@@ -7,12 +7,15 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 
+	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/maputil"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
+	"golang.org/x/exp/maps"
 	"gopkg.in/yaml.v3"
 )
 
@@ -51,12 +54,21 @@ func (w *watchHandler) OnChange(dir string) (interface{}, error) {
 	declarativeConfigFiles := make(map[string][]byte, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
-			log.Warnf("Found a directory entry within %s: %s. This entry will be skipped", dir, entry.Name())
+			log.Debugf("Found a directory entry within %s: %s. This entry will be skipped", dir, entry.Name())
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), "..") {
+			log.Debugf(`Found an entry starting with ".." %s. This entry will be skipped`, entry.Name())
 			continue
 		}
 		entryContents, err := readDeclarativeConfigFile(path.Join(dir, entry.Name()))
 		if err != nil {
 			log.Errorf("Error reading file %s: %v", entry.Name(), err)
+			continue
+		}
+
+		if len(entryContents) == 0 {
+			log.Debugf("Found an empty file %s. This entry will be skipped", entry.Name())
 			continue
 		}
 		declarativeConfigFiles[entry.Name()] = entryContents
@@ -71,6 +83,13 @@ func (w *watchHandler) OnStableUpdate(val interface{}, err error) {
 		log.Warnf("Error reading declarative configuration files: %+v", err)
 		return
 	}
+
+	// Operate the critical section under a single lock.
+	// This lead to rare occurrences where calls to UpdateDeclarativeConfigContents were done twice under the read lock
+	// instead of only once under a single lock (since we previously held two different locks for comparing + updating.
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
 	fileContents, ok := val.(map[string][]byte)
 	if !ok {
 		log.Warnf("Received invalid type in stable update for declarative configuration files: %T", val)
@@ -82,18 +101,17 @@ func (w *watchHandler) OnStableUpdate(val interface{}, err error) {
 	// We have to ensure that no errors will be omitted from the time we changed the hashes for the files to passing
 	// the latest changes to the updater, otherwise we could potentially lose changes.
 	if !w.compareHashesForChanges(fileContents) && !w.checkForDeletedFiles(fileContents) {
-		log.Debugf("Found no changes from before in content, no reconciliation will be triggered")
+		log.Debug("Found no changes from before in content, no reconciliation will be triggered")
 		return
 	}
-
-	log.Debugf("Found changes in declarative configuration files, reconciliation will be triggered")
-	w.mutex.RLock()
-	defer w.mutex.RUnlock()
-	w.updater.UpdateDeclarativeConfigContents(w.id, maputil.Values(fileContents))
+	log.Debug("Found changes in declarative configuration files, reconciliation will be triggered")
+	w.updater.UpdateDeclarativeConfigContents(w.id, maps.Values(fileContents))
 }
 
 func (w *watchHandler) OnWatchError(err error) {
-	log.Errorf("Error watching declarative configuration directory: %v", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		log.Errorf("Error watching declarative configuration directory: %v", err)
+	}
 }
 
 // compareHashesForChanges compares the file contents for changes based on previous hashes stored for this handler.
@@ -105,8 +123,6 @@ func (w *watchHandler) OnWatchError(err error) {
 //
 // Otherwise, it will return false.
 func (w *watchHandler) compareHashesForChanges(fileContents map[string][]byte) bool {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
 	var changedFiles bool
 	for fileName, fileContent := range fileContents {
 		cachedHash, ok := w.cachedFileHashes[fileName]
@@ -123,10 +139,8 @@ func (w *watchHandler) compareHashesForChanges(fileContents map[string][]byte) b
 // the list of updated files. Otherwise, returns false.
 // In the end, the cached values will be changed to reflect the passed file contents.
 func (w *watchHandler) checkForDeletedFiles(fileContents map[string][]byte) bool {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-	cachedFileNames := set.NewStringSet(maputil.Keys(w.cachedFileHashes)...)
-	fileNames := set.NewStringSet(maputil.Keys(fileContents)...)
+	cachedFileNames := set.NewStringSet(maps.Keys(w.cachedFileHashes)...)
+	fileNames := set.NewStringSet(maps.Keys(fileContents)...)
 
 	// Retrieve all files that are within the cache, but are not present anymore in the current file contents.
 	removedFiles := cachedFileNames.Difference(fileNames)
@@ -147,12 +161,10 @@ func (w *watchHandler) checkForDeletedFiles(fileContents map[string][]byte) bool
 func (w *watchHandler) logFileContents(contents map[string][]byte) {
 	logMessage := "Found declarative configuration file contents\n"
 
-	w.mutex.RLock()
-	defer w.mutex.RUnlock()
 	for fileName, fileContents := range contents {
 		logMessage += fmt.Sprintf("File %s: %s\n", fileName, fileContents)
 	}
-	log.Debugf(logMessage)
+	log.Debug(logMessage)
 }
 
 // readDeclarativeConfigFile will read the file and additionally verify that the contents are valid YAML.

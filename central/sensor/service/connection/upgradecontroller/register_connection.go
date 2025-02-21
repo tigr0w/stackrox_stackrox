@@ -88,6 +88,7 @@ func (u *upgradeController) maybeTriggerAutoUpgrade() {
 		log.Errorf("Cannot automatically trigger auto-upgrade for sensor in cluster %s: %v", u.clusterID, err)
 	} else {
 		u.makeProcessActive(cluster, process)
+		observeUpgraderTriggered(u.getSensorVersion(), "new-connection-reconciliation", u.clusterID, process, u.active != nil)
 	}
 }
 
@@ -118,7 +119,7 @@ func (u *upgradeController) doHandleNewConnection(sensorCtx context.Context, con
 	if u.active != nil {
 		// Since we send the trigger asynchronously, clone the object -- we do modify the trigger
 		// sometimes, and don't want to cause a race.
-		trigger = u.active.trigger.Clone()
+		trigger = u.active.trigger.CloneVT()
 	} else {
 		trigger = &central.SensorUpgradeTrigger{} // empty trigger indicates "no upgrade should be in progress"
 	}

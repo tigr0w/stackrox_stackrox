@@ -1,15 +1,6 @@
 import React, { ReactElement, useState } from 'react';
-import {
-    Alert,
-    AlertVariant,
-    Button,
-    Modal,
-    ModalVariant,
-    PageSection,
-    pluralize,
-    Title,
-} from '@patternfly/react-core';
-import { TableComposable, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
+import { Alert, Button, Modal, PageSection, pluralize, Title } from '@patternfly/react-core';
+import { ActionsColumn, Table, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
 
 import { PermissionSet, Role } from 'services/RolesService';
 
@@ -22,7 +13,6 @@ const entityType = 'PERMISSION_SET';
 export type PermissionSetsListProps = {
     permissionSets: PermissionSet[];
     roles: Role[];
-    handleCreate: () => void;
     handleDelete: (id: string) => Promise<void>;
 };
 
@@ -52,7 +42,8 @@ function PermissionSetsList({
                 setAlertDelete(
                     <Alert
                         title="Delete permission set failed"
-                        variant={AlertVariant.danger}
+                        component="p"
+                        variant="danger"
                         isInline
                     >
                         {error.message}
@@ -74,14 +65,16 @@ function PermissionSetsList({
             <Title headingLevel="h2">{pluralize(permissionSets.length, 'result')} found</Title>
             {alertDelete}
             {permissionSets.length !== 0 && (
-                <TableComposable variant="compact" isStickyHeader>
+                <Table variant="compact" isStickyHeader>
                     <Thead>
                         <Tr>
                             <Th width={15}>Name</Th>
                             <Th width={15}>Origin</Th>
                             <Th width={25}>Description</Th>
                             <Th width={35}>Roles</Th>
-                            <Th width={10} aria-label="Row actions" />
+                            <Th width={10}>
+                                <span className="pf-v5-screen-reader">Row actions</span>
+                            </Th>
                         </Tr>
                     </Thead>
                     <Tbody>
@@ -105,31 +98,31 @@ function PermissionSetsList({
                                         entityId={id}
                                     />
                                 </Td>
-                                <Td
-                                    actions={{
-                                        disable:
+                                <Td isActionCell>
+                                    <ActionsColumn
+                                        isDisabled={
                                             !hasWriteAccessForPage ||
                                             idDeleting === id ||
                                             !isUserResource(traits) ||
                                             roles.some(
                                                 ({ permissionSetId }) => permissionSetId === id
-                                            ),
-                                        items: [
+                                            )
+                                        }
+                                        items={[
                                             {
                                                 title: 'Delete permission set',
                                                 onClick: () => onClickDelete(id),
                                             },
-                                        ],
-                                    }}
-                                    className="pf-u-text-align-right"
-                                />
+                                        ]}
+                                    />
+                                </Td>
                             </Tr>
                         ))}
                     </Tbody>
-                </TableComposable>
+                </Table>
             )}
             <Modal
-                variant={ModalVariant.small}
+                variant="small"
                 title="Permanently delete permission set?"
                 isOpen={typeof nameConfirmingDelete === 'string'}
                 onClose={onCancelDelete}

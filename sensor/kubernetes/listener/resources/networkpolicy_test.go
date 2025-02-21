@@ -4,19 +4,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/protoconv"
 	networkPolicyConversion "github.com/stackrox/rox/pkg/protoconv/networkpolicy"
-	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/sensor/common/detector/mocks"
 	mocksStore "github.com/stackrox/rox/sensor/common/store/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 	networkingV1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -94,8 +91,6 @@ func (suite *NetworkPolicyDispatcherSuite) SetupTest() {
 	for _, d := range deployments {
 		suite.deploymentStore.addOrUpdateDeployment(d)
 	}
-
-	suite.T().Setenv(features.NetworkPolicySystemPolicy.EnvVar(), "true")
 }
 
 func (suite *NetworkPolicyDispatcherSuite) TearDownTest() {
@@ -141,10 +136,6 @@ func createSensorEvent(np *networkingV1.NetworkPolicy, action central.ResourceAc
 }
 
 func (suite *NetworkPolicyDispatcherSuite) Test_ProcessEvent() {
-	if !features.NetworkPolicySystemPolicy.Enabled() {
-		suite.T().Skipf("Skipping test since the %s variable is not set", features.NetworkPolicySystemPolicy.EnvVar())
-	}
-
 	cases := map[string]struct {
 		netpol              interface{}
 		oldNetpol           interface{}
@@ -398,17 +389,7 @@ func (suite *NetworkPolicyDispatcherSuite) Test_ProcessEvent() {
 				deleteMock.Times(0)
 			}
 			events := suite.dispatcher.ProcessEvent(c.netpol, c.oldNetpol, c.action)
-			deps := set.NewStringSet()
 			require.NotNil(t, events)
-			if !env.ResyncDisabled.BooleanSetting() {
-				// If re-sync is disabled we don't send the CompatibilityReprocess in the dispatcher
-				deps.AddAll(events.ReprocessDeployments...)
-				for _, d := range c.expectedDeployments {
-					_, ok := deps[d.GetId()]
-					assert.Truef(t, ok, "Expected Id %s not found in the ReprocessDeployments slice", d.GetId())
-				}
-
-			}
 			for _, e := range events.ForwardMessages {
 				_, ok := c.expectedEvents[e.Id]
 				assert.Truef(t, ok, "Expected SensorEvent with NetworkPolicy Id %s not found", e.Id)

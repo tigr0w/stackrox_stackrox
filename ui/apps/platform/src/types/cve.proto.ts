@@ -12,7 +12,23 @@ export function isVulnerabilitySeverity(value: unknown): value is VulnerabilityS
     return vulnerabilitySeverities.some((severity) => severity === value);
 }
 
-export type VulnerabilityState = 'OBSERVED' | 'DEFERRED' | 'FALSE_POSITIVE';
+export const vulnerabilityStates = ['OBSERVED', 'DEFERRED', 'FALSE_POSITIVE'] as const;
+
+export type VulnerabilityState = (typeof vulnerabilityStates)[number];
+
+export function isVulnerabilityState(value: unknown): value is VulnerabilityState {
+    return vulnerabilityStates.some((state) => state === value);
+}
+
+// epss property is null if not available
+export type EPSS = {
+    epssProbability: number; // float fraction between 0 and 1 inclusive
+    epssPercentile: number; // float fraction between 0 and 1 inclusive
+};
+
+export type CveBaseInfo = {
+    epss: EPSS | null;
+};
 
 export type CVSSV2 = {
     vector: string;

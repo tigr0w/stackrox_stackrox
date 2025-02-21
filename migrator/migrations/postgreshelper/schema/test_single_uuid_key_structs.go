@@ -11,30 +11,33 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 )
 
 var (
-	// CreateTableTestSingleUuidKeyStructsStmt holds the create statement for table `test_single_uuid_key_structs`.
-	CreateTableTestSingleUuidKeyStructsStmt = &postgres.CreateStmts{
-		GormModel: (*TestSingleUuidKeyStructs)(nil),
+	// CreateTableTestSingleUUIDKeyStructsStmt holds the create statement for table `test_single_uuid_key_structs`.
+	CreateTableTestSingleUUIDKeyStructsStmt = &postgres.CreateStmts{
+		GormModel: (*TestSingleUUIDKeyStructs)(nil),
 		Children:  []*postgres.CreateStmts{},
 	}
 
-	// TestSingleUuidKeyStructsSchema is the go schema for table `test_single_uuid_key_structs`.
-	TestSingleUuidKeyStructsSchema = func() *walker.Schema {
+	// TestSingleUUIDKeyStructsSchema is the go schema for table `test_single_uuid_key_structs`.
+	TestSingleUUIDKeyStructsSchema = func() *walker.Schema {
 		schema := walker.Walk(reflect.TypeOf((*storage.TestSingleUUIDKeyStruct)(nil)), "test_single_uuid_key_structs")
 		schema.SetOptionsMap(search.Walk(v1.SearchCategory_SEARCH_UNSET, "testsingleuuidkeystruct", (*storage.TestSingleUUIDKeyStruct)(nil)))
+		schema.ScopingResource = resources.Namespace
 		return schema
 	}()
 )
 
 const (
-	TestSingleUuidKeyStructsTableName = "test_single_uuid_key_structs"
+	// TestSingleUUIDKeyStructsTableName specifies the name of the table in postgres.
+	TestSingleUUIDKeyStructsTableName = "test_single_uuid_key_structs"
 )
 
-// TestSingleUuidKeyStructs holds the Gorm model for Postgres table `test_single_uuid_key_structs`.
-type TestSingleUuidKeyStructs struct {
+// TestSingleUUIDKeyStructs holds the Gorm model for Postgres table `test_single_uuid_key_structs`.
+type TestSingleUUIDKeyStructs struct {
 	Key         string                               `gorm:"column:key;type:uuid;primaryKey;index:testsingleuuidkeystructs_key,type:hash"`
 	Name        string                               `gorm:"column:name;type:varchar;unique"`
 	StringSlice *pq.StringArray                      `gorm:"column:stringslice;type:text[]"`

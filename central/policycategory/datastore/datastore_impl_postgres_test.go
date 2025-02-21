@@ -1,5 +1,4 @@
 //go:build sql_integration
-// +build sql_integration
 
 package datastore
 
@@ -12,11 +11,11 @@ import (
 	edgeDataStore "github.com/stackrox/rox/central/policycategoryedge/datastore"
 	policyCategoryEdgeSearch "github.com/stackrox/rox/central/policycategoryedge/search"
 	policyCategoryEdgePostgres "github.com/stackrox/rox/central/policycategoryedge/store/postgres"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 	"github.com/stretchr/testify/suite"
 	"gorm.io/gorm"
@@ -55,14 +54,11 @@ func (s *PolicyCategoryPostgresDataStoreTestSuite) SetupTest() {
 	policyCategoryEdgePostgres.Destroy(s.ctx, s.db)
 
 	policyCategoryEdgeStorage := policyCategoryEdgePostgres.CreateTableAndNewStore(s.ctx, s.db, s.gormDB)
-	policyCategoryEdgeIndexer := policyCategoryEdgePostgres.NewIndexer(s.db)
-	policyCategorySearcher := policyCategoryEdgeSearch.New(policyCategoryEdgeStorage, policyCategoryEdgeIndexer)
-	s.edgeDatastore = edgeDataStore.New(policyCategoryEdgeStorage, policyCategoryEdgeIndexer, policyCategorySearcher)
+	policyCategorySearcher := policyCategoryEdgeSearch.New(policyCategoryEdgeStorage)
+	s.edgeDatastore = edgeDataStore.New(policyCategoryEdgeStorage, policyCategorySearcher)
 
 	policyCategoryStore := pgStore.CreateTableAndNewStore(s.ctx, s.db, s.gormDB)
-	policyCategoryIndexer := pgStore.NewIndexer(s.db)
-	s.datastore = New(policyCategoryStore, policyCategoryIndexer,
-		policyCategorySearch.New(policyCategoryStore, policyCategoryIndexer), s.edgeDatastore)
+	s.datastore = New(policyCategoryStore, policyCategorySearch.New(policyCategoryStore), s.edgeDatastore)
 }
 
 func (s *PolicyCategoryPostgresDataStoreTestSuite) TearDownSuite() {
@@ -79,7 +75,7 @@ func (s *PolicyCategoryPostgresDataStoreTestSuite) TestSearchWithPostgres() {
 
 	ctx := sac.WithGlobalAccessScopeChecker(context.Background(), sac.AllowFixedScopes(
 		sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
-		sac.ResourceScopeKeys(resources.Policy),
+		sac.ResourceScopeKeys(resources.WorkflowAdministration),
 	))
 
 	// Add category.

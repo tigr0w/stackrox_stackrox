@@ -27,8 +27,10 @@ package logging
 
 import (
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -36,8 +38,10 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/buildinfo"
+	"github.com/stackrox/rox/pkg/env"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -58,18 +62,8 @@ const (
 	// implementation and not to require clients to import zapcore lib
 	// explicitly.
 
-	// FatalLevel log level
-	FatalLevel = zapcore.FatalLevel
-	// PanicLevel log level
-	PanicLevel = zapcore.PanicLevel
-	// ErrorLevel log level
-	ErrorLevel = zapcore.ErrorLevel
 	// WarnLevel log level
 	WarnLevel = zapcore.WarnLevel
-	// InfoLevel log level
-	InfoLevel = zapcore.InfoLevel
-	// DebugLevel log level
-	DebugLevel = zapcore.DebugLevel
 )
 
 var (
@@ -267,19 +261,11 @@ func GetGlobalLogLevel() zapcore.Level {
 }
 
 // LoggerForModule returns a logger for the current module.
-func LoggerForModule() Logger {
-	return CurrentModule().Logger()
+func LoggerForModule(opts ...OptionsFunc) Logger {
+	return currentModule(3).Logger(opts...)
 }
 
 // convenience methods log apply to root logger
-
-// Log implements logging.Logger interface.
-func Log(level zapcore.Level, args ...interface{}) { rootLogger.Log(level, args...) }
-
-// Logf implements logging.Logger interface.
-func Logf(level zapcore.Level, template string, args ...interface{}) {
-	rootLogger.Logf(level, template, args...)
-}
 
 // Debug implements logging.Logger interface.
 func Debug(args ...interface{}) { rootLogger.Debug(args...) }
@@ -293,14 +279,8 @@ func Error(args ...interface{}) { rootLogger.Error(args...) }
 // Errorf implements logging.Logger interface.
 func Errorf(format string, args ...interface{}) { rootLogger.Errorf(format, args...) }
 
-// Fatal implements logging.Logger interface.
-func Fatal(args ...interface{}) { rootLogger.Fatal(args...) }
-
 // Fatalf implements logging.Logger interface.
 func Fatalf(format string, args ...interface{}) { rootLogger.Fatalf(format, args...) }
-
-// Fatalln implements logging.Logger interface.
-func Fatalln(args ...interface{}) { rootLogger.Fatal(args...) }
 
 // Info implements logging.Logger interface.
 func Info(args ...interface{}) { rootLogger.Info(args...) }
@@ -308,23 +288,8 @@ func Info(args ...interface{}) { rootLogger.Info(args...) }
 // Infof implements logging.Logger interface.
 func Infof(format string, args ...interface{}) { rootLogger.Infof(format, args...) }
 
-// Panic implements logging.Logger interface.
-func Panic(args ...interface{}) { rootLogger.Panic(args...) }
-
 // Panicf implements logging.Logger interface.
 func Panicf(format string, args ...interface{}) { rootLogger.Panicf(format, args...) }
-
-// Panicln implements logging.Logger interface.
-func Panicln(args ...interface{}) { rootLogger.Panic(args...) }
-
-// Print implements logging.Logger interface.
-func Print(args ...interface{}) { rootLogger.Info(args...) }
-
-// Printf implements logging.Logger interface.
-func Printf(format string, args ...interface{}) { rootLogger.Infof(format, args...) }
-
-// Println implements logging.Logger interface.
-func Println(args ...interface{}) { rootLogger.Info(args...) }
 
 // Warn implements logging.Logger interface.
 func Warn(args ...interface{}) { rootLogger.Warn(args...) }
@@ -365,27 +330,72 @@ func SortedLevels() []zapcore.Level {
 
 // CreateLogger creates (but does not register) a new logger instance.
 // Skip allows to specify how much layers of nested calls we will skip during logging.
-func CreateLogger(module *Module, skip int) *LoggerImpl {
+func CreateLogger(module *Module, skip int, opts ...OptionsFunc) *LoggerImpl {
+	// Copy the global config.
 	lc := config
-	return createLoggerWithConfig(&lc, module, skip)
-}
-
-func createLoggerWithConfig(lc *zap.Config, module *Module, skip int) *LoggerImpl {
+	// Need to increase the skip by 1 by default since we call the logger inline. Otherwise, the location of the caller
+	// would also be set to this file.
+	skip += 1
 	lc.Level = module.logLevel
 
-	logger, err := lc.Build(zap.AddCallerSkip(skip))
+	// Split the OutputPaths into the standard streams and rotating files:
+	rotatingPaths := []string{}
+	stdPaths := []string{}
+	for _, path := range lc.OutputPaths {
+		if path == "stderr" || path == "stdout" {
+			stdPaths = append(stdPaths, path)
+		} else {
+			rotatingPaths = append(rotatingPaths, path)
+		}
+	}
+	// Make zap build a logger with only the standard streams:
+	lc.OutputPaths = stdPaths
+	// And append the rotating files as a Tee core option:
+	logger, err := lc.Build(zap.AddCallerSkip(skip), zap.WrapCore(withRotatingCores(&lc, rotatingPaths)))
 	if err != nil {
 		panic(errors.Wrap(err, "failed to instantiate logger"))
+	}
+
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
 	}
 
 	result := &LoggerImpl{
 		InnerLogger: logger.Named(module.name).Sugar(),
 		module:      module,
+		opts:        o,
 	}
 
 	runtime.SetFinalizer(result, (*LoggerImpl).finalize)
 
 	return result
+}
+
+func withRotatingCores(lc *zap.Config, rotatingPaths []string) func(c zapcore.Core) zapcore.Core {
+	var cores = make([]zapcore.Core, 0, len(rotatingPaths))
+	for _, path := range rotatingPaths {
+		writer := zapcore.AddSync(&lumberjack.Logger{
+			Filename:   path,
+			MaxSize:    env.LoggingMaxSizeMB.IntegerSetting(),
+			MaxBackups: env.LoggingMaxRotationFiles.IntegerSetting(),
+		})
+		cores = append(cores, zapcore.NewCore(getEncoderForConfig(lc), writer, lc.Level))
+	}
+	return func(c zapcore.Core) zapcore.Core {
+		return zapcore.NewTee(append(cores, c)...)
+	}
+}
+
+func getEncoderForConfig(lc *zap.Config) zapcore.Encoder {
+	switch lc.Encoding {
+	case "console":
+		return zapcore.NewConsoleEncoder(lc.EncoderConfig)
+	case "json":
+		return zapcore.NewJSONEncoder(lc.EncoderConfig)
+	default:
+		panic("unexpected logger encoding: " + lc.Encoding)
+	}
 }
 
 func parseDefaultModuleLevels(str string) (map[string]zapcore.Level, []error) {
@@ -415,4 +425,34 @@ func parseDefaultModuleLevels(str string) (map[string]zapcore.Level, []error) {
 	}
 
 	return result, errs
+}
+
+// ForEachRotation calls the provided function on each rotation of the given
+// log file, including the given log file, starting from the oldest.
+func ForEachRotation(logFile string, f func(rotationFileName string) error) error {
+	dir, fileext := filepath.Split(logFile)
+	ext := filepath.Ext(fileext)
+	filename := strings.TrimSuffix(fileext, ext)
+	// Example: central-2024-11-12T13-14-15.167.log
+	const ts = `-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]-[0-9][0-9]-[0-9][0-9]\.[0-9][0-9][0-9]`
+	pattern := filename + ts + ext
+
+	// The files are walked in lexical order: the current log will be
+	// read last.
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if path == logFile {
+			return f(path)
+		}
+		if ok, _ := filepath.Match(pattern, d.Name()); ok {
+			return f(path)
+		}
+		return nil
+	})
+	if err != nil {
+		return errors.Wrap(err, "failed to iterate over log files")
+	}
+	return nil
 }

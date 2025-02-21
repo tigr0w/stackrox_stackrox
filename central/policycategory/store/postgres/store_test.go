@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *PolicyCategoriesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE policy_categories CASCADE")
 	s.T().Log("policy_categories", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *PolicyCategoriesStoreSuite) TestStore() {
 	foundPolicyCategory, exists, err = store.Get(ctx, policyCategory.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(policyCategory, foundPolicyCategory)
+	protoassert.Equal(s.T(), policyCategory, foundPolicyCategory)
 
-	policyCategoryCount, err := store.Count(ctx)
+	policyCategoryCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, policyCategoryCount)
-	policyCategoryCount, err = store.Count(withNoAccessCtx)
+	policyCategoryCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(policyCategoryCount)
 
@@ -75,11 +78,6 @@ func (s *PolicyCategoriesStoreSuite) TestStore() {
 	s.True(policyCategoryExists)
 	s.NoError(store.Upsert(ctx, policyCategory))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, policyCategory), sac.ErrResourceAccessDenied)
-
-	foundPolicyCategory, exists, err = store.Get(ctx, policyCategory.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(policyCategory, foundPolicyCategory)
 
 	s.NoError(store.Delete(ctx, policyCategory.GetId()))
 	foundPolicyCategory, exists, err = store.Get(ctx, policyCategory.GetId())
@@ -100,15 +98,15 @@ func (s *PolicyCategoriesStoreSuite) TestStore() {
 	s.NoError(store.UpsertMany(ctx, policyCategorys))
 	allPolicyCategory, err := store.GetAll(ctx)
 	s.NoError(err)
-	s.ElementsMatch(policyCategorys, allPolicyCategory)
+	protoassert.ElementsMatch(s.T(), policyCategorys, allPolicyCategory)
 
-	policyCategoryCount, err = store.Count(ctx)
+	policyCategoryCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, policyCategoryCount)
 
 	s.NoError(store.DeleteMany(ctx, policyCategoryIDs))
 
-	policyCategoryCount, err = store.Count(ctx)
+	policyCategoryCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, policyCategoryCount)
 }

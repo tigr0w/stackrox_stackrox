@@ -1,7 +1,7 @@
 .PHONY: all
 all: style test
 
-GRADLE := ./gradlew
+GRADLE = TEST_TARGET="$@" ./gradlew
 GRADLE_TEST_ARGS =
 # Stop testing after the first test failure by defining FAIL_FAST. (Can be
 # achieved on a PR with a ci-fail-fast label)
@@ -52,12 +52,12 @@ clean-generated-srcs:
 .PHONY: test
 test: compile
 	@echo "+ $@"
-	$(GRADLE) testBegin testRest $(GRADLE_TEST_ARGS)
+	$(GRADLE) testBegin testParallel testRest $(GRADLE_TEST_ARGS)
 
 .PHONY: bat-test
 bat-test: compile
 	@echo "+ $@"
-	$(GRADLE) testBegin testBAT $(GRADLE_TEST_ARGS)
+	$(GRADLE) testBegin testParallelBAT testBAT $(GRADLE_TEST_ARGS)
 
 .PHONY: smoke-test
 smoke-test: compile
@@ -67,7 +67,7 @@ smoke-test: compile
 .PHONY: compatibility-test
 compatibility-test: compile
 	@echo "+ $@"
-	$(GRADLE) testCOMPATIBILITY $(GRADLE_TEST_ARGS)
+	$(GRADLE) testCOMPATIBILITY testCOMPATIBILITYSensorBounce $(GRADLE_TEST_ARGS)
 
 .PHONY: runtime-test
 runtime-test: compile
@@ -103,3 +103,18 @@ graphql-test: compile
 sensor-bounce-test: compile
 	@echo "+ $@"
 	$(GRADLE) testSensorBounce testSensorBounceNext $(GRADLE_TEST_ARGS)
+
+.PHONY: pz-test
+pz-test: compile
+	@echo "+ $@"
+	$(GRADLE) testPZ $(GRADLE_TEST_ARGS)
+
+.PHONY: pz-test-debug
+pz-test-debug: compile
+	@echo "+ $@"
+	$(GRADLE) testPZDebug $(GRADLE_TEST_ARGS)
+
+.PHONY: deployment-check-test
+deployment-check-test: compile
+	@echo "+ $@"
+	$(GRADLE) testDeploymentCheck $(GRADLE_TEST_ARGS)

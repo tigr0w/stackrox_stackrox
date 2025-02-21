@@ -5,22 +5,22 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	cluster "github.com/stackrox/rox/central/cluster/datastore"
 	"github.com/stackrox/rox/central/delegatedregistryconfig/convert"
 	"github.com/stackrox/rox/central/delegatedregistryconfig/datastore"
-	"github.com/stackrox/rox/central/role/resources"
+	deleConnection "github.com/stackrox/rox/central/delegatedregistryconfig/util/connection"
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/pkg/auth/permissions"
-	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/errox"
 	pkgGRPC "github.com/stackrox/rox/pkg/grpc"
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/set"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -32,11 +32,11 @@ var (
 
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
 		user.With(permissions.View(resources.Administration)): {
-			"/v1.DelegatedRegistryConfigService/GetConfig",
-			"/v1.DelegatedRegistryConfigService/GetClusters",
+			v1.DelegatedRegistryConfigService_GetConfig_FullMethodName,
+			v1.DelegatedRegistryConfigService_GetClusters_FullMethodName,
 		},
 		user.With(permissions.Modify(resources.Administration)): {
-			"/v1.DelegatedRegistryConfigService/UpdateConfig",
+			v1.DelegatedRegistryConfigService_UpdateConfig_FullMethodName,
 		},
 	})
 )
@@ -197,14 +197,12 @@ func (s *serviceImpl) getClusters(ctx context.Context) ([]*v1.DelegatedRegistryC
 
 	res := make([]*v1.DelegatedRegistryCluster, len(clusters))
 	for i, c := range clusters {
-		conn := s.connManager.GetConnection(c.Id)
-
-		valid := conn != nil && conn.HasCapability(centralsensor.DelegatedRegistryCap)
+		conn := s.connManager.GetConnection(c.GetId())
 
 		res[i] = &v1.DelegatedRegistryCluster{
 			Id:      c.Id,
 			Name:    c.Name,
-			IsValid: valid,
+			IsValid: deleConnection.ValidForDelegation(conn),
 		}
 	}
 

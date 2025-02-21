@@ -3,24 +3,22 @@ package datastore
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/policycategoryedge/index"
 	"github.com/stackrox/rox/central/policycategoryedge/search"
 	"github.com/stackrox/rox/central/policycategoryedge/store"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	searchPkg "github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/sync"
 )
 
 var (
-	policySAC = sac.ForResource(resources.Policy)
+	workflowAdministrationSAC = sac.ForResource(resources.WorkflowAdministration)
 )
 
 type datastoreImpl struct {
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 
 	mutex sync.Mutex
@@ -56,7 +54,7 @@ func (ds *datastoreImpl) Get(ctx context.Context, id string) (*storage.PolicyCat
 
 // GetAllPolicyCategories lists all policy categories
 func (ds *datastoreImpl) GetAll(ctx context.Context) ([]*storage.PolicyCategoryEdge, error) {
-	if ok, err := policySAC.ReadAllowed(ctx); err != nil || !ok {
+	if ok, err := workflowAdministrationSAC.ReadAllowed(ctx); err != nil || !ok {
 		return nil, err
 	}
 
@@ -95,7 +93,7 @@ func (ds *datastoreImpl) UpsertMany(ctx context.Context, edges []*storage.Policy
 		return nil
 	}
 
-	if ok, err := policySAC.WriteAllowed(ctx); err != nil {
+	if ok, err := workflowAdministrationSAC.WriteAllowed(ctx); err != nil {
 		return err
 	} else if !ok {
 		return sac.ErrResourceAccessDenied
@@ -109,7 +107,7 @@ func (ds *datastoreImpl) DeleteMany(ctx context.Context, ids ...string) error {
 	ds.mutex.Lock()
 	defer ds.mutex.Unlock()
 
-	if ok, err := policySAC.WriteAllowed(ctx); err != nil {
+	if ok, err := workflowAdministrationSAC.WriteAllowed(ctx); err != nil {
 		return err
 	} else if !ok {
 		return sac.ErrResourceAccessDenied
@@ -122,11 +120,12 @@ func (ds *datastoreImpl) DeleteByQuery(ctx context.Context, q *v1.Query) error {
 	ds.mutex.Lock()
 	defer ds.mutex.Unlock()
 
-	if ok, err := policySAC.WriteAllowed(ctx); err != nil {
+	if ok, err := workflowAdministrationSAC.WriteAllowed(ctx); err != nil {
 		return err
 	} else if !ok {
 		return sac.ErrResourceAccessDenied
 	}
 
-	return ds.storage.DeleteByQuery(ctx, q)
+	_, storeErr := ds.storage.DeleteByQuery(ctx, q)
+	return storeErr
 }

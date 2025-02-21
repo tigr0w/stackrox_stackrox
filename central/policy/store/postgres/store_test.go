@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *PoliciesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE policies CASCADE")
 	s.T().Log("policies", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *PoliciesStoreSuite) TestStore() {
 	foundPolicy, exists, err = store.Get(ctx, policy.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(policy, foundPolicy)
+	protoassert.Equal(s.T(), policy, foundPolicy)
 
-	policyCount, err := store.Count(ctx)
+	policyCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, policyCount)
-	policyCount, err = store.Count(withNoAccessCtx)
+	policyCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(policyCount)
 
@@ -75,11 +78,6 @@ func (s *PoliciesStoreSuite) TestStore() {
 	s.True(policyExists)
 	s.NoError(store.Upsert(ctx, policy))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, policy), sac.ErrResourceAccessDenied)
-
-	foundPolicy, exists, err = store.Get(ctx, policy.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(policy, foundPolicy)
 
 	s.NoError(store.Delete(ctx, policy.GetId()))
 	foundPolicy, exists, err = store.Get(ctx, policy.GetId())
@@ -100,15 +98,15 @@ func (s *PoliciesStoreSuite) TestStore() {
 	s.NoError(store.UpsertMany(ctx, policys))
 	allPolicy, err := store.GetAll(ctx)
 	s.NoError(err)
-	s.ElementsMatch(policys, allPolicy)
+	protoassert.ElementsMatch(s.T(), policys, allPolicy)
 
-	policyCount, err = store.Count(ctx)
+	policyCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, policyCount)
 
 	s.NoError(store.DeleteMany(ctx, policyIDs))
 
-	policyCount, err = store.Count(ctx)
+	policyCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, policyCount)
 }

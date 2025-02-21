@@ -16,11 +16,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/central/alert/datastore"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/booleanpolicy/violationmessages/printer"
-	"github.com/stackrox/rox/pkg/httputil/mock"
+	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/protoutils"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +30,9 @@ import (
 )
 
 var (
+	// Create an alias on the protoutils function for readability
+	makeTimestamp = protoutils.MustGetProtoTimestampFromRFC3339NanoString
+
 	// In case later we'd need to make adjustments or take different samples, the following structs were dumped from a
 	// live system by simply using "github.com/mitranim/repr" module and printing them with `repr.Println(alert)` call.
 	// Next, I removed some redundant `&` operators that compiler did not like, adjusted enums to use symbols (such as
@@ -617,11 +620,11 @@ func TestViolations(t *testing.T) {
 }
 
 func (s *violationsTestSuite) SetupTest() {
-	s.deployAlert = deployAlert.Clone()
-	s.processAlert = processAlert.Clone()
-	s.k8sAlert = k8sAlert.Clone()
-	s.networkAlert = networkAlert.Clone()
-	s.resourceAlert = resourceAlert.Clone()
+	s.deployAlert = deployAlert.CloneVT()
+	s.processAlert = processAlert.CloneVT()
+	s.k8sAlert = k8sAlert.CloneVT()
+	s.networkAlert = networkAlert.CloneVT()
+	s.resourceAlert = resourceAlert.CloneVT()
 	s.allowCtx = sac.WithAllAccess(context.Background())
 }
 
@@ -786,7 +789,7 @@ func (s *violationsTestSuite) TestViolationIdsAreDistinct() {
 }
 
 func (s *violationsTestSuite) TestWithDeploymentImage() {
-	alert := s.processAlert.Clone()
+	alert := s.processAlert.CloneVT()
 	// Change alert's Entity from Alert_Deployment to Alert_Image. Conveniently the former Alert_Deployment has a ContainerImage we can use for testing.
 	alert.Entity = &storage.Alert_Image{
 		Image: alert.GetDeployment().Containers[0].GetImage(),
@@ -802,7 +805,7 @@ func (s *violationsTestSuite) TestWithDeploymentImage() {
 }
 
 func (s *violationsTestSuite) TestAlertWithoutPolicy() {
-	alert := s.processAlert.Clone()
+	alert := s.processAlert.CloneVT()
 	alert.Policy = nil
 	alert.ProcessViolation.Processes = alert.ProcessViolation.Processes[:1]
 	vs := s.getViolations(s.prepare().setAlerts(alert).runRequestAndGetBody())
@@ -810,13 +813,13 @@ func (s *violationsTestSuite) TestAlertWithoutPolicy() {
 }
 
 func (s *violationsTestSuite) TestProcessAlertWithoutProcessIndicators() {
-	alert := s.processAlert.Clone()
+	alert := s.processAlert.CloneVT()
 	alert.ProcessViolation.Processes = []*storage.ProcessIndicator{}
 	s.Empty(s.getViolations(s.prepare().setAlerts(alert).runRequestAndGetBody()))
 }
 
 func (s *violationsTestSuite) TestProcessAlertWithoutProcessSignal() {
-	alert := s.processAlert.Clone()
+	alert := s.processAlert.CloneVT()
 	alert.ProcessViolation.Processes = alert.ProcessViolation.Processes[:1]
 	alert.ProcessViolation.Processes[0].Signal = nil
 	vs := s.getViolations(s.prepare().setAlerts(alert).runRequestAndGetBody())
@@ -829,13 +832,13 @@ func (s *violationsTestSuite) TestProcessAlertWithoutProcessSignal() {
 }
 
 func (s *violationsTestSuite) TestAlertWithoutViolations() {
-	alert := s.deployAlert.Clone()
+	alert := s.deployAlert.CloneVT()
 	alert.Violations = []*storage.Alert_Violation{}
 	s.Empty(s.getViolations(s.prepare().setAlerts(alert).runRequestAndGetBody()))
 }
 
 func (s *violationsTestSuite) TestK8sAlertWithoutDeploymentOrResource() {
-	alert := s.k8sAlert.Clone()
+	alert := s.k8sAlert.CloneVT()
 	alert.Entity = nil
 	alert.Violations = alert.Violations[:1]
 	vs := s.getViolations(s.prepare().setAlerts(alert).runRequestAndGetBody())
@@ -844,7 +847,7 @@ func (s *violationsTestSuite) TestK8sAlertWithoutDeploymentOrResource() {
 }
 
 func (s *violationsTestSuite) TestProcessAlertWithoutDeployment() {
-	alert := s.processAlert.Clone()
+	alert := s.processAlert.CloneVT()
 	alert.Entity = nil
 	alert.ProcessViolation.Processes = alert.ProcessViolation.Processes[:1]
 	vs := s.getViolations(s.prepare().setAlerts(alert).runRequestAndGetBody())
@@ -853,7 +856,7 @@ func (s *violationsTestSuite) TestProcessAlertWithoutDeployment() {
 }
 
 func (s *violationsTestSuite) TestProcessAlertNotMatchingDeploymentId() {
-	alert := s.processAlert.Clone()
+	alert := s.processAlert.CloneVT()
 	alert.ProcessViolation.Processes = alert.ProcessViolation.Processes[:1]
 	alert.ProcessViolation.Processes[0].DeploymentId = "blah"
 	vs := s.getViolations(s.prepare().setAlerts(alert).runRequestAndGetBody())
@@ -863,7 +866,7 @@ func (s *violationsTestSuite) TestProcessAlertNotMatchingDeploymentId() {
 }
 
 func (s *violationsTestSuite) TestProcessAlertNotMatchingDeploymentInfo() {
-	alert := s.processAlert.Clone()
+	alert := s.processAlert.CloneVT()
 	alert.ProcessViolation.Processes = alert.ProcessViolation.Processes[:1]
 	alert.ProcessViolation.Processes[0].ClusterId = "blah-cluster"
 	alert.ProcessViolation.Processes[0].Namespace = "blah-namespace"
@@ -1168,10 +1171,10 @@ func (s *violationsTestSuite) TestCheckpointTimestampFiltering() {
 
 			if sample.expectedCount > 0 {
 				// Check that all violations fall within the expected range.
-				fromTs := makeTimestamp(sample.violationsNotBefore)
-				toTs := makeTimestamp(sample.violationsNotAfter)
+				fromTs := mustParseTime(sample.violationsNotBefore)
+				toTs := mustParseTime(sample.violationsNotAfter)
 				for _, v := range vs {
-					ts := makeTimestamp(s.extr(v, ".violationInfo.violationTime").(string))
+					ts := mustParseTime(s.extr(v, ".violationInfo.violationTime").(string))
 					s.True(ts.Compare(fromTs) >= 0, "Violation timestamp is earlier than expected", v)
 					s.True(ts.Compare(toTs) <= 0, "Violation timestamp is later than expected", v)
 				}
@@ -1264,10 +1267,6 @@ func (s *violationsTestSuite) prepare() *requestBuilder {
 		pagination: defaultPaginationSettings,
 	}
 }
-func (rb *requestBuilder) setContext(ctx context.Context) *requestBuilder {
-	rb.ctx = ctx
-	return rb
-}
 func (rb *requestBuilder) setCheckpoint(checkpointParams ...string) *requestBuilder {
 	rb.checkpointParams = checkpointParams
 	return rb
@@ -1329,18 +1328,28 @@ func (s *violationsTestSuite) TestResponseContentType() {
 	s.Equal("application/json", w.Header().Get("Content-Type"))
 }
 
-func (s *violationsTestSuite) TestViolationsHandlerError() {
-	w := httptest.NewRecorder()
+// failingResponseWriter is an implementation of http.ResponseWriter that returns error on attempt to write to it
+// to emulate e.g. closed connection.
+type failingResponseWriter struct {
+	header http.Header
+}
 
-	// context.Background() did not go through our context validation and will not include any global access scope.
-	// We use this to make datastore generate an error which will make the request fail.
-	s.Panics(func() {
-		s.prepare().setContext(context.Background()).setAlerts(s.deployAlert).runRequest(w)
-	})
+var _ http.ResponseWriter = (*failingResponseWriter)(nil)
+
+func newFailingResponseWriter() http.ResponseWriter {
+	return failingResponseWriter{
+		header: make(http.Header),
+	}
+}
+
+func (f failingResponseWriter) Header() http.Header { return f.header }
+func (f failingResponseWriter) WriteHeader(_ int)   {}
+func (f failingResponseWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("mock http write error")
 }
 
 func (s *violationsTestSuite) TestViolationsHandlerWriteError() {
-	w := mock.NewFailingResponseWriter(errors.New("mock http write error"))
+	w := newFailingResponseWriter()
 	s.PanicsWithError("net/http: abort Handler", func() {
 		s.prepare().setAlerts(s.processAlert).runRequest(w)
 	})
@@ -1363,15 +1372,14 @@ func (s *violationsTestSuite) TestGenerateViolationId() {
 	v3 := storage.Alert_Violation{
 		Message: "mock message",
 		Type:    storage.Alert_Violation_K8S_EVENT,
-		Time: &types.Timestamp{
-			Seconds: 123,
-			Nanos:   456,
-		},
+		Time: protocompat.GetProtoTimestampFromSecondsAndNanos(
+			123,
+			456),
 	}
 	id3, err := generateViolationID("alert1", &v3)
 	s.Require().NoError(err)
 
-	v4 := v3.Clone()
+	v4 := v3.CloneVT()
 	v4.Message = "mock message4"
 	id4, err := generateViolationID("alert1", v4)
 	s.Require().NoError(err)
@@ -1380,8 +1388,8 @@ func (s *violationsTestSuite) TestGenerateViolationId() {
 }
 
 func BenchmarkGenerateViolationId(b *testing.B) {
-	violations := deployAlert.Clone().Violations
-	violations = append(violations, k8sAlert.Clone().Violations...)
+	violations := deployAlert.CloneVT().Violations
+	violations = append(violations, k8sAlert.CloneVT().Violations...)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		v := violations[i%len(violations)]

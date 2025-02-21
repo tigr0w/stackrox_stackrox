@@ -6,11 +6,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/golang/protobuf/jsonpb"
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	v1 "github.com/stackrox/rox/generated/api/v1"
+	"github.com/stackrox/rox/pkg/jsonutil"
 	pkgCommon "github.com/stackrox/rox/pkg/roxctl/common"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/roxctl/common/environment"
@@ -32,8 +32,7 @@ func authzTraceCommand(cliEnvironment environment.Environment) *cobra.Command {
 		Long: `Stream built-in authorizer traces for all incoming requests.
 The command blocks for the given number of minutes and collects the authorization trace log for all incoming API requests to the Central service.`,
 		RunE: util.RunENoArgs(func(c *cobra.Command) error {
-			timeout := flags.Timeout(c)
-			return writeAuthzTraces(cliEnvironment, timeout)
+			return writeAuthzTraces(cliEnvironment, flags.Timeout(c))
 		}),
 	}
 	flags.AddTimeoutWithDefault(c, authzTraceTimeout)
@@ -97,7 +96,7 @@ func streamAuthzTraces(cliEnvironment environment.Environment, timeout time.Dura
 			return recvErr
 		}
 
-		if err := (&jsonpb.Marshaler{}).Marshal(traceOutput, trace); err != nil {
+		if err := jsonutil.Marshal(traceOutput, trace); err != nil {
 			return errors.Wrap(err, "marshaling a trace to JSON")
 		}
 		if _, err := traceOutput.Write([]byte{'\n'}); err != nil {

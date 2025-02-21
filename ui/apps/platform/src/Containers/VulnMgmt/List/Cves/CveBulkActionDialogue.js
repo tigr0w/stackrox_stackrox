@@ -5,19 +5,21 @@ import cloneDeep from 'lodash/cloneDeep';
 import get from 'lodash/get';
 import set from 'lodash/set';
 import uniqBy from 'lodash/uniqBy';
-import { Message } from '@stackrox/ui-components';
+import { Alert } from '@patternfly/react-core';
 
-import CustomDialogue from 'Components/CustomDialogue';
-import InfoList from 'Components/InfoList';
 import Loader from 'Components/Loader';
 import { POLICY_ENTITY_ALL_FIELDS_FRAGMENT } from 'Containers/VulnMgmt/VulnMgmt.fragments';
 import entityTypes from 'constants/entityTypes';
 import queryService from 'utils/queryService';
 import { createPolicy, savePolicy } from 'services/PoliciesService';
+import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 import { truncate } from 'utils/textUtils';
 import { splitCvesByType } from 'utils/vulnerabilityUtils';
 
+import CustomDialogue from '../../Components/CustomDialogue';
+
 import CveToPolicyShortForm, { emptyPolicy } from './CveToPolicyShortForm';
+import { parseCveNamesFromIds } from './ListCVEs.utils';
 
 const findCVEField = (policySections) => {
     let policySectionIdx = null;
@@ -38,10 +40,7 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
     const dialogueRef = useRef(null);
 
     // the combined CVEs are used for the GraphQL query var
-    const cvesStr =
-        cveType === entityTypes.CVE
-            ? bulkActionCveIds.join(',')
-            : bulkActionCveIds.map((cve) => cve.split('#')[0]).join(','); // only use the cve name, not the OS after the hash
+    const cvesStr = parseCveNamesFromIds(bulkActionCveIds).join(','); // only use the cve name, not the OS after the hash
 
     // prepare policy object
     const [policyIdentifer, setPolicyIdentifier] = useState('');
@@ -79,27 +78,14 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
             `;
             break;
         }
-        case entityTypes.IMAGE_CVE: {
+        case entityTypes.IMAGE_CVE:
+        default: {
             CVE_QUERY = gql`
                 query getImageCves($query: String) {
                     results: imageVulnerabilities(query: $query) {
                         id
                         cve
                         summary
-                    }
-                }
-            `;
-            break;
-        }
-        case entityTypes.CVE:
-        default: {
-            CVE_QUERY = gql`
-                query getCves($query: String) {
-                    results: vulnerabilities(query: $query) {
-                        id
-                        cve
-                        summary
-                        vulnerabilityTypes
                     }
                 }
             `;
@@ -234,7 +220,7 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
 
         addToFunc(policy)
             .then(() => {
-                setMessageObj({ type: 'success', message: 'Policy successfully saved' });
+                setMessageObj({ variant: 'success', title: 'Policy successfully saved' });
 
                 // close the dialog after giving the user a little time to process the success message
                 dialogueRef.current.scrollTo({ top: 0, behavior: 'smooth' });
@@ -242,8 +228,9 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
             })
             .catch((error) => {
                 setMessageObj({
-                    type: 'error',
-                    message: `Policy could not be saved. Please try again. (${error})`,
+                    variant: 'danger',
+                    title: 'Policy could not be saved. Please try again.',
+                    text: getAxiosErrorMessage(error),
                 });
 
                 // hide the error message after giving the user time to read it
@@ -258,7 +245,7 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
         const truncatedSummary = truncate(item.summary, 120);
         return (
             <li key={item.id} className="flex items-center bg-tertiary-200 mb-2 p-2">
-                <span className="min-w-32">{item.cve}</span>
+                <span className="min-w-32 font-700">{item.cve}</span>
                 <span>{truncatedSummary}</span>
             </li>
         );
@@ -272,10 +259,9 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
     return (
         <CustomDialogue
             className="max-w-3/4 md:max-w-2/3 lg:max-w-1/2"
-            title="Add To Policy"
-            text=""
+            title="Add to policy"
             onConfirm={cvesToDisplay.length > 0 ? addToPolicy : null}
-            confirmText="Save Policy"
+            confirmText="Save policy"
             confirmDisabled={Boolean(
                 messageObj ||
                     policy.name.length < 6 ||
@@ -290,7 +276,14 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
                 ) : (
                     <>
                         {messageObj && (
-                            <Message type={messageObj.type}>{messageObj.message}</Message>
+                            <Alert
+                                variant={messageObj.variant}
+                                isInline
+                                title={messageObj.title}
+                                component="p"
+                            >
+                                {messageObj.text}
+                            </Alert>
                         )}
                         <CveToPolicyShortForm
                             policy={policy}
@@ -303,11 +296,9 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
                             <h3 className="mb-2">{`${cvesToDisplay.length} CVEs listed below will be added to this policy:`}</h3>
                             {cveLoading && <Loader />}
                             {!cveLoading && (
-                                <InfoList
-                                    items={cvesToDisplay}
-                                    renderItem={renderCve}
-                                    extraClassNames="h-48"
-                                />
+                                <ul className="bg-base-100 border-2 rounded p-2 border-base-300 w-full text-base-600 hover:border-base-400 leading-normal last:mb-0 overflow-scroll h-48">
+                                    {cvesToDisplay.map(renderCve)}
+                                </ul>
                             )}
                         </div>
                         {!cveLoading && disallowedCves.length > 0 && (
@@ -315,11 +306,9 @@ const CveBulkActionDialogue = ({ closeAction, bulkActionCveIds, cveType }) => {
                                 <h3 className="mb-2">
                                     {`The following ${disallowedCves.length} CVEs cannot be added to a policy.`}
                                 </h3>
-                                <InfoList
-                                    items={disallowedCves}
-                                    renderItem={renderCve}
-                                    extraClassNames="h-24"
-                                />
+                                <ul className="bg-base-100 border-2 rounded p-2 border-base-300 w-full text-base-600 hover:border-base-400 leading-normal last:mb-0 overflow-scroll h-24">
+                                    {disallowedCves.map(renderCve)}
+                                </ul>
                             </div>
                         )}
                     </>

@@ -1,24 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import { getClustersForPermissions, ScopeObject } from 'services/RolesService';
-import { Cluster } from 'types/cluster.proto';
+import { getClustersForPermissions, ClusterScopeObject } from 'services/RolesService';
+import { ResourceName } from 'types/roleResources';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 
 type Result = {
     isLoading: boolean;
-    clusters: Cluster[];
+    clusters: ClusterScopeObject[];
     error: string;
 };
 
-function useFetchClustersForPermissions(permissions: string[]): Result {
-    const defaultResultState = useMemo(() => {
-        return {
-            clusters: [],
-            error: '',
-            isLoading: true,
-        };
-    }, []);
+const defaultResultState = {
+    clusters: [],
+    error: '',
+    isLoading: true,
+};
 
+function useFetchClustersForPermissions(permissions: ResourceName[]): Result {
     const [result, setResult] = useState<Result>({
         clusters: [],
         error: '',
@@ -32,14 +30,8 @@ function useFetchClustersForPermissions(permissions: string[]): Result {
 
         getClustersForPermissions(requestedPermissions)
             .then((data) => {
-                const clusters: Cluster[] = data.clusters.map((responseCluster: ScopeObject) => {
-                    return {
-                        id: responseCluster.id,
-                        name: responseCluster.name,
-                    } as Cluster;
-                });
                 setResult({
-                    clusters: clusters || [],
+                    clusters: data?.clusters || [],
                     error: '',
                     isLoading: false,
                 });
@@ -55,7 +47,7 @@ function useFetchClustersForPermissions(permissions: string[]): Result {
                     isLoading: false,
                 });
             });
-    }, [defaultResultState, requestedPermissions]);
+    }, [requestedPermissions]);
 
     return result;
 }

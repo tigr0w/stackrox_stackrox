@@ -15,6 +15,8 @@ info 'Ensure that generated files are up to date. (If this fails, run `make prot
 function generated_files-are-up-to-date() {
     git ls-files --others --exclude-standard >/tmp/untracked
     make proto-generated-srcs
+    # Remove generated mocks, they should be regenerated and if source was deleted they should be deleted as well.
+    git grep --files-with-matches "Package mocks is a generated GoMock package." -- '*.go' | xargs rm
     # Print the timestamp along with each new line of output, so we can track how long each command takes
     make go-generated-srcs 2>&1 | while IFS= read -r line; do printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line"; done
     git diff --exit-code HEAD
@@ -61,11 +63,47 @@ check-operator-generated-files-up-to-date || {
 }
 
 # shellcheck disable=SC2016
+info 'Check config-controller files are up to date (If this fails, run `make config-controller-gen` and commit the result.)'
+function check-config-controller-generated-files-up-to-date() {
+    make config-controller-gen
+    echo 'Checking for diffs after making config-controller-gen...'
+    git diff --exit-code HEAD
+}
+check-config-controller-generated-files-up-to-date || {
+    save_junit_failure "Check_Config_Controller_Generated_Files" \
+        "Config controller generated files are not up to date" \
+        "$(git diff HEAD || true)"
+    git reset --hard HEAD
+    echo check-config-controller-generated-files-up-to-date >> "$FAIL_FLAG"
+}
+
+info 'Check .containerignore file is in sync with .dockerignore (If this fails, follow instructions in .containerignore to update it.)'
+function check-containerignore-is-in-sync() {
+    diff \
+        --unified \
+        --ignore-blank-lines \
+        <(grep -v -e '^#' .containerignore) \
+        <(grep -vF -e '/.git/' -e '/image/' -e '/qa-tests-backend/' .dockerignore) \
+    > diff.txt
+}
+check-containerignore-is-in-sync || {
+    save_junit_failure "Check_Containerignore_File" \
+        ".containerignore file is not in sync with .dockerignore" \
+        "$(cat diff.txt)"
+    git reset --hard HEAD
+    echo check-containerignore-is-in-sync >> "$FAIL_FLAG"
+}
+
+# shellcheck disable=SC2016
 echo 'Check if a script that was on the failed shellcheck list is now fixed. (If this fails, run `make update-shellcheck-skip` and commit the result.)'
 function check-shellcheck-failing-list() {
     make update-shellcheck-skip
     echo 'Checking for diffs after updating shellcheck failing list...'
-    git diff --exit-code HEAD
+    if ! git diff --exit-code HEAD; then
+        echo 'Failure only if files can be removed from the skip file.'
+        test "$(git diff --numstat scripts/style/shellcheck_skip.txt | cut -f2)" -lt 1 \
+            && git reset --hard HEAD
+    fi
 }
 check-shellcheck-failing-list || {
     save_junit_failure "Check_Shellcheck_Skip_List" \

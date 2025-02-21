@@ -24,17 +24,20 @@ var (
 	validRoots = set.NewFrozenStringSet(
 		"central",
 		"compliance",
+		"config-controller",
+		"govulncheck",
 		"image",
-		"integration-tests",
 		"migrator",
 		"migrator/migrations",
 		"operator",
 		"pkg",
 		"roxctl",
 		"scale",
+		"scanner",
 		"sensor/admission-control",
 		"sensor/common",
 		"sensor/debugger",
+		"sensor/init-tls-certs",
 		"sensor/kubernetes",
 		"sensor/tests",
 		"sensor/testutils",
@@ -56,13 +59,36 @@ var (
 		allowlist   set.StringSet
 	}{
 		"io/ioutil": {
-			replacement: "https://golang.org/doc/go1.18#ioutil",
+			replacement: "https://golang.org/doc/go1.16#ioutil",
 		},
 		"sync": {
 			replacement: "github.com/stackrox/rox/pkg/sync",
 			allowlist: set.NewStringSet(
-				"github.com/stackrox/rox/pkg/bolthelper/crud/proto",
+				// The cacheValue lock used while images are being scanned
+				// is expected to be held longer then 10s, to avoid panics in
+				// dev builds using stdlib sync in the detector instead.
+				"github.com/stackrox/rox/sensor/common/detector",
 			),
+		},
+		"github.com/gogo/protobuf/proto": {
+			replacement: "pkg/proto*",
+			allowlist: set.NewStringSet(
+				"github.com/stackrox/rox/pkg/protocompat",
+				"github.com/stackrox/rox/pkg/protoconv",
+				"github.com/stackrox/rox/pkg/protoutils",
+			),
+		},
+		"github.com/gogo/protobuf/types": {
+			replacement: "pkg/proto*",
+			allowlist: set.NewStringSet(
+				"github.com/stackrox/rox/pkg/protocompat",
+				"github.com/stackrox/rox/pkg/protoconv",
+				"github.com/stackrox/rox/pkg/protoconv/resources",
+				"github.com/stackrox/rox/pkg/protoutils",
+			),
+		},
+		"github.com/golang/mock": {
+			replacement: "go.uber.org/mock",
 		},
 		"github.com/magiconair/properties/assert": {
 			replacement: "github.com/stretchr/testify/assert",
@@ -74,7 +100,10 @@ var (
 			replacement: "a logger",
 		},
 		"github.com/gogo/protobuf/jsonpb": {
-			replacement: "github.com/golang/protobuf/jsonpb",
+			replacement: "google.golang.org/protobuf/encoding/protojson",
+		},
+		"github.com/golang/protobuf/jsonpb": {
+			replacement: "google.golang.org/protobuf/encoding/protojson",
 		},
 		"k8s.io/helm/...": {
 			replacement: "package from helm.sh/v3",
@@ -84,6 +113,13 @@ var (
 		},
 		"github.com/google/uuid": {
 			replacement: "github.com/stackrox/rox/pkg/uuid",
+			allowlist: set.NewStringSet(
+				// Used by ClairCore as return types.
+				"github.com/stackrox/rox/scanner/datastore/postgres/mocks",
+				"github.com/stackrox/rox/scanner/matcher/updater/vuln",
+				// TODO(ROX-24333): Remove this once ClairCore supports it.
+				"github.com/stackrox/rox/scanner/updater/jsonblob",
+			),
 		},
 	}
 )
@@ -103,7 +139,7 @@ type allowedPackage struct {
 
 func appendPackage(list []*allowedPackage, excludeChildren bool, pkgs ...string) []*allowedPackage {
 	if list == nil {
-		list = make([]*allowedPackage, len(pkgs))
+		list = make([]*allowedPackage, 0, len(pkgs))
 	}
 
 	for _, pkg := range pkgs {
@@ -227,7 +263,6 @@ func verifyImportsFromAllowedPackagesOnly(pass *analysis.Pass, imports []*ast.Im
 			"pkg/auth",
 			"pkg/batcher",
 			"pkg/binenc",
-			"pkg/bolthelper",
 			"pkg/booleanpolicy/policyversion",
 			"pkg/buildinfo",
 			"pkg/concurrency",
@@ -235,17 +270,15 @@ func verifyImportsFromAllowedPackagesOnly(pass *analysis.Pass, imports []*ast.Im
 			"pkg/cve",
 			"pkg/cvss/cvssv2",
 			"pkg/cvss/cvssv3",
-			"pkg/dackbox",
-			"pkg/dackbox/crud",
-			"pkg/dackbox/raw",
-			"pkg/dackbox/sortedkeys",
 			"pkg/db",
 			"pkg/dberrors",
 			"pkg/dbhelper",
 			"pkg/defaults/policies",
 			"pkg/env",
 			"pkg/errorhelpers",
-			"pkg/features",
+			// DO NOT ADD "pkg/features" to the packages allowed for the migrator.
+			// Migration code should not depend on features being activated or not.
+			// See the migrator README for more details.
 			"pkg/fileutils",
 			"pkg/fsutils",
 			"pkg/grpc/routes",
@@ -267,9 +300,11 @@ func verifyImportsFromAllowedPackagesOnly(pass *analysis.Pass, imports []*ast.Im
 			"pkg/probeupload",
 			"pkg/process/normalize",
 			"pkg/process/id",
+			"pkg/protoassert",
+			"pkg/protocompat",
 			"pkg/protoconv",
+			"pkg/protoutils",
 			"pkg/retry",
-			"pkg/rocksdb",
 			"pkg/sac",
 			"pkg/scancomponent",
 			"pkg/scans",
@@ -301,15 +336,15 @@ func verifyImportsFromAllowedPackagesOnly(pass *analysis.Pass, imports []*ast.Im
 	}
 
 	if validImportRoot == "sensor/debugger" {
-		allowedPackages = appendPackageWithChildren(allowedPackages, "sensor/kubernetes/listener/resources", "sensor/kubernetes/client")
+		allowedPackages = appendPackageWithChildren(allowedPackages, "sensor/kubernetes/listener/resources", "sensor/kubernetes/client", "sensor/common/centralclient")
 	}
 
 	if validImportRoot == "tools" {
 		allowedPackages = appendPackageWithChildren(allowedPackages,
-			"central/globaldb", "central/metrics", "central/postgres", "central/role/resources",
+			"central/globaldb", "central/metrics", "central/postgres", "pkg/sac/resources",
 			"sensor/common/sensor", "sensor/common/centralclient", "sensor/kubernetes/client", "sensor/kubernetes/fake",
 			"sensor/kubernetes/sensor", "sensor/debugger", "sensor/testutils",
-			"compliance/collection/compliance", "compliance/collection/intervals")
+			"compliance", "compliance/utils", "compliance/node")
 	}
 
 	if validImportRoot == "sensor/kubernetes" {
@@ -325,6 +360,20 @@ func verifyImportsFromAllowedPackagesOnly(pass *analysis.Pass, imports []*ast.Im
 
 	if validImportRoot == "sensor/tests" {
 		allowedPackages = appendPackageWithChildren(allowedPackages, "sensor/common", "sensor/kubernetes", "sensor/debugger", "sensor/testutils")
+	}
+
+	if validImportRoot == "sensor/common" {
+		// Need this for unit tests.
+		allowedPackages = appendPackageWithChildren(allowedPackages, "sensor/debugger")
+	}
+
+	if validImportRoot == "central" {
+		// Need this for unit tests.
+		allowedPackages = appendPackageWithChildren(allowedPackages, "tests/bad-ca")
+	}
+
+	if validImportRoot == "pkg" {
+		allowedPackages = appendPackageWithChildren(allowedPackages, "operator/api")
 	}
 
 	for _, imp := range imports {

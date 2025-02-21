@@ -2,7 +2,6 @@ package phonehome
 
 import (
 	"context"
-	"reflect"
 	"time"
 
 	"github.com/pkg/errors"
@@ -33,11 +32,12 @@ type gatherer struct {
 	period      time.Duration
 	stopSig     concurrency.Signal
 	ctx         context.Context
-	mu          sync.Mutex
 	gathering   sync.Mutex
 	gatherFuncs []GatherFunc
-	lastData    map[string]any
 	opts        []telemeter.Option
+
+	// tickerFactory allows for setting a custom ticker for ad-hoc gathering.
+	tickerFactory func(time.Duration) *time.Ticker
 }
 
 func newGatherer(clientType string, t telemeter.Telemeter, p time.Duration) *gatherer {
@@ -45,12 +45,9 @@ func newGatherer(clientType string, t telemeter.Telemeter, p time.Duration) *gat
 		clientType: clientType,
 		telemeter:  t,
 		period:     p,
-	}
-}
 
-func (g *gatherer) reset() {
-	g.stopSig.Reset()
-	g.ctx, _ = concurrency.DependentContext(context.Background(), &g.stopSig)
+		tickerFactory: time.NewTicker,
+	}
 }
 
 func (g *gatherer) gather() map[string]any {
@@ -75,60 +72,54 @@ func (g *gatherer) identify() {
 	g.gathering.Lock()
 	defer g.gathering.Unlock()
 	data := g.gather()
-	if !reflect.DeepEqual(g.lastData, data) {
-		// Issue an event so that the new data become visible on analytics:
-		g.telemeter.Track("Updated "+g.clientType+" Identity", nil, append(g.opts, telemeter.WithTraits(data))...)
-	}
-	g.lastData = data
+	// Track event makes the properties effective for the user on analytics.
+	// Duplicates are dropped during a day. The daily potential duplicate event
+	// serves as a heartbeat.
+	g.telemeter.Track("Updated "+g.clientType+" Identity", nil, append(g.opts,
+		telemeter.WithTraits(data))...)
 }
 
 func (g *gatherer) loop() {
 	// Send initial data on start:
 	g.identify()
-	ticker := time.NewTicker(g.period)
+	ticker := g.tickerFactory(g.period)
+	defer ticker.Stop()
 	for !g.stopSig.IsDone() {
 		select {
-		case <-ticker.C:
-			go g.identify()
+		case _, ok := <-ticker.C:
+			if ok {
+				go g.identify()
+			}
 		case <-g.stopSig.Done():
-			ticker.Stop()
 			return
 		}
 	}
 }
 
 func (g *gatherer) Start(opts ...telemeter.Option) {
-	if g == nil {
+	if g == nil || !g.stopSig.IsDone() {
 		return
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.stopSig.IsDone() {
-		g.reset()
-		{
-			g.gathering.Lock()
-			g.opts = opts
-			g.gathering.Unlock()
-		}
-		go g.loop()
-	}
+	concurrency.WithLock(&g.gathering, func() {
+		g.stopSig.Reset()
+		g.ctx, _ = concurrency.DependentContext(context.Background(), &g.stopSig)
+		g.opts = opts
+	})
+	go g.loop()
 }
 
 func (g *gatherer) Stop() {
-	if g == nil {
-		return
+	if g != nil {
+		g.stopSig.Signal()
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.stopSig.Signal()
 }
 
 func (g *gatherer) AddGatherer(f GatherFunc) {
 	if g == nil {
 		return
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.gathering.Lock()
+	defer g.gathering.Unlock()
 	g.gatherFuncs = append(g.gatherFuncs, f)
 }
 

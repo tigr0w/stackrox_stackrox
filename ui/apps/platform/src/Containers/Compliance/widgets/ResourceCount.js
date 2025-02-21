@@ -4,7 +4,6 @@ import capitalize from 'lodash/capitalize';
 
 import entityTypes from 'constants/entityTypes';
 import URLService from 'utils/URLService';
-import { resourceLabels } from 'messages/common';
 import Widget from 'Components/Widget';
 import Query from 'Components/CacheFirstQuery';
 import Loader from 'Components/Loader';
@@ -12,20 +11,17 @@ import CountWidget from 'Components/CountWidget';
 import { SEARCH_WITH_CONTROLS as QUERY } from 'queries/search';
 import queryService from 'utils/queryService';
 import { getResourceCountFromAggregatedResults } from 'utils/complianceUtils';
-import ReactRouterPropTypes from 'react-router-prop-types';
-import { withRouter } from 'react-router-dom';
+import { useLocation, useRouteMatch } from 'react-router-dom';
 import useCases from 'constants/useCaseTypes';
 import searchContext from 'Containers/searchContext';
 
-const ResourceCount = ({
-    match,
-    location,
-    entityType,
-    relatedToResourceType,
-    relatedToResource,
-    count,
-}) => {
+import { entityNounSentenceCaseSingular } from '../entitiesForCompliance';
+
+const ResourceCount = ({ entityType, relatedToResourceType, relatedToResource, count }) => {
     const searchParam = useContext(searchContext);
+    const match = useRouteMatch();
+    const location = useLocation();
+
     function getUrl() {
         if (entityType === entityTypes.SECRET) {
             return URLService.getURL(match, location)
@@ -64,7 +60,7 @@ const ResourceCount = ({
     }
 
     const variables = getVariables();
-    const headerText = `${capitalize(resourceLabels[entityType])} Count`;
+    const headerText = `${entityNounSentenceCaseSingular[entityType]} Count`;
     const url = getUrl();
 
     if (count || count === 0) {
@@ -94,8 +90,6 @@ const ResourceCount = ({
 };
 
 ResourceCount.propTypes = {
-    match: ReactRouterPropTypes.match.isRequired,
-    location: ReactRouterPropTypes.location.isRequired,
     entityType: PropTypes.string,
     relatedToResourceType: PropTypes.string.isRequired,
     relatedToResource: PropTypes.shape({
@@ -112,4 +106,4 @@ ResourceCount.defaultProps = {
     count: null,
 };
 
-export default withRouter(ResourceCount);
+export default ResourceCount;

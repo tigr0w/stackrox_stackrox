@@ -13,6 +13,7 @@ import util.Timer
 import spock.lang.Shared
 import spock.lang.Tag
 
+@Tag("PZ")
 class AdmissionControllerNoImageScanTest extends BaseSpecification {
     @Shared
     private List<PolicyOuterClass.EnforcementAction> noImageScansEnforcements
@@ -33,7 +34,7 @@ OqxYbK0Iro6GzSmOzxkn+N2AKawLyXi84WSwJQBK//psATakCgAQKkNTAA==
     private final static String IMAGE_SIGNATURE = "Image Signature Test"
 
     private final static String NON_EXISTENT_IMAGE = "non-existent:image"
-    private final static String IMAGE_WITH_SCANS = "us.gcr.io/stackrox-ci/nginx:1.12"
+    private final static String IMAGE_WITH_SCANS = "us.gcr.io/acs-san-stackroxci/nginx:1.12"
 
     def setupSpec() {
         noImageScansEnforcements = Services.updatePolicyEnforcement(
@@ -153,12 +154,8 @@ OqxYbK0Iro6GzSmOzxkn+N2AKawLyXi84WSwJQBK//psATakCgAQKkNTAA==
             def timer = new Timer(30, 1)
             def deleted = false
             while (!deleted && timer.IsValid()) {
-                try {
-                    orchestrator.deleteDeployment(deployment)
-                    deleted = true
-                } catch (NullPointerException ignore) {
-                    log.info "Caught NPE while deleting deployment, retrying in 1s..."
-                }
+                orchestrator.deleteDeployment(deployment)
+                deleted = true
             }
             if (!deleted) {
                 log.warn "Failed to delete deployment. Subsequent tests may be affected ..."

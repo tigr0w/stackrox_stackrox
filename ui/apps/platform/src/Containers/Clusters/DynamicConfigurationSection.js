@@ -1,4 +1,5 @@
 import React from 'react';
+import { Alert } from '@patternfly/react-core';
 
 import CollapsibleSection from 'Components/CollapsibleSection';
 import ToggleSwitch from 'Components/ToggleSwitch';
@@ -28,10 +29,7 @@ const DynamicConfigurationSection = ({
 
     // @TODO, replace open prop with dynamic logic, based on clusterType
     return (
-        <CollapsibleSection
-            title="Dynamic Configuration (syncs with Sensor)"
-            titleClassName="text-xl"
-        >
+        <CollapsibleSection title="Dynamic Configuration (syncs with Sensor)">
             <div className="bg-base-100 pb-3 pt-1 px-3 rounded shadow">
                 <div className={wrapperMarginClassName}>
                     <label htmlFor="dynamicConfig.registryOverride" className={labelClassName}>
@@ -190,10 +188,15 @@ const DynamicConfigurationSection = ({
                         />
                     </div>
                     {!isLoggingSupported && (
-                        <div className="border border-alert-200 bg-alert-200 p-2 rounded-b">
+                        <Alert
+                            variant="warning"
+                            isInline
+                            title="Kubernetes and Openshift compatibility"
+                            component="p"
+                        >
                             This setting will not work for Kubernetes or OpenShift 3.x. To enable
                             logging, you must upgrade your cluster to OpenShift 4 or higher.
-                        </div>
+                        </Alert>
                     )}
                     <HelmValueWarning
                         currentValue={dynamicConfig.disableAuditLogs}

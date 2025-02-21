@@ -264,6 +264,12 @@ func (s *imageScanTestSuite) SetupTest() {
 		retryDelay: 3,
 		retryCount: 3,
 		timeout:    1 * time.Minute,
+		severities: []string{
+			lowCVESeverity.String(),
+			moderateCVESeverity.String(),
+			importantCVESeverity.String(),
+			criticalCVESeverity.String(),
+		},
 	}
 }
 
@@ -285,6 +291,7 @@ func (s *imageScanTestSuite) TestConstruct() {
 
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().Duration("timeout", 1*time.Minute, "")
+	cmd.Flags().Duration("retry-timeout", 1*time.Minute, "")
 	cmd.Flags().String("format", "", "")
 	cmd.Flags().String("output", "", "")
 
@@ -366,6 +373,7 @@ func (s *imageScanTestSuite) TestDeprecationNote() {
 			imgScanCmd.env = environment.NewTestCLIEnvironment(s.T(), io, printer.DefaultColorPrinter())
 			cmd := Command(imgScanCmd.env)
 			cmd.Flags().Duration("timeout", 1*time.Minute, "")
+			cmd.Flags().Duration("retry-timeout", 1*time.Minute, "")
 			cmd.Flag("format").Changed = c.formatChanged
 			cmd.Flag("output").Changed = c.outputChanged
 
@@ -377,7 +385,6 @@ func (s *imageScanTestSuite) TestDeprecationNote() {
 			}
 		})
 	}
-
 }
 
 func (s *imageScanTestSuite) TestValidate() {
@@ -436,6 +443,8 @@ func (s *imageScanTestSuite) TestValidate() {
 
 type outputFormatTest struct {
 	components                   []*storage.EmbeddedImageScanComponent
+	failOnFinding                bool
+	error                        error
 	expectedOutput               string
 	expectedErrorOutput          string
 	expectedErrorOutputColorized string
@@ -445,6 +454,14 @@ func (s *imageScanTestSuite) TestScan_TableOutput() {
 	cases := map[string]outputFormatTest{
 		"should render default output with merged cells and additional verbose output": {
 			components:                   testComponents,
+			expectedOutput:               "testComponents.txt",
+			expectedErrorOutput:          "WARN:\tA total of 11 unique vulnerabilities were found in 5 components\n",
+			expectedErrorOutputColorized: "\x1b[95mWARN:\tA total of 11 unique vulnerabilities were found in 5 components\n\x1b[0m",
+		},
+		"should return a vulnerability found error": {
+			components:                   testComponents,
+			failOnFinding:                true,
+			error:                        errVulnerabilityFound,
 			expectedOutput:               "testComponents.txt",
 			expectedErrorOutput:          "WARN:\tA total of 11 unique vulnerabilities were found in 5 components\n",
 			expectedErrorOutputColorized: "\x1b[95mWARN:\tA total of 11 unique vulnerabilities were found in 5 components\n\x1b[0m",
@@ -468,6 +485,12 @@ func (s *imageScanTestSuite) TestScan_JSONOutput() {
 			components:     testComponents,
 			expectedOutput: "testComponents.json",
 		},
+		"should return a vulnerability found error": {
+			components:     testComponents,
+			failOnFinding:  true,
+			error:          errVulnerabilityFound,
+			expectedOutput: "testComponents.json",
+		},
 		"should print nothing with empty components in image scan": {
 			components:     nil,
 			expectedOutput: "empty.json",
@@ -486,6 +509,12 @@ func (s *imageScanTestSuite) TestScan_CSVOutput() {
 	cases := map[string]outputFormatTest{
 		"should render default output without additional verbose output": {
 			components:     testComponents,
+			expectedOutput: "testComponents.csv",
+		},
+		"should return a vulnerability found error": {
+			components:     testComponents,
+			failOnFinding:  true,
+			error:          errVulnerabilityFound,
 			expectedOutput: "testComponents.csv",
 		},
 		"should print only headers with empty components in image scan": {
@@ -527,7 +556,8 @@ func (s *imageScanTestSuite) TestScan_LegacyJSONOutput() {
 // helpers to run output formats tests either for legacy formats or printer.ObjectPrinter supported formats
 
 func (s *imageScanTestSuite) runOutputTests(cases map[string]outputFormatTest, printer printer.ObjectPrinter,
-	standardizedFormat bool) {
+	standardizedFormat bool,
+) {
 	const colorTestPrefix = "color_"
 	for name, c := range cases {
 		s.Run(name, func() {
@@ -535,7 +565,7 @@ func (s *imageScanTestSuite) runOutputTests(cases map[string]outputFormatTest, p
 			defer closeF()
 
 			err := imgScanCmd.Scan()
-			s.Require().NoError(err)
+			s.Assert().ErrorIs(err, c.error)
 			expectedOutput, err := os.ReadFile(path.Join("testdata", c.expectedOutput))
 			s.Require().NoError(err)
 			s.Assert().Equal(string(expectedOutput), out.String())
@@ -551,7 +581,7 @@ func (s *imageScanTestSuite) runOutputTests(cases map[string]outputFormatTest, p
 			defer closeF()
 
 			err := imgScanCmd.Scan()
-			s.Require().NoError(err)
+			s.Assert().ErrorIs(err, c.error)
 			expectedOutput, err := os.ReadFile(path.Join("testdata", colorTestPrefix+c.expectedOutput))
 			s.Require().NoError(err)
 			s.Assert().Equal(string(expectedOutput), out.String())
@@ -568,6 +598,7 @@ func (s *imageScanTestSuite) createImgScanCmd(c outputFormatTest, printer printe
 	imgScanCmd.printer = printer
 	imgScanCmd.standardizedFormat = standardizedFormat
 	imgScanCmd.env, out, errOut = s.newTestMockEnvironmentWithConn(conn)
+	imgScanCmd.failOnFinding = c.failOnFinding
 	return out, errOut, closeF, imgScanCmd
 }
 
@@ -586,7 +617,11 @@ func (s *imageScanTestSuite) runLegacyOutputTests(cases map[string]outputFormatT
 			s.Require().NoError(err)
 			expectedOutput, err := os.ReadFile(path.Join("testdata", c.expectedOutput))
 			s.Require().NoError(err)
-			s.Assert().Equal(string(expectedOutput), out.String())
+			if format == "json" {
+				s.Assert().JSONEq(string(expectedOutput), out.String())
+			} else {
+				s.Assert().Equal(string(expectedOutput), out.String())
+			}
 		})
 	}
 }

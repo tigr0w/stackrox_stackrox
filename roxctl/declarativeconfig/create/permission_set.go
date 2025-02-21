@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/go-multierror"
@@ -13,10 +13,11 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/errox"
-	"github.com/stackrox/rox/pkg/maputil"
 	"github.com/stackrox/rox/roxctl/common/environment"
+	"github.com/stackrox/rox/roxctl/common/flags"
 	"github.com/stackrox/rox/roxctl/declarativeconfig/k8sobject"
 	"github.com/stackrox/rox/roxctl/declarativeconfig/lint"
+	"golang.org/x/exp/maps"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,14 +39,16 @@ func permissionSetCommand(cliEnvironment environment.Environment) *cobra.Command
 		Short: "Create a declarative configuration for a permission set",
 	}
 
-	cmd.Flags().StringVar(&permSetCmd.permissionSet.Name, "name", "", "name of the permission set")
+	cmd.Flags().StringVar(&permSetCmd.permissionSet.Name, "name", "", "Name of the permission set")
 	cmd.Flags().StringVar(&permSetCmd.permissionSet.Description, "description", "",
-		"description of the permission set")
+		"Description of the permission set")
 	cmd.Flags().StringToStringVar(&permSetCmd.resourceWithAccess, "resource-with-access", map[string]string{},
-		`list of resources with the respective access, e.g. --resource-with-access Access=READ_ACCESS,Administration=READ_WRITE_ACCESS
+		`List of resources with the respective access, e.g. --resource-with-access Access=READ_ACCESS,Administration=READ_WRITE_ACCESS
 Note: Capitalization matters!`)
 
 	cmd.MarkFlagsRequiredTogether("name", "resource-with-access")
+
+	flags.HideInheritedFlags(cmd, k8sobject.ConfigMapFlag, k8sobject.NamespaceFlag)
 
 	return cmd
 }
@@ -77,8 +80,8 @@ func (p *permissionSetCmd) Validate() error {
 	resourceWithAccess := make([]declarativeconfig.ResourceWithAccess, 0, len(accessMap))
 
 	// Keep an alphabetic order within the resources.
-	resources := maputil.Keys(accessMap)
-	sort.Strings(resources)
+	resources := maps.Keys(accessMap)
+	slices.Sort(resources)
 
 	// TODO(ROX-16330): Resources are currently defined within central/role/resources, and hence cannot be reused here yet.
 	// There are plans to move the resource definition to a shared place however, in which case we can reuse them here.
@@ -88,7 +91,7 @@ func (p *permissionSetCmd) Validate() error {
 		if !ok {
 			invalidAccessErrors = multierror.Append(invalidAccessErrors, errox.InvalidArgs.
 				Newf("invalid access specified for resource %s: %s. The allowed values for access are: [%s]",
-					resource, accessMap[resource], strings.Join(maputil.Keys(storage.Access_value), ",")))
+					resource, accessMap[resource], strings.Join(maps.Keys(storage.Access_value), ",")))
 			continue
 		}
 		resourceWithAccess = append(resourceWithAccess, declarativeconfig.ResourceWithAccess{

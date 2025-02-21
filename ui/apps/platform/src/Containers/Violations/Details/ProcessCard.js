@@ -33,14 +33,19 @@ function ProcessCard({ processes, message }) {
 
     return (
         <Card isFlat isExpanded={isExpanded}>
-            <CardHeader onExpand={onExpand}>{message}</CardHeader>
+            <CardHeader
+                onExpand={onExpand}
+                toggleButtonProps={{ 'aria-expanded': isExpanded, 'aria-label': 'Details' }}
+            >
+                {message}
+            </CardHeader>
             <CardExpandableContent>
                 <CardBody>
                     <DescriptionList
                         columnModifier={{
                             default: '2Col',
                         }}
-                        className="pf-u-my-md"
+                        className="pf-v5-u-my-md"
                     >
                         <DescriptionListItem
                             term="First occurrence"

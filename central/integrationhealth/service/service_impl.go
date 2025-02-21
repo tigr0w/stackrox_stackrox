@@ -3,29 +3,30 @@ package service
 import (
 	"context"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/integrationhealth/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/scanners"
+	"github.com/stackrox/rox/pkg/scanners/types"
 	"google.golang.org/grpc"
 )
 
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
 		user.With(permissions.View(resources.Integration)): {
-			"/v1.IntegrationHealthService/GetBackupPlugins",
-			"/v1.IntegrationHealthService/GetImageIntegrations",
-			"/v1.IntegrationHealthService/GetNotifiers",
-			"/v1.IntegrationHealthService/GetDeclarativeConfigs",
+			v1.IntegrationHealthService_GetBackupPlugins_FullMethodName,
+			v1.IntegrationHealthService_GetImageIntegrations_FullMethodName,
+			v1.IntegrationHealthService_GetNotifiers_FullMethodName,
+			v1.IntegrationHealthService_GetDeclarativeConfigs_FullMethodName,
 		},
 		user.With(permissions.View(resources.Administration)): {
-			"/v1.IntegrationHealthService/GetVulnDefinitionsInfo",
+			v1.IntegrationHealthService_GetVulnDefinitionsInfo_FullMethodName,
 		},
 	})
 )
@@ -94,8 +95,13 @@ func (s *serviceImpl) GetDeclarativeConfigs(ctx context.Context, _ *v1.Empty) (*
 	return &v1.GetIntegrationHealthResponse{IntegrationHealth: healthData}, nil
 }
 
-func (s *serviceImpl) GetVulnDefinitionsInfo(_ context.Context, _ *v1.Empty) (*v1.VulnDefinitionsInfo, error) {
-	info, err := s.vulnDefsInfoProvider.GetVulnDefsInfo()
+func (s *serviceImpl) GetVulnDefinitionsInfo(_ context.Context, req *v1.VulnDefinitionsInfoRequest) (*v1.VulnDefinitionsInfo, error) {
+	scannerType := types.Clairify
+	if req.GetComponent() == v1.VulnDefinitionsInfoRequest_SCANNER_V4 {
+		scannerType = types.ScannerV4
+	}
+
+	info, err := s.vulnDefsInfoProvider.GetVulnDefsInfo(scannerType)
 	if err != nil {
 		return nil, errors.Errorf("failed to obtain vulnerability definitions information: %v", err)
 	}

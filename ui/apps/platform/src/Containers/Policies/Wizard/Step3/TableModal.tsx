@@ -1,28 +1,29 @@
 import React, { useCallback, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
     Button,
-    ButtonVariant,
     Modal,
     ModalBoxBody,
     ModalBoxFooter,
-    ModalVariant,
     PageSection,
     TextInput,
 } from '@patternfly/react-core';
-import { TableComposable, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import isEqual from 'lodash/isEqual';
 import pluralize from 'pluralize';
 
-import LinkShim from 'Components/PatternFly/LinkShim';
-import useTableSelection from 'hooks/useTableSelection';
 import TableCellValue from 'Components/TableCellValue/TableCellValue';
+import { IntegrationTableColumnDescriptor } from 'Containers/Integrations/utils/tableColumnDescriptor';
+import useTableSelection from 'hooks/useTableSelection';
+import { ClientPolicyValue } from 'types/policy.proto';
+import { SignatureIntegration } from 'types/signatureIntegration.proto';
 
 type TableModalProps = {
-    setValue: (value: unknown) => void;
-    value: any;
+    setValue: (value: ClientPolicyValue) => void;
+    value: ClientPolicyValue;
     readOnly?: boolean;
     rows: { id: string; link: string }[];
-    columns: any;
+    columns: IntegrationTableColumnDescriptor<SignatureIntegration>[];
     typeText: string;
 };
 
@@ -37,7 +38,8 @@ function TableModal({
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     const isPreSelected = useCallback(
-        (row) => (value.arrayValue ? (value.arrayValue.includes(row.id) as boolean) : false),
+        (row: { id: string }) =>
+            Array.isArray(value.arrayValue) ? value.arrayValue.includes(row.id) : false,
         [value]
     );
 
@@ -60,8 +62,8 @@ function TableModal({
                 data-testid="table-modal-text-input"
                 isDisabled
                 value={
-                    value.arrayValue?.length > 0
-                        ? `Selected ${value.arrayValue?.length as string} ${pluralize(
+                    Array.isArray(value.arrayValue) && value.arrayValue.length !== 0
+                        ? `Selected ${value.arrayValue.length} ${pluralize(
                               typeText,
                               value.arrayValue?.length
                           )}`
@@ -71,7 +73,7 @@ function TableModal({
             <Button
                 key="open-select-modal"
                 data-testid="table-modal-open-button"
-                variant={ButtonVariant.primary}
+                variant="primary"
                 onClick={() => {
                     setIsModalOpen(true);
                 }}
@@ -81,7 +83,7 @@ function TableModal({
             <Modal
                 title={`Add ${typeText}s to policy criteria`}
                 isOpen={isModalOpen}
-                variant={ModalVariant.large}
+                variant="large"
                 onClose={onCloseModalHandler}
                 aria-label={`Select ${typeText}s modal`}
                 hasNoBodyWrapper
@@ -91,7 +93,7 @@ function TableModal({
                         {!!rows.length && (
                             <>
                                 Select {typeText}s from the table below.
-                                <TableComposable
+                                <Table
                                     variant="compact"
                                     isStickyHeader
                                     data-testid="table-modal-table"
@@ -112,7 +114,6 @@ function TableModal({
                                                     </Th>
                                                 );
                                             })}
-                                            <Th aria-label="Row actions" />
                                         </Tr>
                                     </Thead>
                                     <Tbody>
@@ -126,29 +127,30 @@ function TableModal({
                                                             rowIndex,
                                                             onSelect,
                                                             isSelected: selected[rowIndex],
-                                                            disable: readOnly,
+                                                            isDisabled: readOnly,
                                                         }}
                                                     />
                                                     {columns.map((column) => {
                                                         if (column.Header === 'Name') {
                                                             return (
-                                                                <Td key="name">
-                                                                    <Button
-                                                                        variant={ButtonVariant.link}
-                                                                        isInline
-                                                                        component={LinkShim}
-                                                                        href={link}
-                                                                    >
+                                                                <Td
+                                                                    key="name"
+                                                                    dataLabel={column.Header}
+                                                                >
+                                                                    <Link to={link}>
                                                                         <TableCellValue
                                                                             row={row}
                                                                             column={column}
                                                                         />
-                                                                    </Button>
+                                                                    </Link>
                                                                 </Td>
                                                             );
                                                         }
                                                         return (
-                                                            <Td key={column.Header}>
+                                                            <Td
+                                                                key={column.Header}
+                                                                dataLabel={column.Header}
+                                                            >
                                                                 <TableCellValue
                                                                     row={row}
                                                                     column={column}
@@ -160,7 +162,7 @@ function TableModal({
                                             );
                                         })}
                                     </Tbody>
-                                </TableComposable>
+                                </Table>
                             </>
                         )}
                         {!rows.length && (

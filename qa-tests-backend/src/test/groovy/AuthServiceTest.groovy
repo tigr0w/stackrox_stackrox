@@ -4,11 +4,11 @@ import io.stackrox.proto.storage.RoleOuterClass
 import services.AuthService
 import services.BaseService
 
-import org.junit.Assume
 import spock.lang.Tag
 
 @Tag("BAT")
 @Tag("COMPATIBILITY")
+@Tag("PZ")
 class AuthServiceTest extends BaseSpecification {
 
     private static Map<String, List<String>> getAttrMap(List<AuthServiceOuterClass.UserAttribute> attrList) {
@@ -48,8 +48,7 @@ class AuthServiceTest extends BaseSpecification {
 
     def "Verify response for auth token"() {
         when:
-        Assume.assumeTrue(allAccessToken != null)
-        BaseService.useApiToken(allAccessToken)
+        useTokenServiceAuth()
 
         AuthServiceOuterClass.AuthStatus status = AuthService.getAuthStatus()
 

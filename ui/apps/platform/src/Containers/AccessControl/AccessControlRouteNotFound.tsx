@@ -1,11 +1,11 @@
 import React, { CSSProperties, ReactElement } from 'react';
-import { Alert, AlertVariant, List, ListItem, PageSection } from '@patternfly/react-core';
+import { Alert, List, ListItem, PageSection } from '@patternfly/react-core';
 
 import AccessControlHeading from './AccessControlHeading';
 
 // Separate list from the title with same margin-top as second list item from the first.
 const styleList = {
-    marginTop: 'var(--pf-c-list--li--MarginTop)',
+    marginTop: 'var(--pf-v5-c-list--li--MarginTop)',
 } as CSSProperties;
 
 function AccessControlRouteNotFound(): ReactElement {
@@ -15,7 +15,8 @@ function AccessControlRouteNotFound(): ReactElement {
             <PageSection variant="light">
                 <Alert
                     title="Access Control route not found"
-                    variant={AlertVariant.warning}
+                    component="p"
+                    variant="warning"
                     isInline
                 >
                     <List style={styleList}>

@@ -43,7 +43,7 @@ func init() {
 // Policies returns GraphQL resolvers for all policies
 func (resolver *Resolver) Policies(ctx context.Context, args PaginatedQuery) ([]*policyResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "Policies")
-	if err := readPolicies(ctx); err != nil {
+	if err := readWorkflowAdministration(ctx); err != nil {
 		return nil, err
 	}
 	q, err := args.AsV1QueryOrEmpty()
@@ -57,7 +57,7 @@ func (resolver *Resolver) Policies(ctx context.Context, args PaginatedQuery) ([]
 // Policy returns a GraphQL resolver for a given policy
 func (resolver *Resolver) Policy(ctx context.Context, args struct{ *graphql.ID }) (*policyResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "Policy")
-	if err := readPolicies(ctx); err != nil {
+	if err := readWorkflowAdministration(ctx); err != nil {
 		return nil, err
 	}
 	return resolver.wrapPolicy(resolver.PolicyDataStore.GetPolicy(ctx, string(*args.ID)))
@@ -66,7 +66,7 @@ func (resolver *Resolver) Policy(ctx context.Context, args struct{ *graphql.ID }
 // PolicyCount returns count of all policies across infrastructure
 func (resolver *Resolver) PolicyCount(ctx context.Context, args RawQuery) (int32, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "PolicyCount")
-	if err := readPolicies(ctx); err != nil {
+	if err := readWorkflowAdministration(ctx); err != nil {
 		return 0, err
 	}
 	q, err := args.AsV1QueryOrEmpty()
@@ -185,7 +185,7 @@ func (resolver *policyResolver) failingDeployments(ctx context.Context, q *v1.Qu
 		search.NewQueryBuilder().AddExactMatches(search.ViolationState, storage.ViolationState_ACTIVE.String()).ProtoQuery())
 
 	alertsQuery = paginated.FillDefaultSortOption(alertsQuery, paginated.GetViolationTimeSortOption())
-	listAlerts, err := resolver.root.ViolationsDataStore.SearchListAlerts(ctx, alertsQuery)
+	listAlerts, err := resolver.root.ViolationsDataStore.SearchListAlerts(ctx, alertsQuery, true)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +245,7 @@ func (resolver *policyResolver) FailingDeploymentCount(ctx context.Context, args
 
 	q = search.ConjunctionQuery(q, resolver.getPolicyQuery(),
 		search.NewQueryBuilder().AddExactMatches(search.ViolationState, storage.ViolationState_ACTIVE.String()).ProtoQuery())
-	count, err := resolver.root.ViolationsDataStore.Count(ctx, q)
+	count, err := resolver.root.ViolationsDataStore.Count(ctx, q, true)
 	if err != nil {
 		return 0, err
 	}
@@ -348,7 +348,7 @@ func (resolver *policyResolver) UnusedVarSink(_ context.Context, _ RawQuery) *in
 
 func inverseFilterFailingDeploymentsQuery(q *v1.Query) (*v1.Query, bool) {
 	isFailingDeploymentsQuery := false
-	local := q.Clone()
+	local := q.CloneVT()
 	filtered, _ := search.FilterQuery(local, func(bq *v1.BaseQuery) bool {
 		matchFieldQuery, ok := bq.GetQuery().(*v1.BaseQuery_MatchFieldQuery)
 		if ok {

@@ -4,20 +4,19 @@ import {
     Card,
     CardBody,
     CardHeader,
-    CardHeaderMain,
     CardTitle,
     Flex,
     FlexItem,
 } from '@patternfly/react-core';
-import { TableComposable, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
 import pluralize from 'pluralize';
 
-import { fetchDeclarativeConfigurationsHealth } from 'services/IntegrationHealthService';
-import { IntegrationHealth } from 'types/integrationHealth.proto';
+import { fetchDeclarativeConfigurationsHealth } from 'services/DeclarativeConfigHealthService';
 import { getDateTime } from 'utils/dateUtils';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 
 import { ErrorIcon, healthIconMap, SpinnerIcon } from '../CardHeaderIcons';
+import { DeclarativeConfigHealth } from '../../../types/declarativeConfigHealth.proto';
 
 type DeclarativeConfigurationHealthCardProps = {
     pollingCount: number;
@@ -28,14 +27,14 @@ function DeclarativeConfigurationHealthCard({
 }: DeclarativeConfigurationHealthCardProps): ReactElement {
     const [isFetching, setIsFetching] = useState(false);
     const [errorMessageFetching, setErrorMessageFetching] = useState('');
-    const [items, setItems] = useState<IntegrationHealth[]>([]);
+    const [items, setItems] = useState<DeclarativeConfigHealth[]>([]);
 
     useEffect(() => {
         setIsFetching(true);
         fetchDeclarativeConfigurationsHealth()
             .then((itemsFetched) => {
                 setErrorMessageFetching('');
-                setItems(itemsFetched);
+                setItems(itemsFetched.response.healths);
             })
             .catch((error) => {
                 setErrorMessageFetching(getAxiosErrorMessage(error));
@@ -59,39 +58,46 @@ function DeclarativeConfigurationHealthCard({
     const icon = isFetchingInitialRequest
         ? SpinnerIcon
         : errorMessageFetching
-        ? ErrorIcon
-        : healthIconMap[unhealthyCount === 0 ? 'success' : 'danger'];
+          ? ErrorIcon
+          : healthIconMap[unhealthyCount === 0 ? 'success' : 'danger'];
     /* eslint-enable no-nested-ternary */
 
     return (
         <Card isFullHeight isCompact>
             <CardHeader>
-                <CardHeaderMain>
-                    <Flex className="pf-u-flex-grow-1">
-                        <FlexItem>{icon}</FlexItem>
-                        <FlexItem>
-                            <CardTitle component="h2">Declarative configuration</CardTitle>
-                        </FlexItem>
-                        {hasCount && (
+                {
+                    <>
+                        <Flex className="pf-v5-u-flex-grow-1">
+                            <FlexItem>{icon}</FlexItem>
                             <FlexItem>
-                                {unhealthyCount === 0
-                                    ? 'no errors'
-                                    : `${unhealthyCount} ${pluralize('error', unhealthyCount)}`}
+                                <CardTitle component="h2">Declarative configuration</CardTitle>
                             </FlexItem>
-                        )}
-                    </Flex>
-                </CardHeaderMain>
+                            {hasCount && (
+                                <FlexItem>
+                                    {unhealthyCount === 0
+                                        ? 'no errors'
+                                        : `${unhealthyCount} ${pluralize('error', unhealthyCount)}`}
+                                </FlexItem>
+                            )}
+                        </Flex>
+                    </>
+                }
             </CardHeader>
             {(errorMessageFetching || unhealthyCount !== 0) && (
                 <CardBody>
                     {errorMessageFetching ? (
-                        <Alert isInline variant="warning" title={errorMessageFetching} />
+                        <Alert
+                            isInline
+                            variant="warning"
+                            title={errorMessageFetching}
+                            component="p"
+                        />
                     ) : (
-                        <TableComposable variant="compact">
+                        <Table variant="compact">
                             <Thead>
                                 <Tr>
                                     <Th width={40}>Name</Th>
-                                    <Th width={40}>Error</Th>
+                                    <Th width={40}>Error message</Th>
                                     <Th width={20}>Date</Th>
                                 </Tr>
                             </Thead>
@@ -105,18 +111,14 @@ function DeclarativeConfigurationHealthCard({
                                         >
                                             {name}
                                         </Td>
-                                        <Td
-                                            dataLabel="Error"
-                                            modifier="breakWord"
-                                            data-testid="error-message"
-                                        >
+                                        <Td dataLabel="Error message" modifier="breakWord">
                                             {errorMessage}
                                         </Td>
                                         <Td dataLabel="Date">{getDateTime(lastTimestamp)}</Td>
                                     </Tr>
                                 ))}
                             </Tbody>
-                        </TableComposable>
+                        </Table>
                     )}
                 </CardBody>
             )}

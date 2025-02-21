@@ -3,26 +3,15 @@ package search
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/rbac/k8srole/internal/index"
 	"github.com/stackrox/rox/central/rbac/k8srole/internal/store"
-	"github.com/stackrox/rox/central/rbac/k8srole/mappings"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-)
-
-var (
-	k8sRolesSACSearchHelper   = sac.ForResource(resources.K8sRole).MustCreateSearchHelper(mappings.OptionsMap)
-	k8sRolesSACPgSearchHelper = sac.ForResource(resources.K8sRole).MustCreatePgSearchHelper()
 )
 
 // searcherImpl provides an intermediary implementation layer for AlertStorage.
 type searcherImpl struct {
 	storage store.Store
-	indexer index.Indexer
 }
 
 // SearchRoles returns the search results from indexed k8s roles for the query.
@@ -68,19 +57,11 @@ func (ds *searcherImpl) searchRoles(ctx context.Context, q *v1.Query) ([]*storag
 }
 
 func (ds *searcherImpl) getSearchResults(ctx context.Context, q *v1.Query) ([]search.Result, error) {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		return k8sRolesSACPgSearchHelper.FilteredSearcher(ds.indexer).Search(ctx, q)
-	}
-
-	return k8sRolesSACSearchHelper.FilteredSearcher(ds.indexer).Search(ctx, q)
+	return ds.storage.Search(ctx, q)
 }
 
 func (ds *searcherImpl) getCountResults(ctx context.Context, q *v1.Query) (int, error) {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		return k8sRolesSACPgSearchHelper.FilteredSearcher(ds.indexer).Count(ctx, q)
-	}
-
-	return k8sRolesSACSearchHelper.FilteredSearcher(ds.indexer).Count(ctx, q)
+	return ds.storage.Count(ctx, q)
 }
 
 func convertMany(roles []*storage.K8SRole, results []search.Result) []*v1.SearchResult {

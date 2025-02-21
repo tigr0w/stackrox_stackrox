@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	dbAuthz "github.com/stackrox/rox/central/globaldb/authz"
 	"github.com/stackrox/rox/central/globaldb/v2backuprestore/manager"
 	v1 "github.com/stackrox/rox/generated/api/v1"
@@ -18,15 +18,15 @@ import (
 
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
-		user.With(): {
-			"/v1.DBService/GetExportCapabilities",
+		user.Authenticated(): {
+			v1.DBService_GetExportCapabilities_FullMethodName,
 		},
 		dbAuthz.DBReadAccessAuthorizer(): {
-			"/v1.DBService/GetActiveRestoreProcess",
+			v1.DBService_GetActiveRestoreProcess_FullMethodName,
 		},
 		dbAuthz.DBWriteAccessAuthorizer(): {
-			"/v1.DBService/CancelRestoreProcess",
-			"/v1.DBService/InterruptRestoreProcess",
+			v1.DBService_CancelRestoreProcess_FullMethodName,
+			v1.DBService_InterruptRestoreProcess_FullMethodName,
 		},
 	})
 )

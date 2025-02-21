@@ -39,8 +39,8 @@ func GetValidReportConfiguration() *storage.ReportConfiguration {
 	}
 }
 
-// GetValidReportConfigWithMultipleNotifiers returns a valid storage report configuration object with 2 email notifier configs
-func GetValidReportConfigWithMultipleNotifiers() *storage.ReportConfiguration {
+// GetValidReportConfigWithMultipleNotifiersV1 returns a valid storage report configuration object with 2 email notifier configs for v1 workflow
+func GetValidReportConfigWithMultipleNotifiersV1() *storage.ReportConfiguration {
 	return &storage.ReportConfiguration{
 		Id:          "report1",
 		Name:        "App Team 1 Report",
@@ -54,8 +54,8 @@ func GetValidReportConfigWithMultipleNotifiers() *storage.ReportConfiguration {
 					storage.VulnerabilityReportFilters_DEPLOYED,
 					storage.VulnerabilityReportFilters_WATCHED,
 				},
-				CvesSince: &storage.VulnerabilityReportFilters_LastSuccessfulReport{
-					LastSuccessfulReport: true,
+				CvesSince: &storage.VulnerabilityReportFilters_SinceLastSentScheduledReport{
+					SinceLastSentScheduledReport: true,
 				},
 			},
 		},
@@ -67,6 +67,45 @@ func GetValidReportConfigWithMultipleNotifiers() *storage.ReportConfiguration {
 				},
 			},
 		},
+		ScopeId: "collection-1",
+		NotifierConfig: &storage.ReportConfiguration_EmailConfig{
+			EmailConfig: &storage.EmailNotifierConfiguration{
+				NotifierId:   "email-notifier-yahoo",
+				MailingLists: []string{"foo@yahoo.com"},
+			},
+		},
+	}
+}
+
+// GetValidReportConfigWithMultipleNotifiersV2 returns a valid storage report configuration object with 2 email notifier configs for v2 workflow
+func GetValidReportConfigWithMultipleNotifiersV2() *storage.ReportConfiguration {
+	return &storage.ReportConfiguration{
+		Id:          "report1",
+		Name:        "App Team 1 Report",
+		Description: "Report for CVEs in app team 1's infrastructure",
+		Type:        storage.ReportConfiguration_VULNERABILITY,
+		Version:     2,
+		Filter: &storage.ReportConfiguration_VulnReportFilters{
+			VulnReportFilters: &storage.VulnerabilityReportFilters{
+				Fixability: storage.VulnerabilityReportFilters_FIXABLE,
+				Severities: []storage.VulnerabilitySeverity{storage.VulnerabilitySeverity_CRITICAL_VULNERABILITY_SEVERITY},
+				ImageTypes: []storage.VulnerabilityReportFilters_ImageType{
+					storage.VulnerabilityReportFilters_DEPLOYED,
+					storage.VulnerabilityReportFilters_WATCHED,
+				},
+				CvesSince: &storage.VulnerabilityReportFilters_SinceLastSentScheduledReport{
+					SinceLastSentScheduledReport: true,
+				},
+			},
+		},
+		Schedule: &storage.Schedule{
+			IntervalType: storage.Schedule_WEEKLY,
+			Interval: &storage.Schedule_DaysOfWeek_{
+				DaysOfWeek: &storage.Schedule_DaysOfWeek{
+					Days: []int32{2},
+				},
+			},
+		},
 		ResourceScope: &storage.ResourceScope{
 			ScopeReference: &storage.ResourceScope_CollectionId{
 				CollectionId: "collection-1",
@@ -74,17 +113,21 @@ func GetValidReportConfigWithMultipleNotifiers() *storage.ReportConfiguration {
 		},
 		Notifiers: []*storage.NotifierConfiguration{
 			{
+				Ref: &storage.NotifierConfiguration_Id{
+					Id: "email-notifier-yahoo",
+				},
 				NotifierConfig: &storage.NotifierConfiguration_EmailConfig{
 					EmailConfig: &storage.EmailNotifierConfiguration{
-						NotifierId:   "email-notifier-yahoo",
 						MailingLists: []string{"foo@yahoo.com"},
 					},
 				},
 			},
 			{
+				Ref: &storage.NotifierConfiguration_Id{
+					Id: "email-notifier-gmail",
+				},
 				NotifierConfig: &storage.NotifierConfiguration_EmailConfig{
 					EmailConfig: &storage.EmailNotifierConfiguration{
-						NotifierId:   "email-notifier-gmail",
 						MailingLists: []string{"bar@gmail.com"},
 					},
 				},
@@ -161,8 +204,8 @@ func GetInvalidReportConfigurationDailySchedule() *storage.ReportConfiguration {
 	return rc
 }
 
-// GetInvalidReportConfigurationIncorrectEmail returns a mock report configuration with incorrect email
-func GetInvalidReportConfigurationIncorrectEmail() *storage.ReportConfiguration {
+// GetInvalidReportConfigurationIncorrectEmailV1 returns a mock report configuration with incorrect email
+func GetInvalidReportConfigurationIncorrectEmailV1() *storage.ReportConfiguration {
 	rc := GetValidReportConfiguration()
 
 	rc.NotifierConfig = &storage.ReportConfiguration_EmailConfig{
@@ -189,8 +232,8 @@ func GetValidV2ReportConfigWithMultipleNotifiers() *v2.ReportConfiguration {
 					v2.VulnerabilityReportFilters_DEPLOYED,
 					v2.VulnerabilityReportFilters_WATCHED,
 				},
-				CvesSince: &v2.VulnerabilityReportFilters_LastSuccessfulReport{
-					LastSuccessfulReport: true,
+				CvesSince: &v2.VulnerabilityReportFilters_SinceLastSentScheduledReport{
+					SinceLastSentScheduledReport: true,
 				},
 			},
 		},
@@ -203,8 +246,11 @@ func GetValidV2ReportConfigWithMultipleNotifiers() *v2.ReportConfiguration {
 			},
 		},
 		ResourceScope: &v2.ResourceScope{
-			ScopeReference: &v2.ResourceScope_CollectionId{
-				CollectionId: "collection-1",
+			ScopeReference: &v2.ResourceScope_CollectionScope{
+				CollectionScope: &v2.CollectionReference{
+					CollectionId:   "collection-1",
+					CollectionName: "collection-1",
+				},
 			},
 		},
 		Notifiers: []*v2.NotifierConfiguration{
@@ -215,6 +261,7 @@ func GetValidV2ReportConfigWithMultipleNotifiers() *v2.ReportConfiguration {
 						MailingLists: []string{"foo@yahoo.com"},
 					},
 				},
+				NotifierName: "email-notifier-yahoo",
 			},
 			{
 				NotifierConfig: &v2.NotifierConfiguration_EmailConfig{
@@ -223,6 +270,7 @@ func GetValidV2ReportConfigWithMultipleNotifiers() *v2.ReportConfiguration {
 						MailingLists: []string{"bar@gmail.com"},
 					},
 				},
+				NotifierName: "email-notifier-gmail",
 			},
 		},
 	}

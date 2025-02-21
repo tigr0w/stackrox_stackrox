@@ -7,7 +7,6 @@ import {
     nonSortableHeaderClassName,
 } from 'Components/Table';
 import TopCvssLabel from 'Components/TopCvssLabel';
-import WorkflowListPage from 'Containers/Workflow/WorkflowListPage';
 import entityTypes from 'constants/entityTypes';
 import { LIST_PAGE_SIZE } from 'constants/workflowPages.constants';
 import CVEStackedPill from 'Components/CVEStackedPill';
@@ -20,6 +19,7 @@ import removeEntityContextColumns from 'utils/tableUtils';
 import { componentSortFields } from 'constants/sortFields';
 
 import { getFilteredComponentColumns } from './ListComponents.utils';
+import WorkflowListPage from '../WorkflowListPage';
 
 export const defaultComponentSort = [
     {
@@ -80,7 +80,6 @@ export function getComponentTableColumns(workflowState, isFeatureFlagEnabled) {
             Header: `Active`,
             headerClassName: `w-1/10 text-center ${nonSortableHeaderClassName}`,
             className: `w-1/10 ${defaultColumnClassName}`,
-            // eslint-disable-next-line
             Cell: ({ original }) => {
                 return original.activeState?.state || 'Undetermined';
             },

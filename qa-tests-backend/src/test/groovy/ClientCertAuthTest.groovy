@@ -17,6 +17,7 @@ import spock.lang.Tag
 import spock.lang.Unroll
 
 @Tag("BAT")
+@Tag("PZ")
 @Stepwise
 class ClientCertAuthTest extends BaseSpecification {
 
@@ -40,7 +41,7 @@ class ClientCertAuthTest extends BaseSpecification {
             log.info "Client cert auth provider ID is ${providerIDs[i]}"
             GroupService.addDefaultMapping(providerIDs[i], "Continuous Integration")
             certTokens[i] = AuthProviderService.getAuthProviderLoginToken(providerIDs[i])
-            log.info "Certificate token is ${certTokens[i]}"
+            log.info "Certificate token is ${certTokens[i]} #notsecret"
         }
     }
 

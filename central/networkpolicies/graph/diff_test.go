@@ -1,13 +1,12 @@
 package graph
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
-	"github.com/gogo/protobuf/proto"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/sliceutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,8 +21,8 @@ type nodeSpec struct {
 type nodeSpecMap map[string]nodeSpec
 
 func sortedIDs(ids []string) []string {
-	result := sliceutils.ShallowClone(ids)
-	sort.Strings(result)
+	result := slices.Clone(ids)
+	slices.Sort(result)
 	return result
 }
 
@@ -95,7 +94,7 @@ func TestGraphDiffMismatchingNodes(t *testing.T) {
 	removed, added, err := ComputeDiff(g1, g2)
 	assert.NoError(t, err)
 	assert.Empty(t, removed.GetNodeDiffs())
-	assert.True(t, proto.Equal(nodeSpecMap{"b": {}}.toDiff(g2), added))
+	assert.True(t, nodeSpecMap{"b": {}}.toDiff(g2).EqualVT(added))
 
 	g1 = nodeSpecMap{
 		"a": {},
@@ -108,7 +107,7 @@ func TestGraphDiffMismatchingNodes(t *testing.T) {
 	removed, added, err = ComputeDiff(g1, g2)
 	assert.NoError(t, err)
 	assert.Empty(t, added.GetNodeDiffs())
-	assert.True(t, proto.Equal(nodeSpecMap{"b": {}}.toDiff(g1), removed))
+	assert.True(t, nodeSpecMap{"b": {}}.toDiff(g1).EqualVT(removed))
 }
 
 func TestGraphDiffSameGraph(t *testing.T) {
@@ -149,7 +148,7 @@ func TestGraphDiffOnlyAdded(t *testing.T) {
 		"b": {adjacencies: adjs{"a"}},
 		"c": {adjacencies: adjs{"b"}, policies: pols{"Pol3"}},
 	}.toDiff(g1)
-	assert.True(t, proto.Equal(expectedAdded, added))
+	assert.True(t, expectedAdded.EqualVT(added))
 }
 
 func TestGraphDiffOnlyRemoved(t *testing.T) {
@@ -174,7 +173,7 @@ func TestGraphDiffOnlyRemoved(t *testing.T) {
 		"b": {adjacencies: adjs{"a"}},
 		"c": {adjacencies: adjs{"b"}, policies: pols{"Pol3"}},
 	}.toDiff(g1)
-	assert.True(t, proto.Equal(expectedRemoved, removed))
+	assert.True(t, expectedRemoved.EqualVT(removed))
 }
 
 func TestGraphDiffAddedAndRemoved(t *testing.T) {
@@ -219,6 +218,6 @@ func TestGraphDiffAddedAndRemoved(t *testing.T) {
 		"f": {policies: pols{"Pol4"}},
 		"g": {adjacencies: adjs{"h"}, policies: pols{"Pol3"}},
 	}.toDiff(g1)
-	assert.True(t, proto.Equal(expectedRemoved, removed))
-	assert.True(t, proto.Equal(expectedAdded, added))
+	assert.True(t, expectedRemoved.EqualVT(removed))
+	assert.True(t, expectedAdded.EqualVT(added))
 }

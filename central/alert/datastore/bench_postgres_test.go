@@ -1,5 +1,4 @@
 //go:build sql_integration
-// +build sql_integration
 
 package datastore
 
@@ -80,16 +79,16 @@ func BenchmarkAlertDatabaseOps(b *testing.B) {
 		}
 	})
 
-	b.Run("markStaleBatch", func(b *testing.B) {
+	b.Run("markResolvedBatch", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, err := datastore.MarkAlertStaleBatch(ctx, ids...)
+			_, err := datastore.MarkAlertsResolvedBatch(ctx, ids...)
 			require.NoError(b, err)
 		}
 	})
 }
 
 func runSearchAndGroupResults(ctx context.Context, t testing.TB, datastore DataStore, query *v1.Query, expected []*violationsBySeverity) {
-	results, err := datastore.Search(ctx, query)
+	results, err := datastore.Search(ctx, query, true)
 	require.NoError(t, err)
 	require.NotNil(t, results)
 
@@ -110,13 +109,13 @@ func runSearchAndGroupResults(ctx context.Context, t testing.TB, datastore DataS
 }
 
 func runSearch(ctx context.Context, t testing.TB, datastore DataStore, query *v1.Query) {
-	results, err := datastore.Search(ctx, query)
+	results, err := datastore.Search(ctx, query, true)
 	require.NoError(t, err)
 	require.NotNil(t, results)
 }
 
 func runSearchListAlerts(ctx context.Context, t testing.TB, datastore DataStore, expected []*violationsBySeverity) {
-	results, err := datastore.SearchListAlerts(ctx, pkgSearch.EmptyQuery())
+	results, err := datastore.SearchListAlerts(ctx, pkgSearch.EmptyQuery(), true)
 	require.NoError(t, err)
 	require.NotNil(t, results)
 
@@ -141,6 +140,6 @@ func runSelectQuery(ctx context.Context, t testing.TB, testDB *pgtest.TestPostgr
 }
 
 type violationsBySeverity struct {
-	AlertIDCount int `db:"alertidcount"`
+	AlertIDCount int `db:"alert_id_count"`
 	Severity     int `db:"severity"` // int because of enum
 }

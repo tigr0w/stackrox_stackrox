@@ -5,7 +5,6 @@ import (
 
 	clusterDataStore "github.com/stackrox/rox/central/cluster/datastore"
 	deploymentDataStore "github.com/stackrox/rox/central/deployment/datastore"
-	"github.com/stackrox/rox/central/detection"
 	"github.com/stackrox/rox/central/detection/lifecycle"
 	networkPolicyDS "github.com/stackrox/rox/central/networkpolicies/datastore"
 	notifierDataStore "github.com/stackrox/rox/central/notifier/datastore"
@@ -14,8 +13,8 @@ import (
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/pkg/backgroundtasks"
-	"github.com/stackrox/rox/pkg/expiringcache"
 	"github.com/stackrox/rox/pkg/grpc"
+	"github.com/stackrox/rox/pkg/images/cache"
 	mitreDS "github.com/stackrox/rox/pkg/mitre/datastore"
 	"github.com/stackrox/rox/pkg/notifier"
 )
@@ -37,10 +36,9 @@ func New(policies datastore.DataStore,
 	notifiers notifierDataStore.DataStore,
 	mitreStore mitreDS.AttackReadOnlyDataStore,
 	reprocessor reprocessor.Loop,
-	buildTimePolicies detection.PolicySet,
 	manager lifecycle.Manager,
 	processor notifier.Processor,
-	metadataCache expiringcache.Cache,
+	metadataCache cache.ImageMetadata,
 	connectionManager connection.Manager) Service {
 	backgroundTaskManager := backgroundtasks.NewManager()
 	backgroundTaskManager.Start()
@@ -51,7 +49,6 @@ func New(policies datastore.DataStore,
 		reprocessor:       reprocessor,
 		notifiers:         notifiers,
 		mitreStore:        mitreStore,
-		buildTimePolicies: buildTimePolicies,
 		lifecycleManager:  manager,
 		connectionManager: connectionManager,
 		networkPolicies:   networkPolicies,

@@ -10,13 +10,8 @@ import {
     Text,
     TextContent,
 } from '@patternfly/react-core';
-import { TableComposable, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import usePagination from 'hooks/patternfly/usePagination';
-
-const columnNames = {
-    DEPLOYMENT: 'Deployment',
-    ACTIVE_TRAFFIC: 'Active traffic',
-};
 
 type NamespaceDeploymentsProps = {
     deployments: { id: string; name: string; numFlows: number }[];
@@ -40,7 +35,7 @@ function NamespaceDeployments({ deployments, onNodeSelect }: NamespaceDeployment
     });
 
     return (
-        <div className="pf-u-h-100 pf-u-p-md">
+        <div className="pf-v5-u-h-100 pf-v5-u-p-md">
             <Stack hasGutter>
                 <StackItem>
                     <SearchInput
@@ -64,7 +59,6 @@ function NamespaceDeployments({ deployments, onNodeSelect }: NamespaceDeployment
                         </FlexItem>
                         <FlexItem>
                             <Pagination
-                                perPageComponent="button"
                                 itemCount={deployments.length}
                                 perPage={perPage}
                                 page={page}
@@ -77,17 +71,17 @@ function NamespaceDeployments({ deployments, onNodeSelect }: NamespaceDeployment
                     </Flex>
                 </StackItem>
                 <StackItem>
-                    <TableComposable aria-label="Simple table" variant="compact">
+                    <Table aria-label="Simple table" variant="compact">
                         <Thead>
                             <Tr>
-                                <Th>{columnNames.DEPLOYMENT}</Th>
-                                <Th>{columnNames.ACTIVE_TRAFFIC}</Th>
+                                <Th>Deployment</Th>
+                                <Th modifier="fitContent">Active traffic</Th>
                             </Tr>
                         </Thead>
                         <Tbody>
                             {filteredDeployments.map((deployment) => (
                                 <Tr key={deployment.id}>
-                                    <Td dataLabel={columnNames.DEPLOYMENT}>
+                                    <Td dataLabel="Deployment">
                                         <Button
                                             variant="link"
                                             isInline
@@ -96,13 +90,11 @@ function NamespaceDeployments({ deployments, onNodeSelect }: NamespaceDeployment
                                             {deployment.name}
                                         </Button>
                                     </Td>
-                                    <Td dataLabel={columnNames.ACTIVE_TRAFFIC}>
-                                        {deployment.numFlows} flows
-                                    </Td>
+                                    <Td dataLabel="Active traffic">{deployment.numFlows} flows</Td>
                                 </Tr>
                             ))}
                         </Tbody>
-                    </TableComposable>
+                    </Table>
                 </StackItem>
             </Stack>
         </div>

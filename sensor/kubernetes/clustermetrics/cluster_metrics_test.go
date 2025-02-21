@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/stackrox/rox/generated/internalapi/central"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/sensor/common"
 	"github.com/stretchr/testify/suite"
 	coreV1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -39,7 +41,7 @@ func (s *ClusterMetricsTestSuite) TestZeroNodes() {
 
 	metrics := s.getClusterMetrics()
 
-	s.Equal(expected, metrics)
+	protoassert.Equal(s.T(), expected, metrics)
 }
 
 func (s *ClusterMetricsTestSuite) TestSingleNode() {
@@ -48,7 +50,7 @@ func (s *ClusterMetricsTestSuite) TestSingleNode() {
 
 	metrics := s.getClusterMetrics()
 
-	s.Equal(expected, metrics)
+	protoassert.Equal(s.T(), expected, metrics)
 }
 
 func (s *ClusterMetricsTestSuite) TestMultipleNodes() {
@@ -59,13 +61,65 @@ func (s *ClusterMetricsTestSuite) TestMultipleNodes() {
 
 	metrics := s.getClusterMetrics()
 
-	s.Equal(expected, metrics)
+	protoassert.Equal(s.T(), expected, metrics)
+}
+
+func (s *ClusterMetricsTestSuite) TestOfflineMode() {
+	states := []common.SensorComponentEvent{
+		common.SensorComponentEventCentralReachable,
+		common.SensorComponentEventOfflineMode,
+		common.SensorComponentEventCentralReachable,
+	}
+	// Setting the duration too low may result in ticker emiting ticks in offline mode and the test to flake.
+	// It has been seen flaking with interval of 1 Millisecond
+	metrics := s.createNewClusterMetrics(50 * time.Millisecond)
+	s.Require().NoError(metrics.Start())
+	defer metrics.Stop(nil)
+	// Read the first message. This is needed because we call runPipeline before entering the ticker loop.
+	// This first call will block the goroutine until the message is read.
+	select {
+	case <-metrics.ResponsesC():
+		break
+	case <-time.After(metricsTimeout):
+		s.Fail("timeout waiting for the first message")
+	}
+	for _, state := range states {
+		metrics.Notify(state)
+		s.assertOfflineMode(state, metrics)
+	}
+}
+
+func (s *ClusterMetricsTestSuite) createNewClusterMetrics(interval time.Duration) *clusterMetricsImpl {
+	metricsComponent := NewWithInterval(s.client, interval)
+	metrics, ok := metricsComponent.(*clusterMetricsImpl)
+	s.Require().True(ok, "New should return a struct of type *clusterMetricsImpl")
+	return metrics
+}
+
+func (s *ClusterMetricsTestSuite) assertOfflineMode(state common.SensorComponentEvent, metrics *clusterMetricsImpl) {
+	switch state {
+	case common.SensorComponentEventCentralReachable:
+		select {
+		case <-time.After(metricsTimeout):
+			s.Fail("timeout waiting for the pollTicker to tick")
+		case <-metrics.pollTicker.C:
+			return
+		}
+	case common.SensorComponentEventOfflineMode:
+		select {
+		case <-time.After(2 * metrics.pollingInterval):
+			return
+		case <-metrics.pollTicker.C:
+			s.Fail("the pollTicker should not tick in offline mode")
+		}
+	}
 }
 
 func (s *ClusterMetricsTestSuite) getClusterMetrics() *central.ClusterMetrics {
 	timer := time.NewTimer(metricsTimeout)
 	clusterMetricsStream := New(s.client)
 
+	clusterMetricsStream.Notify(common.SensorComponentEventCentralReachable)
 	err := clusterMetricsStream.Start()
 	s.Require().NoError(err)
 	defer clusterMetricsStream.Stop(nil)

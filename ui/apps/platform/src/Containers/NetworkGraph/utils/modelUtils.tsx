@@ -9,6 +9,7 @@ import {
     OutEdges,
     L4Protocol,
     EdgeProperties,
+    InternalNetworkEntitiesInfo,
 } from 'types/networkFlow.proto';
 import { ensureExhaustive } from 'utils/type.utils';
 import {
@@ -26,6 +27,7 @@ import {
     CustomEdgeModel,
     DeploymentData,
     CIDRBlockData,
+    InternalEntitiesNodeModel,
 } from '../types/topology.type';
 import { protocolLabel } from './flowUtils';
 
@@ -135,12 +137,25 @@ function getExternalNodeModel(
             return {
                 ...baseNode,
                 shape: NodeShape.rect,
-                label: entity.externalSource.name,
+                label: entity?.externalSource?.name || 'Unknown entity',
                 data: cidrBlockData,
             };
         default:
             return ensureExhaustive(entity);
     }
+}
+
+function getInternalNodeModel(
+    entity: InternalNetworkEntitiesInfo,
+    outEdges: OutEdges
+): InternalEntitiesNodeModel {
+    const baseNode = getBaseNode(entity.id);
+    return {
+        ...baseNode,
+        shape: NodeShape.hexagon,
+        label: 'Internal entities',
+        data: { ...entity, type: 'INTERNAL_ENTITIES', outEdges, isFadedOut: false },
+    };
 }
 
 function getNodeModel(
@@ -161,6 +176,8 @@ function getNodeModel(
         case 'EXTERNAL_SOURCE':
         case 'INTERNET':
             return getExternalNodeModel(entity, outEdges);
+        case 'INTERNAL_ENTITIES':
+            return getInternalNodeModel(entity, outEdges);
         default:
             return ensureExhaustive(entity);
     }
@@ -210,14 +227,19 @@ export function transformActiveData(
     activeEdgeMap: Record<string, CustomEdgeModel>;
     activeNodeMap: Record<string, CustomNodeModel>;
 } {
-    const activeDataModel = {
+    const activeDataModel: {
+        graph: typeof graphModel;
+        nodes: CustomNodeModel[];
+        edges: CustomEdgeModel[];
+    } = {
         graph: graphModel,
-        nodes: [] as CustomNodeModel[],
-        edges: [] as CustomEdgeModel[],
+        nodes: [],
+        edges: [],
     };
 
     const namespaceNodes: Record<string, NamespaceNodeModel> = {};
     const externalNodes: Record<string, ExternalEntitiesNodeModel | CIDRBlockNodeModel> = {};
+    const internalNodes: Record<string, InternalEntitiesNodeModel> = {};
     const deploymentNodes: Record<string, DeploymentNodeModel> = {};
     const activeEdgeMap: Record<string, CustomEdgeModel> = {};
 
@@ -262,6 +284,13 @@ export function transformActiveData(
             const externalNode = getExternalNodeModel(entity, outEdges);
             if (!externalNodes[id]) {
                 externalNodes[id] = externalNode;
+            }
+        }
+
+        if (type === 'INTERNAL_ENTITIES') {
+            const internalNode = getInternalNodeModel(entity, outEdges);
+            if (!internalNodes[id]) {
+                internalNodes[id] = internalNode;
             }
         }
 
@@ -331,6 +360,9 @@ export function transformActiveData(
         activeDataModel.nodes.push(externalGroupNode);
     }
 
+    // add internal entities directly to graph
+    activeDataModel.nodes.push(...Object.values(internalNodes));
+
     // add deployment nodes to data model
     activeDataModel.nodes.push(...Object.values(deploymentNodes));
 
@@ -340,8 +372,12 @@ export function transformActiveData(
     // add external nodes to data model
     activeDataModel.nodes.push(...Object.values(externalNodes));
 
+    // add internal nodes to data model
+    activeDataModel.nodes.push(...Object.values(internalNodes));
+
     // add edges to data model
     activeDataModel.edges.push(...Object.values(activeEdgeMap));
+
     return {
         activeDataModel,
         // set activeEdgeMap to be able to cross reference edges by id for the extraneous graph

@@ -33,16 +33,34 @@ ci_export() {
     fi
 }
 
+# set_ci_shared_export() - for openshift-ci this is state shared between steps.
+set_ci_shared_export() {
+    if [[ "$#" -ne 2 ]]; then
+        die "missing args. usage: set_ci_shared_export <env-name> <env-value>"
+    fi
+
+    ci_export "$@"
+
+    local env_name="$1"
+    local env_value="$2"
+
+    echo "export ${env_name}=${env_value}" | tee -a "${SHARED_DIR:-/tmp}/shared_env"
+}
+
 ci_exit_trap() {
     local exit_code="$?"
     info "Executing a general purpose exit trap for CI"
     echo "Exit code is: ${exit_code}"
 
-    finalize_job_record "${exit_code}" "false"
+    if [[ "${exit_code}" == "0" ]]; then
+        set_ci_shared_export JOB_DISPATCH_OUTCOME "${OUTCOME_PASSED}"
+    elif [[ "${exit_code}" == "130" ]]; then
+        set_ci_shared_export JOB_DISPATCH_OUTCOME "${OUTCOME_CANCELED}"
+    else
+        set_ci_shared_export JOB_DISPATCH_OUTCOME "${OUTCOME_FAILED}"
+    fi
 
-    (send_slack_notice_for_failures_on_merge "${exit_code}") || { echo "ERROR: Could not slack a test failure message"; }
-
-    post_process_test_results
+    post_process_test_results "${JOB_SLACK_FAILURE_ATTACHMENTS}" "${JOB_JUNIT2JIRA_SUMMARY_FILE}"
 
     while [[ -e /tmp/hold ]]; do
         info "Holding this job for debug"
@@ -50,6 +68,8 @@ ci_exit_trap() {
     done
 
     handle_dangling_processes
+
+    gate_flaky_tests "${exit_code}"
 }
 
 # handle_dangling_processes() - The OpenShift CI ci-operator will not complete a
@@ -116,40 +136,10 @@ setup_deployment_env() {
     ci_export REGISTRY_USERNAME "$QUAY_RHACS_ENG_RO_USERNAME"
     ci_export REGISTRY_PASSWORD "$QUAY_RHACS_ENG_RO_PASSWORD"
     if [[ -z "${MAIN_IMAGE_TAG:-}" ]]; then
-        ci_export MAIN_IMAGE_TAG "$(make --quiet tag)"
+        ci_export MAIN_IMAGE_TAG "$(make --quiet --no-print-directory tag)"
     fi
 
-    REPO=rhacs-eng
-    ci_export MAIN_IMAGE_REPO "quay.io/$REPO/main"
-    ci_export CENTRAL_DB_IMAGE_REPO "quay.io/$REPO/central-db"
-    ci_export COLLECTOR_IMAGE_REPO "quay.io/$REPO/collector"
-}
-
-install_built_roxctl_in_gopath() {
-    require_environment "GOPATH"
-
-    local bin_os bin_platform
-    if is_darwin; then
-        bin_os="darwin"
-    elif is_linux; then
-        bin_os="linux"
-    else
-        die "Only linux or darwin are supported for this test"
-    fi
-
-    case "$(uname -m)" in
-        x86_64) bin_platform="${bin_os}_amd64" ;;
-        aarch64) bin_platform="${bin_os}_arm64" ;;
-        ppc64le) bin_platform="${bin_os}_ppc64le" ;;
-        s390x) bin_platform="${bin_os}_s390x" ;;
-        *) die "Unknown architecture" ;;
-    esac
-
-    local roxctl="$SCRIPTS_ROOT/bin/${bin_platform}/roxctl"
-
-    require_executable "$roxctl" "roxctl should be built"
-
-    cp "$roxctl" "$GOPATH/bin/roxctl"
+    ci_export ROX_PRODUCT_BRANDING "RHACS_BRANDING"
 }
 
 get_central_debug_dump() {
@@ -162,10 +152,54 @@ get_central_debug_dump() {
     local output_dir="$1"
 
     require_environment "API_ENDPOINT"
-    require_environment "ROX_PASSWORD"
-
-    roxctl -e "${API_ENDPOINT}" -p "${ROX_PASSWORD}" --insecure-skip-tls-verify central debug dump --output-dir "${output_dir}"
+    require_environment "ROX_ADMIN_PASSWORD"
+    roxctl -e "${API_ENDPOINT}" --insecure-skip-tls-verify central debug dump --output-dir "${output_dir}"
     ls -l "${output_dir}"
+}
+
+process_central_metrics() {
+    info "Processing metrics from central debug dump"
+
+    if [[ "$#" -ne 1 ]]; then
+        die "missing arg. usage: process_central_metrics <debug_dump_dir>"
+    fi
+
+    local output_dir="$1"
+
+    local metrics_output
+    local csv_output
+    local debug_dump_zip
+    metrics_output="$(mktemp --suffix=.prom)"
+    csv_output="$(mktemp --suffix=.csv)"
+    # shellcheck disable=SC2012
+    debug_dump_zip="$(ls -t "${output_dir}"/*.zip | head -1)"
+    unzip -p "${debug_dump_zip}" metrics-1 > "${metrics_output}"
+
+    get_prometheus_metrics_parser
+
+    # We need a link to repository. In case it's not part of job spec (e.g., periodic`s)
+    # we will fallback to short commit
+    base_link="$(echo "$JOB_SPEC" | jq ".refs.base_link | select( . != null )" -r)"
+    calculated_base_link="https://github.com/stackrox/stackrox/commit/$(make --quiet --no-print-directory shortcommit)"
+
+    local metadata="build_tag=${STACKROX_BUILD_TAG:-none},build_id=${BUILD_ID:-none},orchestrator_flavor=${ORCHESTRATOR_FLAVOR:-PROW},job_name=${JOB_NAME:-missing},base_link=${base_link:-$calculated_base_link}"
+    prometheus-metric-parser single \
+        --format csv \
+        --file "${metrics_output}" \
+        --labels "${metadata}" \
+        > "${csv_output}"
+
+    setup_gcp
+    save_central_metrics "${csv_output}"
+}
+
+get_prometheus_metrics_parser() {
+    local parserBin
+    local parserDir
+    parserBin=$(make prometheus-metric-parser -C "$ROOT" --silent | tail -1)
+    parserDir=$(dirname "${parserBin}")
+    export PATH="$parserDir":$PATH
+    prometheus-metric-parser help
 }
 
 get_central_diagnostics() {
@@ -178,34 +212,80 @@ get_central_diagnostics() {
     local output_dir="$1"
 
     require_environment "API_ENDPOINT"
-    require_environment "ROX_PASSWORD"
-
-    roxctl -e "${API_ENDPOINT}" -p "${ROX_PASSWORD}" central debug download-diagnostics --output-dir "${output_dir}" --insecure-skip-tls-verify
+    require_environment "ROX_ADMIN_PASSWORD"
+    roxctl -e "${API_ENDPOINT}" central debug download-diagnostics --output-dir "${output_dir}" --insecure-skip-tls-verify
     ls -l "${output_dir}"
+}
+
+push_image_manifest_lists() {
+    info "Pushing main, roxctl and central-db images as manifest lists"
+
+    if [[ "$#" -ne 3 ]]; then
+        die "missing arg. usage: push_image_manifest_lists <push_context> <brand> <architectures (CSV)>"
+    fi
+
+    local push_context="$1"
+    local brand="$2"
+    local architectures="$3"
+
+    local main_image_set=("main" "roxctl" "central-db")
+
+    local registry
+    registry="$(registry_from_branding "$brand")"
+
+    local tag
+    tag="$(make --quiet --no-print-directory tag)"
+
+    registry_rw_login "$registry"
+    for image in "${main_image_set[@]}"; do
+        retry 5 true \
+          "$SCRIPTS_ROOT/scripts/ci/push-as-multiarch-manifest-list.sh" "${registry}/${image}:${tag}" "$architectures" | cat
+        if [[ "$push_context" == "merge-to-master" ]]; then
+            retry 5 true \
+              "$SCRIPTS_ROOT/scripts/ci/push-as-multiarch-manifest-list.sh" "${registry}/${image}:latest" "$architectures" | cat
+        fi
+    done
+
+    # Push manifest lists for scanner and collector for amd64 only
+    local amd64_image_set=("scanner" "scanner-db" "scanner-slim" "scanner-db-slim" "collector")
+    for image in "${amd64_image_set[@]}"; do
+        retry 5 true \
+          "$SCRIPTS_ROOT/scripts/ci/push-as-multiarch-manifest-list.sh" "${registry}/${image}:${tag}" "amd64" | cat
+    done
+}
+
+registry_from_branding() {
+    local branding="$1"
+    if [[ "$branding" == "STACKROX_BRANDING" ]]; then
+        registry="quay.io/stackrox-io"
+    elif [[ "$branding" == "RHACS_BRANDING" ]]; then
+        registry="quay.io/rhacs-eng"
+    else
+        die "$branding is not a supported branding"
+    fi
+    echo "$registry"
 }
 
 push_main_image_set() {
     info "Pushing main, roxctl and central-db images"
 
-    if [[ "$#" -ne 2 ]]; then
-        die "missing arg. usage: push_main_image_set <push_context> <brand>"
+    if [[ "$#" -ne 3 ]]; then
+        die "missing arg. usage: push_main_image_set <push_context> <brand> <arch>"
     fi
 
     local push_context="$1"
     local brand="$2"
+    local arch="$3"
 
     local main_image_set=("main" "roxctl" "central-db")
-    if is_OPENSHIFT_CI; then
-        local main_image_srcs=("$MAIN_IMAGE" "$ROXCTL_IMAGE" "$CENTRAL_DB_IMAGE")
-        oc registry login
-    fi
 
     _push_main_image_set() {
         local registry="$1"
         local tag="$2"
 
         for image in "${main_image_set[@]}"; do
-            "$SCRIPTS_ROOT/scripts/ci/push-as-manifest-list.sh" "${registry}/${image}:${tag}" | cat
+            retry 5 true \
+              docker push "${registry}/${image}:${tag}" | cat
         done
     }
 
@@ -219,174 +299,82 @@ push_main_image_set() {
         done
     }
 
-    _mirror_main_image_set() {
-        local registry="$1"
-        local tag="$2"
-
-        local idx=0
-        for image in "${main_image_set[@]}"; do
-            oc_image_mirror "${main_image_srcs[$idx]}" "${registry}/${image}:${tag}"
-            (( idx++ )) || true
-        done
-    }
-
-    if [[ "$brand" == "STACKROX_BRANDING" ]]; then
-        local destination_registries=("quay.io/stackrox-io")
-    elif [[ "$brand" == "RHACS_BRANDING" ]]; then
-        local destination_registries=("quay.io/rhacs-eng")
-    else
-        die "$brand is not a supported brand"
-    fi
+    local registry
+    registry="$(registry_from_branding "$brand")"
 
     local tag
-    tag="$(make --quiet tag)"
-    for registry in "${destination_registries[@]}"; do
-        registry_rw_login "$registry"
+    tag="$(make --quiet --no-print-directory tag)"
 
-        if is_OPENSHIFT_CI; then
-            _mirror_main_image_set "$registry" "$tag"
-        else
-            _tag_main_image_set "$tag" "$registry" "$tag"
-            _push_main_image_set "$registry" "$tag"
-        fi
-        if [[ "$push_context" == "merge-to-master" ]]; then
-            if is_OPENSHIFT_CI; then
-                _mirror_main_image_set "$registry" "latest"
-            else
-                _tag_main_image_set "$tag" "$registry" "latest"
-                _push_main_image_set "$registry" "latest"
-            fi
-        fi
+    registry_rw_login "$registry"
+
+    _tag_main_image_set "$tag" "$registry" "$tag-$arch"
+    _push_main_image_set "$registry" "$tag-$arch"
+
+    if [[ "$push_context" == "merge-to-master" ]]; then
+        _tag_main_image_set "$tag" "$registry" "latest-${arch}"
+        _push_main_image_set "$registry" "latest-${arch}"
+    fi
+}
+
+push_scanner_image_manifest_lists() {
+    info "Pushing scanner-v4 and scanner-v4-db images as manifest lists"
+
+    if [[ "$#" -ne 2 ]]; then
+        die "missing arg. usage: push_scanner_image_manifest_lists <registry> <architectures (CSV)>"
+    fi
+
+    local registry="$1"
+    local architectures="$2"
+    local scanner_image_set=("scanner-v4" "scanner-v4-db")
+
+    local tag
+    tag="$(make --quiet --no-print-directory -C scanner tag)"
+    registry_rw_login "$registry"
+    for image in "${scanner_image_set[@]}"; do
+        retry 5 true \
+          "$SCRIPTS_ROOT/scripts/ci/push-as-multiarch-manifest-list.sh" "${registry}/${image}:${tag}" "$architectures" | cat
     done
 }
 
-push_operator_image_set() {
-    info "Pushing stackrox-operator, stackrox-operator-bundle and stackrox-operator-index images"
+push_scanner_image_set() {
+    info "Pushing scanner-v4 and scanner-v4-db images"
 
     if [[ "$#" -ne 2 ]]; then
-        die "missing arg. usage: push_operator_image_set <push_context> <brand>"
+        die "missing arg. usage: push_scanner_image_set <registry> <arch>"
     fi
 
-    local push_context="$1"
-    local brand="$2"
+    local registry="$1"
+    local arch="$2"
 
-    local operator_image_set=("stackrox-operator" "stackrox-operator-bundle" "stackrox-operator-index")
-    if is_OPENSHIFT_CI; then
-        if [[ -n "${OPERATOR_BUNDLE_INDEX_MAGE:-}" ]]; then
-            OPERATOR_BUNDLE_INDEX_IMAGE="${OPERATOR_BUNDLE_INDEX_MAGE}"
-        fi
-        local operator_image_srcs=("$OPERATOR_IMAGE" "$OPERATOR_BUNDLE_IMAGE" "$OPERATOR_BUNDLE_INDEX_IMAGE")
-        oc registry login
-    fi
+    local scanner_image_set=("scanner-v4" "scanner-v4-db")
 
-    _push_operator_image_set() {
+    _push_scanner_image_set() {
         local registry="$1"
         local tag="$2"
 
-        local v
-        for image in "${operator_image_set[@]}"; do
-            if [[ "${image}" != "stackrox-operator" ]]; then
-                # Only the bundle and index image tags have the v prefix.
-                v="v"
-            else
-                v=""
-            fi
-            "$SCRIPTS_ROOT/scripts/ci/push-as-manifest-list.sh" "${registry}/${image}:${v}${tag}" | cat
+        for image in "${scanner_image_set[@]}"; do
+            retry 5 true \
+              docker push "${registry}/${image}:${tag}" | cat
         done
     }
 
-    _tag_operator_image_set() {
+    _tag_scanner_image_set() {
         local local_tag="$1"
         local registry="$2"
         local remote_tag="$3"
 
-        local v
-        for image in "${operator_image_set[@]}"; do
-            if [[ "${image}" != "stackrox-operator" ]]; then
-                # Only the bundle and index image tags have the v prefix.
-                v="v"
-            else
-                v=""
-            fi
-            docker tag "stackrox/${image}:${local_tag}" "${registry}/${image}:${v}${remote_tag}"
+        for image in "${scanner_image_set[@]}"; do
+            docker tag "stackrox/${image}:${local_tag}" "${registry}/${image}:${remote_tag}"
         done
     }
-
-    _mirror_operator_image_set() {
-        local registry="$1"
-        local tag="$2"
-
-        local idx=0
-        local v
-        for image in "${operator_image_set[@]}"; do
-            if [[ "${image}" != "stackrox-operator" ]]; then
-                # Only the bundle and index image tags have the v prefix.
-                v="v"
-            else
-                v=""
-            fi
-            oc image mirror "${operator_image_srcs[$idx]}" "${registry}/${image}:${v}${tag}"
-            (( idx++ )) || true
-        done
-    }
-
-    if [[ "$brand" == "STACKROX_BRANDING" ]]; then
-        local destination_registries=("quay.io/stackrox-io")
-    elif [[ "$brand" == "RHACS_BRANDING" ]]; then
-        local destination_registries=("quay.io/rhacs-eng")
-    else
-        die "$brand is not a supported brand"
-    fi
 
     local tag
-    tag="$(make --quiet -C operator tag)"
-    for registry in "${destination_registries[@]}"; do
-        registry_rw_login "$registry"
-
-        if is_OPENSHIFT_CI; then
-            _mirror_operator_image_set "$registry" "$tag"
-        else
-            _tag_operator_image_set "$tag" "$registry" "$tag"
-            _push_operator_image_set "$registry" "$tag"
-        fi
-        if [[ "$push_context" == "merge-to-master" ]]; then
-            if is_OPENSHIFT_CI; then
-                _mirror_operator_image_set "$registry" "latest"
-            else
-                _tag_operator_image_set "$tag" "$registry" "latest"
-                _push_operator_image_set "$registry" "latest"
-            fi
-        fi
-    done
-}
-
-push_race_condition_debug_image() {
-    info "Pushing the -race image: $MAIN_RCD_IMAGE"
-
-    if ! is_OPENSHIFT_CI; then
-        die "Only supported in OpenShift CI"
-    fi
-
-    oc registry login
-
-    local registry="quay.io/rhacs-eng"
-    registry_rw_login "$registry"
-    oc_image_mirror "$MAIN_RCD_IMAGE" "${registry}/main:$(make --quiet tag)-rcd"
-}
-
-push_mock_grpc_server_image() {
-    local registry="quay.io/rhacs-eng"
-    image="${registry}/grpc-server:$(make --quiet tag)"
-    info "Pushing the mock grpc server image: $MOCK_GRPC_SERVER_IMAGE to $image"
-
-    if ! is_OPENSHIFT_CI; then
-        die "Only supported in OpenShift CI"
-    fi
-
-    oc registry login
+    tag="$(make --quiet --no-print-directory -C scanner tag)"
 
     registry_rw_login "$registry"
-    oc_image_mirror "$MOCK_GRPC_SERVER_IMAGE" "$image"
+
+    _tag_scanner_image_set "$tag" "$registry" "$tag-$arch"
+    _push_scanner_image_set "$registry" "$tag-$arch"
 }
 
 registry_rw_login() {
@@ -398,10 +386,18 @@ registry_rw_login() {
 
     case "$registry" in
         quay.io/rhacs-eng)
-            docker login -u "$QUAY_RHACS_ENG_RW_USERNAME" --password-stdin <<<"$QUAY_RHACS_ENG_RW_PASSWORD" quay.io
+            _login() {
+                # shellcheck disable=SC2317
+                docker login -u "$QUAY_RHACS_ENG_RW_USERNAME" --password-stdin <<<"$QUAY_RHACS_ENG_RW_PASSWORD" quay.io
+            }
+            retry 5 true _login
             ;;
         quay.io/stackrox-io)
-            docker login -u "$QUAY_STACKROX_IO_RW_USERNAME" --password-stdin <<<"$QUAY_STACKROX_IO_RW_PASSWORD" quay.io
+            _login() {
+                # shellcheck disable=SC2317
+                docker login -u "$QUAY_STACKROX_IO_RW_USERNAME" --password-stdin <<<"$QUAY_STACKROX_IO_RW_PASSWORD" quay.io
+            }
+            retry 5 true _login
             ;;
         *)
             die "Unsupported registry login: $registry"
@@ -417,7 +413,11 @@ registry_ro_login() {
 
     case "$registry" in
         quay.io/rhacs-eng)
-            docker login -u "$QUAY_RHACS_ENG_RO_USERNAME" --password-stdin <<<"$QUAY_RHACS_ENG_RO_PASSWORD" quay.io
+            _login() {
+                # shellcheck disable=SC2317
+                docker login -u "$QUAY_RHACS_ENG_RO_USERNAME" --password-stdin <<<"$QUAY_RHACS_ENG_RO_PASSWORD" quay.io
+            }
+            retry 5 true _login
             ;;
         *)
             die "Unsupported registry login: $registry"
@@ -427,56 +427,40 @@ registry_ro_login() {
 push_matching_collector_scanner_images() {
     info "Pushing collector & scanner images tagged with main-version to quay.io/rhacs-eng"
 
-    if [[ "$#" -ne 1 ]]; then
-        die "missing arg. usage: push_matching_collector_scanner_images <brand>"
-    fi
-
-    if is_OPENSHIFT_CI; then
-        oc registry login
+    if [[ "$#" -ne 2 ]]; then
+        die "missing arg. usage: push_matching_collector_scanner_images <brand> <arch>"
     fi
 
     local brand="$1"
+    local arch="$2"
 
-    if [[ "$brand" == "STACKROX_BRANDING" ]]; then
-        local source_registry="quay.io/stackrox-io"
-        local target_registries=( "quay.io/stackrox-io" )
-    elif [[ "$brand" == "RHACS_BRANDING" ]]; then
-        local source_registry="quay.io/rhacs-eng"
-        local target_registries=( "quay.io/rhacs-eng" )
-    else
-        die "$brand is not a supported brand"
-    fi
+    local registry
+    registry="$(registry_from_branding "$brand")"
 
-    _retag_or_mirror() {
-        if is_OPENSHIFT_CI; then
-            oc_image_mirror "$1" "$2"
-        else
-            "$SCRIPTS_ROOT/scripts/ci/pull-retag-push.sh" "$1" "$2"
-        fi
+    _retag() {
+        retry 5 true "$SCRIPTS_ROOT/scripts/ci/pull-retag-push.sh" "$1" "$2"
     }
 
+    if [[ "$arch" != "amd64" ]]; then
+        echo "Skipping rebundling for non-amd64 arch"
+        exit 0
+    fi
+
     local main_tag
-    main_tag="$(make --quiet tag)"
+    main_tag="$(make --quiet --no-print-directory tag)"
     local scanner_version
-    scanner_version="$(make --quiet scanner-tag)"
+    scanner_version="$(make --quiet --no-print-directory scanner-tag)"
     local collector_version
-    collector_version="$(make --quiet collector-tag)"
+    collector_version="$(make --quiet --no-print-directory collector-tag)"
 
-    for target_registry in "${target_registries[@]}"; do
-        registry_rw_login "${target_registry}"
+    registry_rw_login "${registry}"
 
-        _retag_or_mirror "${source_registry}/scanner:${scanner_version}"    "${target_registry}/scanner:${main_tag}"
-        _retag_or_mirror "${source_registry}/scanner-db:${scanner_version}" "${target_registry}/scanner-db:${main_tag}"
-        _retag_or_mirror "${source_registry}/scanner-slim:${scanner_version}"    "${target_registry}/scanner-slim:${main_tag}"
-        _retag_or_mirror "${source_registry}/scanner-db-slim:${scanner_version}" "${target_registry}/scanner-db-slim:${main_tag}"
+    _retag "${registry}/scanner:${scanner_version}"    "${registry}/scanner:${main_tag}-${arch}"
+    _retag "${registry}/scanner-db:${scanner_version}" "${registry}/scanner-db:${main_tag}-${arch}"
+    _retag "${registry}/scanner-slim:${scanner_version}"    "${registry}/scanner-slim:${main_tag}-${arch}"
+    _retag "${registry}/scanner-db-slim:${scanner_version}" "${registry}/scanner-db-slim:${main_tag}-${arch}"
 
-        _retag_or_mirror "${source_registry}/collector:${collector_version}"      "${target_registry}/collector:${main_tag}"
-        _retag_or_mirror "${source_registry}/collector:${collector_version}-slim" "${target_registry}/collector-slim:${main_tag}"
-    done
-}
-
-oc_image_mirror() {
-    retry 5 true oc image mirror "$1" "$2"
+    _retag "${registry}/collector:${collector_version}"      "${registry}/collector:${main_tag}-${arch}"
 }
 
 poll_for_system_test_images() {
@@ -490,13 +474,359 @@ poll_for_system_test_images() {
 
     require_environment "QUAY_RHACS_ENG_BEARER_TOKEN"
 
+    local image_list
+    image_list="$(mktemp)"
+    populate_stackrox_image_list "${image_list}"
+    info "Will poll for: $(awk '{print $1}' "${image_list}")"
+
+    local start_time
+    start_time="$(date '+%s')"
+
+    while true; do
+        local all_exist=true
+        local tag
+        local image
+        while read -r image tag
+        do
+            if ! check_rhacs_eng_image_exists "$image" "$tag"; then
+                info "$image does not exist"
+                all_exist=false
+                break
+            fi
+        done < "$image_list"
+
+        if $all_exist; then
+            info "All images exist"
+            break
+        fi
+        if (( $(date '+%s') - start_time > time_limit )); then
+            local commit_sha
+            commit_sha="$(get_commit_sha)"
+            check_build_workflows "${commit_sha}"
+            die "ERROR: Timed out waiting for images after ${time_limit} seconds"
+        fi
+
+        sleep 60
+    done
+
+    touch "${STATE_IMAGES_AVAILABLE}"
+}
+
+# Image prefetch is broken into two sets:
+# - prebuilt: test fixture images that already exist prior to CI job execution.
+#   Prefetch for these images can start as soon as the cluster is ready.
+# - system: the product images under test 'stackrox-images'. Prefetch for these
+#   should not start until the images are built to avoid backoff noise in the
+#   prefetcher logs.
+
+image_prefetcher_await_msg_prefix="Waiting for pre-fetcher"
+
+image_prefetcher_prebuilt_start() {
+    info "Starting image pre-fetcher of pre-built images (NOT built for current commit)..."
+    junit_wrap image-prefetcher-prebuilt-start \
+               "Start image pre-fetcher for pre-built images (NOT built for current commit)." \
+               "See log for error details." \
+               _image_prefetcher_prebuilt_start
+}
+
+image_prefetcher_system_start() {
+    info "Starting image pre-fetcher of system images (built for current commit)..."
+    junit_wrap image-prefetcher-system-start \
+               "Start image pre-fetcher for system images (built for current commit)." \
+               "See log for error details." \
+               _image_prefetcher_system_start
+}
+
+_image_prefetcher_prebuilt_start() {
+    case "$CI_JOB_NAME" in
+    *qa-e2e-tests)
+        image_prefetcher_start_set qa-e2e
+        # Override the default image pull policy for containers with quay.io
+        # images to rely on prefetched images. This helps ensure that the static
+        # prefect list stays up to date with additions.
+        ci_export "IMAGE_PULL_POLICY_FOR_QUAY_IO" "Never"
+        ;;
+    # TODO(ROX-20508): for operaror-e2e jobs, pre-fetch images of the release from which operator upgrade test starts.
+    *)
+        info "No pre-built image prefetching is currently performed for: ${CI_JOB_NAME}."
+        ;;
+    esac
+}
+
+_image_prefetcher_system_start() {
+    case "$CI_JOB_NAME" in
+    # ROX-24818: GKE is excluded from system image prefetch as it causes
+    # flakes in test.
+    *-operator-e2e-tests|*ocp*qa-e2e-tests)
+        image_prefetcher_start_set stackrox-images
+        ;;
+    *)
+        info "No system image prefetching is performed for: ${CI_JOB_NAME}."
+        ;;
+    esac
+}
+
+image_prefetcher_start_set() {
+    local ns="prefetch-images"
+    local name="$1"
+
+    make image-prefetcher-deploy-bin
+    local image_prefetcher_deploy_bin
+    image_prefetcher_deploy_bin="$(make print-image-prefetcher-deploy-bin)"
+    local image_prefetcher_version
+    image_prefetcher_version="$(go -C tools/test list -m -f '{{.Version}}' github.com/stackrox/image-prefetcher/deploy)"
+
+    info "Using ${image_prefetcher_deploy_bin} ${image_prefetcher_version} for image prefetch deployment"
+
+    local manifest
+    manifest=$(mktemp)
+
+    case "${ORCHESTRATOR_FLAVOR}" in
+    k8s)
+        flavor=vanilla
+        ;;
+    openshift)
+        flavor=ocp
+        ;;
+    *)
+        die "unsupported ORCHESTRATOR: ${ORCHESTRATOR_FLAVOR}"
+        ;;
+    esac
+
+    # daemonset, etc
+    ${image_prefetcher_deploy_bin} \
+        --version="${image_prefetcher_version}" \
+        --k8s-flavor="$flavor" \
+        --secret=stackrox \
+        --collect-metrics \
+        "$name" > "$manifest"
+
+    # image list
+    local image_list
+    image_list=$(mktemp)
+    populate_prefetcher_image_list "$name" "${image_list}"
+    echo "---" >> "$manifest"
+    kubectl create --dry-run=client -o yaml --namespace=$ns configmap "$name" --from-file="images.txt=$image_list" >> "$manifest"
+
+    # pull secret
+    REGISTRY_PASSWORD="${QUAY_RHACS_ENG_RO_PASSWORD}" \
+    REGISTRY_USERNAME="${QUAY_RHACS_ENG_RO_USERNAME}" \
+    NAMESPACE=$ns \
+      make -C operator stackrox-image-pull-secret
+
+    # apply configmap, daemonset etc
+    retry 5 true kubectl apply --namespace=$ns -f "$manifest"
+    info "Image pre-fetcher is now running in the background. Its status will be checked later (look for message starting with ${image_prefetcher_await_msg_prefix}). Proceeding with other tasks in the meantime."
+    rm -f "$image_list" "$manifest"
+}
+
+image_prefetcher_prebuilt_await() {
+    if [[ "${IMAGE_PREFETCH_DISABLED:-false}" == "true" ]]; then
+        return
+    fi
+
+    info "${image_prefetcher_await_msg_prefix} of pre-built images to complete..."
+    junit_wrap image-prefetcher-prebuilt-await \
+               "Waiting for pre-fetcher of pre-built images to complete." \
+               "See log for error details." \
+               _image_prefetcher_prebuilt_await
+}
+
+image_prefetcher_system_await() {
+    if [[ "${IMAGE_PREFETCH_DISABLED:-false}" == "true" ]]; then
+        return
+    fi
+
+    info "${image_prefetcher_await_msg_prefix} of system images to complete..."
+    junit_wrap image-prefetcher-system-await \
+               "Waiting for pre-fetcher of system images to complete." \
+               "See log for error details." \
+               _image_prefetcher_system_await
+}
+
+_image_prefetcher_prebuilt_await() {
+    case "$CI_JOB_NAME" in
+    *qa-e2e-tests)
+        image_prefetcher_await_set qa-e2e
+        ;;
+    # TODO(ROX-20508): for operaror-e2e jobs, pre-fetch images of the release from which operator upgrade test starts.
+    *)
+        info "No pre-built image prefetching is currently performed for: ${CI_JOB_NAME}. Nothing to wait for."
+        ;;
+    esac
+}
+
+_image_prefetcher_system_await() {
+    case "$CI_JOB_NAME" in
+    # ROX-24818: GKE is excluded from system image prefetch as it causes
+    # flakes in test.
+    *-operator-e2e-tests|*ocp*qa-e2e-tests)
+        image_prefetcher_await_set stackrox-images
+        ;;
+    *)
+        info "No system image prefetching is performed for: ${CI_JOB_NAME}. Nothing to wait for."
+        ;;
+    esac
+}
+
+image_prefetcher_await_set() {
+    local ns="prefetch-images"
+    local name="$1"
+    local extra_fields='{"build_id": "'"${BUILD_ID:-}"'", "job_name": "'"${JOB_NAME:-}"'", "orchestrator": "'"${ORCHESTRATOR_FLAVOR:-}"'", "build_tag": "'"${STACKROX_BUILD_TAG:-}"'"}'
+
+    info "Waiting for image prefetcher set ${name} to complete..."
+    if kubectl rollout status daemonset "$name" -n "$ns" --timeout 15m; then
+        info "All images in the set are now pre-fetched."
+    else
+        info "WARNING: Pre-fetching failed to complete in time."
+        info "To investigate closer, go to https://console.cloud.google.com/bigquery and run a query such as:"
+        local query
+        query=$(mktemp)
+        cat > "${query}" <<- EOM
+
+            SELECT started_at, duration_ms, image, error
+            FROM \`acs-san-stackroxci.ci_metrics.stackrox_image_prefetches\`
+            WHERE error IS NOT NULL AND
+            $(echo "${extra_fields}" | jq -r '[to_entries | .[] | select(.value != "") | (.key + "=\"" + .value + "\"")] | join(" AND ")')
+            ORDER BY started_at DESC LIMIT 1000
+
+EOM
+        cat "${query}"
+        info "Note: The data is imported into the table periodically: https://github.com/stackrox/stackrox/actions/workflows/batch-load-test-metrics.yml"
+
+        if [[ -n ${ARTIFACT_DIR:-} ]]; then
+            local prefetcher_help="$ARTIFACT_DIR/image-pre-fetcher-${name}-failure-summary.html"
+            cat > "${prefetcher_help}" <<- EOM
+                <html>
+                <head>
+                <title>Image pre-fetcher ${name} failure</title>
+                <style>
+                  body { color: #e8e8e8; background-color: #424242; font-family: "Roboto", "Helvetica", "Arial", sans-serif }
+                  a { color: #ff8caa }
+                  a:visited { color: #ff8caa }
+                </style>
+                </head>
+                <body>
+
+                Waiting for image prefetcher set ${name} to complete timed out.<br>
+                To investigate closer, go to <a target="_blank" href="https://console.cloud.google.com/bigquery">BigQuery</a> and run a query such as the following:
+                <br>
+                <pre>
+EOM
+            cat >> "${prefetcher_help}" "${query}"
+            cat >> "${prefetcher_help}" <<- EOM
+                </pre>
+                Note: The data is imported into the table <a target="_blank" href="https://github.com/stackrox/stackrox/actions/workflows/batch-load-test-metrics.yml">periodically</a>.
+                <br><br>
+                </body>
+                </html>
+EOM
+        fi
+        rm -f "${query}"
+    fi
+    info "Now retrieving prefetcher metrics..."
+    local attempt=0
+    local service="service/${name}-metrics"
+    while [[ -z $(kubectl -n "${ns}" get "${service}" -o jsonpath="{.status.loadBalancer.ingress}" 2>/dev/null) ]]; do
+        if [ "$attempt" -lt "60" ]; then
+            info "Waiting for ${service} to obtain endpoint ..."
+            ((attempt++))
+            sleep 10
+        else
+            info "Something is wrong with the ${service} service. See the following 'describe' output."
+            kubectl -n "${ns}" describe "${service}" || true
+            die "Timeout waiting for ${service} to obtain endpoint!"
+        fi
+    done
+    local endpoint
+    endpoint="$(kubectl -n "${ns}" get "${service}" -o json | service_get_endpoint)"
+    local fetcher_metrics
+    fetcher_metrics="$(mktemp --suffix=.csv)"
+    local fetcher_metrics_json
+    fetcher_metrics_json="$(mktemp --suffix=.json)"
+    local metrics_url="http://${endpoint}:8080/metrics"
+    if ! curl --silent --show-error --fail --retry 3 --retry-connrefused "${metrics_url}" > "${fetcher_metrics_json}"; then
+        die "Failed to fetch prefetcher metrics from ${metrics_url}"
+    fi
+    # See the stackrox_image_prefetches table definition in https://github.com/stackrox/automation-iac/blob/main/resources/testing/stackrox-ci/metrics.tf
+    # for the order of columns.
+    if ! jq --raw-output \
+      --argjson cols '["attempt_id", "started_at", "image", "duration_ms", "node", "size_bytes", "error", "build_id", "job_name", "orchestrator", "build_tag"]' \
+      --argjson extra "${extra_fields}" \
+      'map(.started_at = (.started_at | todate) | ($extra+.) as $row | $cols | map($row[.])) as $rows | $cols, $rows[] | @csv' \
+      "${fetcher_metrics_json}" > "${fetcher_metrics}"; then
+        info "WARNING: Failed to convert image prefetcher metrics to CSV with extra fields ${extra_fields}"
+        info "Dumping the input JSON file:"
+        jq . < "${fetcher_metrics_json}"
+        die "Failed to convert image prefetcher metrics to CSV, aborting."
+    fi
+    rm -f "${fetcher_metrics_json}"
+
+    if save_image_prefetches_metrics "${fetcher_metrics}"; then
+        info "Image pre-fetcher metrics retrieved and saved."
+    else
+        info "WARNING: failed to save image pre-fetcher metrics."
+    fi
+    rm -f "${fetcher_metrics}"
+}
+
+service_get_endpoint() {
+    jq -r '.status.loadBalancer.ingress // error("List of ingress points of LB " + .metadata.name + " is empty.") | .[0] | .hostname // .ip'
+}
+
+populate_prefetcher_image_list() {
+    local name="$1"
+    local image_list="$2"
+
+    case "$name" in
+    stackrox-images)
+        local image_tag_list
+        image_tag_list=$(mktemp)
+        populate_stackrox_image_list "${image_tag_list}"
+        # convert format from "basename tag" to "quay.io/.../basename:tag" expected by pre-fetcher
+        awk '{print "quay.io/rhacs-eng/" $1 ":" $2}' "$image_tag_list" > "$image_list"
+        rm -f "$image_tag_list"
+        ;;
+    qa-e2e)
+        cp "$SCRIPTS_ROOT/qa-tests-backend/scripts/images-to-prefetch.txt" "$image_list"
+        ;;
+    *)
+        die "ERROR: An unsupported image prefetcher target was requested: $name"
+        ;;
+    esac
+}
+
+populate_stackrox_image_list() {
+    local image_list="$1"
+
+    local tag
+    tag="$(make --quiet --no-print-directory tag)"
+    local operator_metadata_tag
+    operator_metadata_tag="$(echo "v${tag}" | sed 's,x,0,')"
+    local operator_controller_tag="${tag//x/0}"
+
     # Require images based on the job
     case "$CI_JOB_NAME" in
         *-operator-e2e-tests)
-            reqd_images=("stackrox-operator" "stackrox-operator-bundle" "stackrox-operator-index" "main")
+            cat >> "${image_list}" << END
+stackrox-operator ${operator_controller_tag}
+stackrox-operator-bundle ${operator_metadata_tag}
+stackrox-operator-index ${operator_metadata_tag}
+main ${tag}
+central-db ${tag}
+collector ${tag}
+scanner ${tag}
+scanner-db ${tag}
+scanner-v4 ${tag}
+scanner-v4-db ${tag}
+END
             ;;
         *-race-condition-qa-e2e-tests)
-            reqd_images=("main-rcd" "roxctl")
+            cat >> "${image_list}" << END
+central-db ${tag}
+main ${tag}-rcd
+roxctl ${tag}
+END
             if is_in_PR_context && ! pr_has_label "ci-build-race-condition-debug"; then
                 echo "ERROR: Your PR is missing the \"ci-build-race-condition-debug\" label."
                 echo "ERROR: This label is required to build the images for $CI_JOB_NAME."
@@ -506,87 +836,86 @@ poll_for_system_test_images() {
             fi
             ;;
         *)
-            reqd_images=("main" "roxctl")
+            cat >> "${image_list}" << END
+central-db ${tag}
+main ${tag}
+roxctl ${tag}
+END
             ;;
     esac
 
-    if [[ "${ROX_POSTGRES_DATASTORE:-}" == "true" ]] && [[ ! " ${reqd_images[*]} " =~ " central-db " ]]; then
-        reqd_images+=("central-db")
-    fi
-
     if [[ "${DEPLOY_STACKROX_VIA_OPERATOR:-}" == "true" ]]; then
-        reqd_images+=("stackrox-operator" "stackrox-operator-bundle" "stackrox-operator-index")
+            cat >> "${image_list}" << END
+stackrox-operator ${operator_controller_tag}
+stackrox-operator-bundle ${operator_metadata_tag}
+stackrox-operator-index ${operator_metadata_tag}
+END
     fi
 
-    info "Will poll for: ${reqd_images[*]}"
-
-    local tag
-    tag="$(make --quiet tag)"
-    local start_time
-    start_time="$(date '+%s')"
-
-    while true; do
-        local all_exist=true
-        for image in "${reqd_images[@]}"
-        do
-            if ! check_rhacs_eng_image_exists "$image" "$tag"; then
-                info "$image does not exist"
-                all_exist=false
-                break
-            fi
-        done
-
-        if $all_exist; then
-            info "All images exist"
-            break
-        fi
-        if (( $(date '+%s') - start_time > time_limit )); then
-           die "ERROR: Timed out waiting for images after ${time_limit} seconds"
-        fi
-        sleep 60
-    done
-
-    touch "${STATE_IMAGES_AVAILABLE}"
+    # Remove duplicates.
+    unique="$(mktemp)"
+    sort -u "${image_list}" > "${unique}"
+    cat "${unique}" > "${image_list}"
+    rm -f "${unique}"
 }
 
 check_rhacs_eng_image_exists() {
     local name="$1"
     local tag="$2"
 
-    if [[ "$name" =~ stackrox-operator-(bundle|index) ]]; then
-        tag="$(echo "v${tag}" | sed 's,x,0,')"
-    elif [[ "$name" == "stackrox-operator" ]]; then
-        tag="${tag//x/0}"
-    elif [[ "$name" == "main-rcd" ]]; then
-        name="main"
-        tag="${tag}-rcd"
-    fi
-
     local url="https://quay.io/api/v1/repository/rhacs-eng/$name/tag?specificTag=$tag"
     info "Checking for $name using $url"
     local check
-    check=$(curl --location -sS -H "Authorization: Bearer ${QUAY_RHACS_ENG_BEARER_TOKEN}" "$url")
+    local extra_args=()
+    local public_images=("stackrox-operator-index")
+    if [[ -n "${QUAY_RHACS_ENG_BEARER_TOKEN:-}" ]]; then
+        extra_args+=("-H" "Authorization: Bearer ${QUAY_RHACS_ENG_BEARER_TOKEN}")
+    else
+        # shellcheck disable=SC2076
+        if [[ ! " ${public_images[*]} " =~ " ${name} " ]]; then
+            info "Warning: Checking for image existence without QUAY_RHACS_ENG_BEARER_TOKEN is not supported for image ${name}:${tag}"
+            info "Warning: It is only supported for the following public image repositories: ${public_images[*]}"
+        fi
+    fi
+    check=$(curl --location -sS "${extra_args[@]}" "$url")
     echo "$check"
     [[ "$(jq -r '.tags | first | .name' <<<"$check")" == "$tag" ]]
 }
 
+check_build_workflows() {
+    local commit_sha="$1"
+
+    {
+        echo
+        info "GitHub Actions workflow status for build.yaml:"
+        check-workflow-run \
+            --workflow=build.yaml \
+            --head-SHA="${commit_sha}"
+
+        echo
+        info "GitHub Actions workflow status for scanner-build.yaml:"
+        check-workflow-run \
+            --workflow=scanner-build.yaml \
+            --head-SHA="${commit_sha}"
+    } | tee "${STATE_BUILD_RESULTS}" || true
+}
 
 check_scanner_version() {
-    if ! is_release_version "$(make --quiet scanner-tag)"; then
+    if ! is_release_version "$(make --quiet --no-print-directory scanner-tag)"; then
         echo "::error::Scanner tag does not look like a release tag. Please update SCANNER_VERSION file before releasing."
         exit 1
     fi
 }
 
 check_collector_version() {
-    if ! is_release_version "$(make --quiet collector-tag)"; then
+    if ! is_release_version "$(make --quiet --no-print-directory collector-tag)"; then
         echo "::error::Collector tag does not look like a release tag. Please update COLLECTOR_VERSION file before releasing."
         exit 1
     fi
 }
 
 publish_roxctl() {
- if [[ "$#" -ne 1 ]]; then
+    if [[ "$#" -ne 1 ]]; then
         die "missing arg. usage: publish_roxctl <tag>"
     fi
 
@@ -596,9 +925,24 @@ publish_roxctl() {
 
     local temp_dir
     temp_dir="$(mktemp -d)"
-    "${SCRIPTS_ROOT}/scripts/ci/roxctl-publish/prepare.sh" . "${temp_dir}"
-    "${SCRIPTS_ROOT}/scripts/ci/roxctl-publish/publish.sh" "${temp_dir}" "${tag}" "gs://sr-roxc"
-    "${SCRIPTS_ROOT}/scripts/ci/roxctl-publish/publish.sh" "${temp_dir}" "${tag}" "gs://rhacs-openshift-mirror-src/assets"
+    "${SCRIPTS_ROOT}/scripts/ci/artifacts-publish/prepare-roxctl.sh" . "${temp_dir}"
+    "${SCRIPTS_ROOT}/scripts/ci/artifacts-publish/publish.sh" "${temp_dir}" "${tag}" "gs://sr-roxc"
+    "${SCRIPTS_ROOT}/scripts/ci/artifacts-publish/publish.sh" "${temp_dir}" "${tag}" "gs://rhacs-openshift-mirror-src/assets"
+}
+
+publish_openapispec() {
+    if [[ "$#" -ne 1 ]]; then
+        die "missing arg. usage: publish_openapispec <tag>"
+    fi
+
+    local tag="$1"
+
+    echo "Push OpenAPI spec to gs://rhacs-openshift-mirror-src/assets" >> "${GITHUB_STEP_SUMMARY}"
+
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    "${SCRIPTS_ROOT}/scripts/ci/artifacts-publish/prepare-openapispec.sh" "${temp_dir}" "${tag}"
+    "${SCRIPTS_ROOT}/scripts/ci/artifacts-publish/publish.sh" "${temp_dir}" "${tag}" "gs://rhacs-openshift-mirror-src/openapi-spec"
 }
 
 push_helm_charts() {
@@ -614,10 +958,8 @@ push_helm_charts() {
     local secured_cluster_services_chart_dir
     central_services_chart_dir="$(mktemp -d)"
     secured_cluster_services_chart_dir="$(mktemp -d)"
-    roxctl helm output central-services --image-defaults=stackrox.io --output-dir "${central_services_chart_dir}/stackrox"
     roxctl helm output central-services --image-defaults=rhacs --output-dir "${central_services_chart_dir}/rhacs"
     roxctl helm output central-services --image-defaults=opensource --output-dir "${central_services_chart_dir}/opensource"
-    roxctl helm output secured-cluster-services --image-defaults=stackrox.io --output-dir "${secured_cluster_services_chart_dir}/stackrox"
     roxctl helm output secured-cluster-services --image-defaults=rhacs --output-dir "${secured_cluster_services_chart_dir}/rhacs"
     roxctl helm output secured-cluster-services --image-defaults=opensource --output-dir "${secured_cluster_services_chart_dir}/opensource"
     "${SCRIPTS_ROOT}/scripts/ci/publish-helm-charts.sh" "${tag}" "${central_services_chart_dir}" "${secured_cluster_services_chart_dir}"
@@ -629,7 +971,7 @@ mark_collector_release() {
     fi
 
     local tag="$1"
-    local username="roxbot"
+    local username="${GITHUB_USERNAME}"
 
     info "Check out collector source code"
 
@@ -640,11 +982,6 @@ mark_collector_release() {
 
     collector_version="$(cat COLLECTOR_VERSION)"
     pushd /tmp/collector || exit
-    gitbot(){
-        git -c "user.name=RoxBot" -c "user.email=roxbot@stackrox.com" \
-            -c "url.https://${GITHUB_TOKEN}:x-oauth-basic@github.com/.insteadOf=https://github.com/" \
-            "${@}"
-    }
     gitbot checkout master && gitbot pull
 
     branch_name="release-${tag}/update-RELEASED_VERSIONS"
@@ -660,7 +997,7 @@ mark_collector_release() {
 
     # We need to make sure the file ends with a newline so as not to corrupt it when appending.
     [[ ! -f RELEASED_VERSIONS ]] || sed --in-place -e '$a'\\ RELEASED_VERSIONS
-    if grep -q "${tag}" RELEASED_VERSIONS; then
+    if grep -qF "${tag}" RELEASED_VERSIONS; then
         echo "Skip RELEASED_VERSIONS file change, already up to date ..." >> "${GITHUB_STEP_SUMMARY}"
     else
         echo "Update RELEASED_VERSIONS file ..." >> "${GITHUB_STEP_SUMMARY}"
@@ -682,6 +1019,13 @@ mark_collector_release() {
             --body "Add entry into the RELEASED_VERSIONS file" >> "${GITHUB_STEP_SUMMARY}"
     fi
     popd
+}
+
+gitbot() {
+    git -c "user.name=${GITHUB_USERNAME}" \
+        -c "user.email=${GITHUB_EMAIL}" \
+        -c "url.https://${GITHUB_TOKEN}:x-oauth-basic@github.com/.insteadOf=https://github.com/" \
+        "${@}"
 }
 
 is_tagged() {
@@ -762,6 +1106,8 @@ get_base_ref() {
         else
             die "Expect PULL_BASE_REF or CLONEREFS_OPTIONS"
         fi
+    elif is_GITHUB_ACTIONS; then
+        echo "${GITHUB_BASE_REF}"
     else
         die "unsupported"
     fi
@@ -798,6 +1144,8 @@ get_repo_full_name() {
 get_commit_sha() {
     if is_OPENSHIFT_CI; then
         echo "${PULL_PULL_SHA:-${PULL_BASE_SHA}}"
+    elif is_GITHUB_ACTIONS; then
+        echo "${GITHUB_SHA}"
     else
         die "unsupported"
     fi
@@ -813,7 +1161,7 @@ pr_has_label() {
     local exitstatus=0
     pr_details="${2:-$(get_pr_details)}" || exitstatus="$?"
     if [[ "$exitstatus" != "0" ]]; then
-        info "Warning: checking for a label in a non PR context"
+        info "Warning: checking for a label in a non PR context: details: ${pr_details}, exitstatus: ${exitstatus}"
         return 1
     fi
 
@@ -884,15 +1232,16 @@ get_pr_details() {
 
     if [[ -n "${_PR_DETAILS}" ]]; then
         echo "${_PR_DETAILS}"
-        return
+        return 0
     fi
     if [[ -e "${_PR_DETAILS_CACHE_FILE}" ]]; then
         _PR_DETAILS="$(cat "${_PR_DETAILS_CACHE_FILE}")"
         echo "${_PR_DETAILS}"
-        return
+        return 0
     fi
 
     _not_a_PR() {
+        echo "This does not appear to be a PR context" >&2
         echo '{ "msg": "this is not a PR" }'
         exit 1
     }
@@ -907,7 +1256,7 @@ get_pr_details() {
             org=$(jq -r <<<"$CLONEREFS_OPTIONS" '.refs[0].org')
             repo=$(jq -r <<<"$CLONEREFS_OPTIONS" '.refs[0].repo')
         else
-            echo "Expect a JOB_SPEC or CLONEREFS_OPTIONS"
+            echo "Expect a JOB_SPEC or CLONEREFS_OPTIONS" >&2
             exit 2
         fi
         [[ "${pull_request}" == "null" ]] && _not_a_PR
@@ -917,9 +1266,11 @@ get_pr_details() {
         org="${GITHUB_REPOSITORY_OWNER}"
         repo="${GITHUB_REPOSITORY#*/}"
     else
-        echo "Unsupported CI"
+        echo "Unsupported CI" >&2
         exit 2
     fi
+
+    local headers url pr_details
 
     headers=()
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
@@ -927,118 +1278,25 @@ get_pr_details() {
     fi
 
     url="https://api.github.com/repos/${org}/${repo}/pulls/${pull_request}"
-    pr_details=$(curl --retry 5 -sS "${headers[@]}" "${url}")
+
+    if ! pr_details=$(curl --retry 5 --retry-connrefused -sS "${headers[@]}" "${url}"); then
+        echo "Github API error: $pr_details, exit code: $?" >&2
+        exit 2
+    fi
+
     if [[ "$(jq .id <<<"$pr_details")" == "null" ]]; then
         # A valid PR response is expected at this point
-        echo "Invalid response from GitHub: $pr_details"
+        echo "Invalid response from GitHub: $pr_details" >&2
         exit 2
     fi
     _PR_DETAILS="$pr_details"
     echo "$pr_details" | tee "${_PR_DETAILS_CACHE_FILE}"
 }
 
-GATE_JOBS_CONFIG="$SCRIPTS_ROOT/scripts/ci/gate-jobs-config.json"
-
-gate_job() {
-    if [[ "$#" -ne 1 ]]; then
-        die "missing arg. usage: gate_job <job>"
-    fi
-
-    local job="$1"
-    local job_config
-    job_config="$(jq -r .\""$job"\" "$GATE_JOBS_CONFIG")"
-
-    info "Will determine whether to run: $job"
-
-    if ! is_in_PR_context; then
-        # When not in a PR context, the jobs to run are simply defined in openshift/release config.
-        info "$job will run because this is not in a PR context"
-        return
-    fi
-
-    if is_openshift_CI_rehearse_PR; then
-        info "$job will run because this is an openshift/release PR"
-        return
-    fi
-
-    if [[ "$job_config" == "null" ]]; then
-        info "$job will run because there is no extra gating criteria for $job"
-        return
-    fi
-
-    gate_pr_job "$job_config"
-}
-
-get_var_from_job_config() {
-    local var_name="$1"
-    local job_config="$2"
-
-    local value
-    value="$(jq -r ."$var_name" <<<"$job_config")"
-    if [[ "$value" == "null" ]]; then
-        die "$var_name is not defined in this jobs config"
-    fi
-    if [[ "${value:0:1}" == "[" ]]; then
-        value="$(jq -cr '.[]' <<<"$value")"
-    fi
-    echo "$value"
-}
-
-gate_pr_job() {
-    local job_config="$1"
-
-    local run_with_changed_path
-    local changed_path_to_ignore
-    run_with_changed_path="$(get_var_from_job_config run_with_changed_path "$job_config")"
-    changed_path_to_ignore="$(get_var_from_job_config changed_path_to_ignore "$job_config")"
-
-    if [[ -n "${run_with_changed_path}" || -n "${changed_path_to_ignore}" ]]; then
-        local diff_base
-        if is_OPENSHIFT_CI; then
-            if [[ -n "${PULL_BASE_SHA:-}" ]]; then
-                diff_base="${PULL_BASE_SHA:-}"
-            else
-                diff_base="$(jq -r '.refs[0].base_sha' <<<"$CLONEREFS_OPTIONS")"
-            fi
-            echo "Determined diff-base as ${diff_base}"
-            [[ "${diff_base}" != "null" ]] || die "Could not find base_sha in PULL_BASE_SHA or CLONEREFS_OPTIONS"
-        else
-            die "unsupported"
-        fi
-        echo "Diffbase diff:"
-        { git diff --name-only "${diff_base}" | cat ; } || true
-        ignored_regex="${changed_path_to_ignore}"
-        [[ -n "$ignored_regex" ]] || ignored_regex='$^' # regex that matches nothing
-        match_regex="${run_with_changed_path}"
-        [[ -n "$match_regex" ]] || match_regex='^.*$' # grep -E -q '' returns 0 even on empty input, so we have to specify some pattern
-        if grep -E -q "$match_regex" < <({ git diff --name-only "${diff_base}" || echo "???" ; } | grep -E -v "$ignored_regex"); then
-            info "$job will run because paths matching $match_regex (and not matching ${ignored_regex}) had changed."
-            return
-        fi
-    fi
-
-    info "$job will be skipped"
-    exit 0
-}
-
 openshift_ci_mods() {
     info "BEGIN OpenShift CI mods"
 
-    local debug="${ARTIFACT_DIR:-/tmp}/debug.txt"
-
-    echo "Env A-Z dump:" > "${debug}"
-    env | sort | grep -E '^[A-Z]' >> "${debug}" || true
-
-    ensure_writable_home_dir
-
-    # Prevent fatal error "detected dubious ownership in repository" from recent git.
-    git config --global --add safe.directory "$(pwd)"
-
-    echo "Git log:" >> "${debug}"
-    git log --oneline --decorate -n 20 >> "${debug}" || true
-
-    echo "Recent git refs:" >> "${debug}"
-    git for-each-ref --format='%(creatordate) %(refname)' --sort=creatordate | tail -20 >> "${debug}"
+    openshift_ci_debug
 
     info "Current Status:"
     "$ROOT/status.sh" || true
@@ -1068,7 +1326,7 @@ openshift_ci_mods() {
     fi
 
     # Target a tag if HEAD is tagged.
-    BUILD_TAG="$(git tag --sort=creatordate --contains | tail -1)" || echo "Warning: Cannot get tag"
+    BUILD_TAG="$(git describe --exact-match --tags HEAD)" || echo "Warning: Cannot get tag"
     export BUILD_TAG
 
     # For gradle
@@ -1079,10 +1337,30 @@ openshift_ci_mods() {
     info "Status after mods:"
     "$ROOT/status.sh" || true
 
-    STACKROX_BUILD_TAG=$(make --quiet tag)
+    STACKROX_BUILD_TAG=$(make --quiet --no-print-directory tag)
     export STACKROX_BUILD_TAG
 
     info "END OpenShift CI mods"
+}
+
+# openshift_ci_debug() - store useful state (env & git) to help debug CI.
+# NOTE: only run before any creds are imported to the environment.
+openshift_ci_debug() {
+    local debug="${ARTIFACT_DIR:-/tmp}/debug.txt"
+
+    echo "Env A-Z dump:" > "${debug}"
+    env | sort | grep -E '^[A-Z]' >> "${debug}" || true
+
+    ensure_writable_home_dir
+
+    # Prevent fatal error "detected dubious ownership in repository" from recent git.
+    git config --global --add safe.directory "$(pwd)"
+
+    echo "Git log:" >> "${debug}"
+    git log --oneline --decorate -n 20 >> "${debug}" || true
+
+    echo "Recent git refs:" >> "${debug}"
+    git for-each-ref --format='%(creatordate) %(refname)' --sort=creatordate | tail -20 >> "${debug}"
 }
 
 ensure_writable_home_dir() {
@@ -1097,9 +1375,6 @@ ensure_writable_home_dir() {
 
 openshift_ci_import_creds() {
     shopt -s nullglob
-    for cred in /tmp/secret/**/[A-Z]*; do
-        export "$(basename "$cred")"="$(cat "$cred")"
-    done
     for cred in /tmp/vault/**/[A-Z]*; do
         export "$(basename "$cred")"="$(cat "$cred")"
     done
@@ -1136,6 +1411,15 @@ openshift_ci_e2e_mods() {
         env | grep -e ^KUBERNETES_ | cut -d= -f1 | awk '{ print "unset", $1 }' > "$envfile"
         # shellcheck disable=SC1090
         source "$envfile"
+    fi
+
+    if [[ "${JOB_NAME:-}" =~ -eks- ]]; then
+        # Explicitly set AWS creds from the stackrox-stackrox-e2e-tests vault to
+        # override any from other vaults e.g. automation-flavors.
+        AWS_ACCESS_KEY_ID="$(cat /tmp/vault/stackrox-stackrox-e2e-tests/AWS_ACCESS_KEY_ID)"
+        AWS_SECRET_ACCESS_KEY="$(cat /tmp/vault/stackrox-stackrox-e2e-tests/AWS_SECRET_ACCESS_KEY)"
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+        aws sts get-caller-identity | jq -r '.Arn'
     fi
 }
 
@@ -1186,8 +1470,8 @@ handle_nightly_binary_version_mismatch() {
     echo "Current roxctl is: $(command -v roxctl || true), version: $(roxctl version || true)"
 
     if ! [[ "$(roxctl version || true)" =~ nightly-$(date '+%Y%m%d') ]]; then
-        make cli-build upgrader
-        install_built_roxctl_in_gopath
+        make cli_host-arch upgrader
+        make cli-install
         echo "Replacement roxctl is: $(command -v roxctl || true), version: $(roxctl version || true)"
     fi
 }
@@ -1206,6 +1490,14 @@ store_qa_test_results() {
     done
 }
 
+remove_qa_test_results() {
+    rm -rf qa-tests-backend/build/test-results
+}
+
+stored_test_results() {
+    echo "${ARTIFACT_DIR}/junit-$1"
+}
+
 store_test_results() {
     if [[ "$#" -ne 2 ]]; then
         die "missing args. usage: store_test_results <from> <to>"
@@ -1220,13 +1512,19 @@ store_test_results() {
 
     info "Copying test results from $from to $to"
 
-    local dest="${ARTIFACT_DIR}/junit-$to"
+    local dest
+    dest="$(stored_test_results "$to")"
 
+    mkdir -p "$dest"
     cp -a "$from" "$dest" || true # (best effort)
 }
 
 post_process_test_results() {
-    if ! is_OPENSHIFT_CI || is_in_PR_context; then
+    if [[ "$#" -ne 2 ]]; then
+        die "missing args. usage: post_process_test_results <slack attachments file.json> <summary output.json>"
+    fi
+
+    if ! is_OPENSHIFT_CI; then
         return 0
     fi
 
@@ -1235,44 +1533,139 @@ post_process_test_results() {
         return 0
     fi
 
+    local slack_attachments_file="$1"
+    local summary_file="$2"
     local csv_output
+    local extra_args=()
+    local base_link
+    local calculated_base_link
+    local create_jiras
+    local jira_project="ROX"
+    local prow_job_link
 
     set +u
     {
-        info "Creating JIRA issues for failures found in ${ARTIFACT_DIR}"
+        info "Post processing junit records to JIRA issues, BigQuery metrics and Slack attachments as appropriate"
+
+        prow_job_link="$(make_prow_job_link)"
+
+        if is_in_PR_context; then
+            if pr_has_label "ci-test-junit-processing"; then
+                create_jiras="true"
+            else
+                create_jiras="false"
+            fi
+            jira_project="RS"
+        else
+            if [[ "${PULL_BASE_REF:-unknown}" =~ ^release ]]; then
+                create_jiras="false"
+            elif [[ "${JOB_NAME:-unknown}" =~ interop ]]; then
+                create_jiras="false"
+            else
+                create_jiras="true"
+            fi
+        fi
+
+        if [[ "${create_jiras}" == "false" ]]; then
+            extra_args=(--dry-run)
+            info "Will use junit2jira to create CSV for BigQuery input"
+        else
+            info "Will create JIRA issues for junit failures found in ${ARTIFACT_DIR}"
+        fi
+
         csv_output="$(mktemp --suffix=.csv)"
-        curl --retry 5 -SsfL https://github.com/stackrox/junit2jira/releases/download/v0.0.8/junit2jira -o junit2jira && \
+        # We need a link to repository. In case it's not part of job spec (e.g., periodic`s)
+        # we will fallback to short commit
+        base_link="$(echo "$JOB_SPEC" | jq ".refs.base_link | select( . != null )" -r)"
+        calculated_base_link="https://github.com/stackrox/stackrox/commit/$(make --quiet --no-print-directory shortcommit)"
+        curl --retry 5 --retry-connrefused -SsfL https://github.com/stackrox/junit2jira/releases/download/v0.0.23/junit2jira -o junit2jira && \
         chmod +x junit2jira && \
         ./junit2jira \
-            -base-link "$(echo "$JOB_SPEC" | jq ".refs.base_link" -r)" \
-            -build-id "$BUILD_ID" \
-            -build-link "https://prow.ci.openshift.org/view/gs/origin-ci-test/logs/$JOB_NAME/$BUILD_ID" \
-            -build-tag "$STACKROX_BUILD_TAG" \
-            -job-name "$JOB_NAME" \
+            -base-link "${base_link:-$calculated_base_link}" \
+            -build-id "${BUILD_ID}" \
+            -build-link "${prow_job_link}" \
+            -build-tag "${STACKROX_BUILD_TAG}" \
+            -csv-output "${csv_output}" \
+            -jira-project "${jira_project}" \
+            -job-name "${JOB_NAME}" \
             -junit-reports-dir "${ARTIFACT_DIR}" \
             -orchestrator "${ORCHESTRATOR_FLAVOR:-PROW}" \
             -threshold 5 \
-            -csv-output "${csv_output}"
+            -html-output "$ARTIFACT_DIR/junit2jira-summary.html" \
+            -slack-output "${slack_attachments_file}" \
+            -summary-output "${summary_file}" \
+            "${extra_args[@]}"
 
-        info "Creating Big Query test records from ${csv_output}"
-        bq load \
-            --skip_leading_rows=1 \
-            --allow_quoted_newlines \
-            ci_metrics.stackrox_tests "${csv_output}"
+        save_test_metrics "${csv_output}"
     } || true
     set -u
 }
 
-send_slack_notice_for_failures_on_merge() {
-    local exitstatus="${1:-}"
+gate_flaky_tests() {
+    local exit_code="$1"
 
-    if ! is_OPENSHIFT_CI || [[ "$exitstatus" == "0" ]] || is_in_PR_context || is_nightly_run; then
+    if [[ "${exit_code}" == "0" ]]; then
+        exit "${exit_code}"
+    fi
+
+    # Gating flaky tests is enabled only on PRs.
+    if ! is_in_PR_context; then
+        exit "${exit_code}"
+    fi
+
+    # Prepare flakechecker
+    curl --retry 5 --retry-connrefused -SsfL https://github.com/stackrox/junit2jira/releases/download/v0.0.23/flakechecker -o /tmp/flakechecker || exit "${exit_code}"
+    chmod +x /tmp/flakechecker
+    setup_gcp || echo "setup_gcp called"
+
+    # Run flakechecker for failed test
+    local config_file="${SCRIPTS_ROOT}/scripts/ci/flakechecker/flake-config.yml"
+    if /tmp/flakechecker -config-file "${config_file}" -job-name "${JOB_NAME}" -junit-reports-dir "${ARTIFACT_DIR}"; then
+      # Flakechecker exits successfully IF AND ONLY IF it finds a NON-EMPTY set of test failures in the
+      # JUnit report, AND ALL these test failures are found to be known flaky tests defined in flake-config.yml file.
+      # And the recent failure ratio for found failed tests is below threshold defined in flake-config.yml.
+      #
+      # In this case, we change the overall exit code of the job to success, hoping that the failure was only
+      # due to the tests flaky behavior (and not some other issue in the test job).
+      exit 0
+    else
+      # Flakechecker fails in case it identified test failures which do not qualify for suppression, OR
+      # in case there were no test failures at all in the JUnit report (a sign of problems elsewhere in the test job).
+      #
+      # In this case we keep the exit code as it was.
+      exit "${exit_code}"
+    fi
+}
+
+make_prow_job_link() {
+    local prow_job_link="https://prow.ci.openshift.org/view/gs/origin-ci-test/"
+    if is_in_PR_context; then
+        prow_job_link+="pr-logs/pull/stackrox_stackrox/${PULL_NUMBER}/"
+    else
+        prow_job_link+="logs/"
+    fi
+    prow_job_link+="$JOB_NAME/$BUILD_ID"
+    echo "${prow_job_link}"
+}
+
+# There are currently two openshift-ci steps where junit failures are summarized for slack.
+JOB_SLACK_FAILURE_ATTACHMENTS="${SHARED_DIR:-/tmp}/job-slack-failure-attachments.json"
+END_SLACK_FAILURE_ATTACHMENTS="/tmp/end-slack-failure-attachments.json"
+JOB_JUNIT2JIRA_SUMMARY_FILE="${SHARED_DIR:-/tmp}/job-junit2jira-summary.json"
+END_JUNIT2JIRA_SUMMARY_FILE="/tmp/end-junit2jira-summary.json"
+
+send_slack_failure_summary() {
+    if ! is_OPENSHIFT_CI || is_nightly_run; then
         return 0
     fi
 
-    local tag
-    tag="$(make --quiet tag)"
-    if [[ "$tag" =~ $RELEASE_RC_TAG_BASH_REGEX ]]; then
+    if [[ "${PULL_BASE_REF:-unknown}" =~ ^release ]]; then
+        info "Skipping slack message for release branches"
+        return 0
+    fi
+
+    if [[ "${JOB_TYPE:-unknown}" == "periodic" ]]; then
+        info "Skipping slack message for periodics (scheduled prow jobs)"
         return 0
     fi
 
@@ -1282,25 +1675,31 @@ send_slack_notice_for_failures_on_merge() {
         return 0
     fi
 
+    # Check env required for the job link and slack an error message when
+    # undefined.
+    _slack_check_env "BUILD_ID"
+    _slack_check_env "JOB_NAME"
+    local prow_job_link
+    prow_job_link="$(make_prow_job_link)"
+
     local webhook_url="${TEST_FAILURES_NOTIFY_WEBHOOK}"
-    local log_url="https://prow.ci.openshift.org/view/gs/origin-ci-test/logs/${JOB_NAME:-missing}/${BUILD_ID:-missing}"
 
-    function slack_error() {
-        echo "ERROR: $1"
-        curl -XPOST -d @- -H 'Content-Type: application/json' "$webhook_url" << __EOM__
-{ "text": "*An error occurred dealing with a test failure:*\n\t- Test: ${log_url}.\n\t- $1." }
-__EOM__
-    }
+    _slack_check_env "PULL_BASE_SHA"
+    local commit_sha="${PULL_BASE_SHA}"
 
-    function check_env() {
-        (
-            set +u
-            if [[ -z "$(eval echo "\$$1")" ]]; then
-                slack_error "An expected environment variable is unset/empty: $1"
-                return 1
-            fi
-        )
-    }
+    if is_in_PR_context; then
+        if pr_has_label "ci-test-junit-processing"; then
+            # Send to #acs-slack-ci-integration-testing when testing the
+            # JUNIT -> Jira, BigQuery, Slack pipeline.
+            webhook_url="${SLACK_CI_INTEGRATION_TESTING_WEBHOOK}"
+            commit_sha="${PULL_PULL_SHA}"
+        else
+            info "Skipping slack message for PRs"
+            return 0
+        fi
+    fi
+
+    local org repo
 
     if [[ -n "${JOB_SPEC:-}" ]]; then
         org=$(jq -r <<<"$JOB_SPEC" '.refs.org')
@@ -1309,29 +1708,25 @@ __EOM__
         org=$(jq -r <<<"$CLONEREFS_OPTIONS" '.refs[0].org')
         repo=$(jq -r <<<"$CLONEREFS_OPTIONS" '.refs[0].repo')
     else
-        slack_error "Expect a JOB_SPEC or CLONEREFS_OPTIONS"
+        _send_slack_error "Expect a JOB_SPEC or CLONEREFS_OPTIONS"
         return 1
     fi
 
     if [[ "$org" == "null" ]] || [[ "$repo" == "null" ]]; then
-        slack_error "Could not determine org and/or repo"
+        _send_slack_error "Could not determine org and/or repo"
         return 1
     fi
 
-    check_env "PULL_BASE_SHA"
-    check_env "JOB_NAME_SAFE"
-    check_env "JOB_NAME"
-    check_env "BUILD_ID"
-
-    local commit_details_url="https://api.github.com/repos/${org}/${repo}/commits/${PULL_BASE_SHA}"
+    local commit_details_url="https://api.github.com/repos/${org}/${repo}/commits/${commit_sha}"
     local exitstatus=0
     local commit_details
-    commit_details=$(curl --retry 5 -sS "${commit_details_url}") || exitstatus="$?"
+    commit_details=$(curl --retry 5 --retry-connrefused -sS "${commit_details_url}") || exitstatus="$?"
     if [[ "$exitstatus" != "0" ]]; then
-        slack_error "Cannot get commit details: ${commit_details}"
+        _send_slack_error "Cannot get commit details: ${commit_details}"
         return 1
     fi
 
+    _slack_check_env "JOB_NAME_SAFE"
     local job_name="${JOB_NAME_SAFE#merge-}"
 
     local commit_msg
@@ -1344,50 +1739,18 @@ __EOM__
     local author_login
     author_login=$(jq -r <<<"$commit_details" '.author.login') || exitstatus="$?"
     if [[ "$exitstatus" != "0" ]]; then
-        slack_error "Error parsing the commit details: ${commit_details}"
+        _send_slack_error "Error parsing the commit details: ${commit_details}"
         return 1
     fi
 
-    local slack_mention
-    slack_mention="$("$SCRIPTS_ROOT"/scripts/ci/get-slack-user-id.sh "$author_login")"
-    if [[ -n "$slack_mention" ]]; then
-      slack_mention="<@${slack_mention}>"
-    else
-      slack_mention="_unable to resolve Slack user for GitHub login ${author_login}_"
-    fi
+    local mention_author=""
+    _set_mention_author
 
-    info "Converting junit failures to slack attachments"
+    local slack_attachments=""
+    _make_slack_failure_attachments
 
-    local slack_attachments='
-[
-  {
-    "color": "#bb2124",
-    "blocks": [
-      {
-        "type": "section",
-        "text": {
-          "type": "plain_text",
-          "text": "Could not parse junit files. Check build logs for more information."
-        }
-      }
-    ]
-  }
-]
-'
-    if [[ -n "${ARTIFACT_DIR}" ]]; then
-        if ! command -v junit-parse >/dev/null 2>&1; then
-            get_junit_parse_cli || true
-        fi
-        if command -v junit-parse >/dev/null 2>&1; then
-            local junit_file_names=()
-            while IFS='' read -r line; do junit_file_names+=("$line"); done < <(find "${ARTIFACT_DIR}" -type f -name '*.xml' || true)
-            local check_slack_attachments
-            check_slack_attachments=$(junit-parse "${junit_file_names[@]}") || exitstatus="$?"
-            if [[ "$exitstatus" == "0" ]]; then
-                slack_attachments="$check_slack_attachments"
-            fi
-        fi
-    fi
+    local slack_mention=""
+    _make_slack_mention
 
     # shellcheck disable=SC2016
     local body='
@@ -1405,7 +1768,7 @@ __EOM__
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "*Commit:* <\($commit_url)|\($commit_msg)>\n*Repo:* \($repo)\n*Author:* \($author_name), \($slack_mention)\n*Log:* \($log_url)"
+                "text": "*Commit:* <\($commit_url)|\($commit_msg)>\n*Repo:* \($repo)\n*Author:* \($author_name)\($slack_mention)\n*Log:* \($prow_job_link)"
             }
         },
         {
@@ -1425,23 +1788,255 @@ __EOM__
 }
 '
 
-    payload="$(jq --null-input \
-      --arg job_name "$job_name" \
-      --arg commit_url "$commit_url" \
-      --arg commit_msg "$commit_msg" \
-      --arg repo "$repo" \
-      --arg author_name "$author_name" \
-      --arg slack_mention "$slack_mention" \
-      --arg log_url "$log_url" \
-      --argjson slack_attachments "$slack_attachments" \
-      "$body")"
+    local payload
+    if ! payload="$(jq --null-input \
+                       --arg job_name "$job_name" \
+                       --arg commit_url "$commit_url" \
+                       --arg commit_msg "$commit_msg" \
+                       --arg repo "$repo" \
+                       --arg author_name "$author_name" \
+                       --arg slack_mention "$slack_mention" \
+                       --arg prow_job_link "$prow_job_link" \
+                       --argjson slack_attachments "$slack_attachments" \
+                       "$body")"; then
+        _send_slack_error "Error formatting slack message: [${slack_attachments}/${payload}/$?]"
+        return 1
+    fi
+
     echo -e "About to post:\n$payload"
 
-    echo "$payload" | curl -XPOST -d @- -H 'Content-Type: application/json' "$webhook_url" || {
-        slack_error "Error posting to Slack"
+    local post_output
+    if ! post_output="$(echo "$payload" | \
+                        curl --location --silent --show-error --fail \
+                             --data @- --header 'Content-Type: application/json' \
+                             "$webhook_url")"; then
+        _send_slack_error "Error posting to Slack: [${post_output}/$?]"
         return 1
-    }
+    fi
 }
+
+_set_mention_author() {
+    mention_author="false"
+
+    # Mention the commit author if new JIRA issues were created
+    if [[ -f "${JOB_JUNIT2JIRA_SUMMARY_FILE}" && \
+        "$(jq -r '.newJIRAs' "${JOB_JUNIT2JIRA_SUMMARY_FILE}")" != "0" ]]; then
+        mention_author="true"
+    fi
+    if [[ -f "${END_JUNIT2JIRA_SUMMARY_FILE}" && \
+        "$(jq -r '.newJIRAs' "${END_JUNIT2JIRA_SUMMARY_FILE}")" != "0" ]]; then
+        mention_author="true"
+    fi
+}
+
+_make_slack_mention() {
+    if [[ "${mention_author}" == "true" && "${author_login}" != "dependabot[bot]" ]]; then
+        slack_mention="$("$SCRIPTS_ROOT"/scripts/ci/get-slack-user-id.sh "$author_login")"
+        if [[ -n "$slack_mention" ]]; then
+            slack_mention=", <@${slack_mention}>"
+        else
+            slack_mention=", _unable to resolve Slack user for GitHub login ${author_login}_"
+        fi
+    fi
+}
+
+_make_slack_failure_attachments() {
+    info "Converting junit failures to slack attachments"
+
+    slack_attachments=""
+    if [[ ! -f "${JOB_SLACK_FAILURE_ATTACHMENTS}" ]]; then
+        if [[ "${CREATE_CLUSTER_OUTCOME:-}" == "${OUTCOME_PASSED}" ]]; then
+            slack_attachments+="$(_make_slack_failure_plain_text_block \
+                "Could not parse junit in main test step. Check build logs for more information.")"
+        fi
+    else
+        slack_attachments+="$(cat "${JOB_SLACK_FAILURE_ATTACHMENTS}")"
+    fi
+    if [[ ! -f "${END_SLACK_FAILURE_ATTACHMENTS}" ]]; then
+        slack_attachments+="$(_make_slack_failure_plain_text_block \
+            "Could not parse junit in final test step. Check build logs for more information.")"
+    else
+        slack_attachments+="$(cat "${END_SLACK_FAILURE_ATTACHMENTS}")"
+    fi
+
+    slack_attachments="$(echo "${slack_attachments}" | jq '.[]' | jq -s '.')"
+
+    if [[ "$(echo "${slack_attachments}" | jq 'length')" == "0" ]]; then
+        msg="No junit records were found for this failure. Check build logs \
+and artifacts for more information. Consider adding an \
+issue to improve CI to detect this failure pattern. (Add a CI_Fail_Better label)."
+        slack_attachments="$(_make_slack_failure_plain_text_block "${msg}")"
+
+        # Mention the commit author when the job failed with no JUNIT records
+        mention_author="true"
+    fi
+}
+
+_make_slack_failure_block() {
+    # shellcheck disable=SC2016
+    local body='
+[
+  {
+    "color": "#bb2124",
+    "blocks": [
+      {
+        "type": "section",
+        "text": {
+          "type": "\($section_type)",
+          "text": "\($content)"
+        }
+      }
+    ]
+  }
+]
+'
+    jq --null-input \
+       --arg section_type "$1" \
+       --arg content "$2" \
+       "$body"
+}
+
+_make_slack_failure_plain_text_block() {
+    _make_slack_failure_block "plain_text" "$1"
+}
+
+_make_slack_failure_markdown_block() {
+    _make_slack_failure_block "mrkdwn" "$1"
+}
+
+_send_slack_error() {
+    echo "ERROR: $1"
+    curl -XPOST -d @- -H 'Content-Type: application/json' "${webhook_url}" << __EOM__
+{ "text": "*An error occurred dealing with a job failure:*\n\t- Job: ${prow_job_link}.\n\t- $1." }
+__EOM__
+}
+
+_slack_check_env() {
+    (
+        set +u
+        if [[ -z "$(eval echo "\$$1")" ]]; then
+            _send_slack_error "An expected environment variable is unset/empty: $1"
+            return 1
+        fi
+    )
+}
+
+slack_workflow_failure() {
+    # shellcheck disable=SC2153
+    local github_context="${GITHUB_CONTEXT}"
+    local webhook_url="${TEST_FAILURES_NOTIFY_WEBHOOK}"
+
+    if is_in_PR_context; then
+        if pr_has_label "ci-test-github-action-slack-messages"; then
+            # Send to #acs-slack-ci-integration-testing when testing.
+            webhook_url="${SLACK_CI_INTEGRATION_TESTING_WEBHOOK}"
+        else
+            info "Skipping slack message for PRs"
+            return 0
+        fi
+    fi
+
+    local workflow_name commit_msg commit_url repo author_name author_login repo_url run_id
+    workflow_name=$(jq -r <<<"${github_context}" '.workflow')
+    event_name=$(jq -r <<<"${github_context}" '.event_name')
+    if [[ "${event_name}" == "push" ]]; then
+        commit_msg=$(jq -r <<<"${github_context}" '.event.head_commit.message')
+        commit_msg="${commit_msg%%$'\n'*}" # use first line of commit msg
+        commit_url=$(jq -r <<<"${github_context}" '.event.head_commit.url')
+        author_name=$(jq -r <<<"${github_context}" '.event.head_commit.author.name')
+        author_login=$(jq -r <<<"${github_context}" '.event.head_commit.author.username')
+        repo_url=$(jq -r <<<"${github_context}" '.event.repository.url')
+    else
+        commit_msg="This is a test slack message"
+        commit_url=$(jq -r <<<"${github_context}" '.event.pull_request.diff_url')
+        author_name=$(jq -r <<<"${github_context}" '.actor')
+        author_login=$(jq -r <<<"${github_context}" '.actor')
+        repo_url=$(jq -r <<<"${github_context}" '.event.pull_request.base.repo.html_url')
+    fi
+    repo=$(jq -r <<<"${github_context}" '.repository')
+    run_id=$(jq -r <<<"${github_context}" '.run_id')
+
+    # If global "mention_author" is set use that value.
+    local mention_author="${mention_author:-true}"
+    local slack_mention=""
+    _make_slack_mention
+
+    local attachments=""
+    local job_name job_url
+    IFS=$'\n'
+    for job in $(gh run view --jq '.jobs[] | select(.conclusion == "failure")' --json 'jobs' -R "${repo}" "${run_id}" | jq -sc '.[]')
+    do
+        job_name=$(jq -r <<<"${job}" '.name')
+        job_url=$(jq -r <<<"${job}" '.url')
+        attachments+="$(_make_slack_failure_markdown_block "Job: <${job_url}|${job_name}>")"
+    done
+    attachments="$(echo "${attachments}" | jq '.[]' | jq -s '.')"
+
+    # shellcheck disable=SC2016
+    local body='
+{
+    "text": "\($workflow_name) failed.
+Commit: \($commit_msg).
+Author: \($author_name)\($slack_mention).",
+    "blocks": [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "\($workflow_name) failed."
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "
+*Commit:* <\($commit_url)|\($commit_msg)>.
+*Repo:* \($repo).
+*Author:* \($author_name)\($slack_mention).
+*Workflow:* \($repo_url)/actions/runs/\($run_id)"
+            }
+        },
+        {
+            "type": "divider"
+        }
+    ],
+    "attachments": $attachments
+}
+'
+
+    local payload
+    payload="$(jq --null-input \
+        --arg workflow_name "${workflow_name}" \
+        --arg commit_url "$commit_url" \
+        --arg commit_msg "$commit_msg" \
+        --arg repo "$repo" \
+        --arg author_name "$author_name" \
+        --arg slack_mention "$slack_mention" \
+        --arg repo_url "$repo_url" \
+        --arg run_id "$run_id" \
+        --argjson attachments "$attachments" \
+       "$body")"
+
+    echo -e "About to post:\n$payload"
+
+    echo "$payload" | curl --location --silent --show-error --fail \
+         --data @- --header 'Content-Type: application/json' \
+         "${webhook_url}"
+}
+
+# junit_wrap() - runs a command and creates a JUNIT record if the command
+# succeeds or fails. Some output of the command is included in the failure
+# JUNIT.
+#
+# WARNING: If this is used to wrap a bash function and not a separate binary
+# or script file there are two side effects that may not be expected:
+#
+# 1. errexit is not propagated to the function context and the function will
+#    continue on error. This is contrary to the typical approach from `set -e`
+#    used throughout this repo.
+# 2. exports are not propagated back to the calling context because the command
+#    runs in a subshell.
 
 junit_wrap() {
     if [[ "$#" -lt 4 ]]; then
@@ -1451,46 +2046,58 @@ junit_wrap() {
     local class="$1"; shift
     local description="$1"; shift
     local failure_message="$1"; shift
-    local command_output=""
+    local command_output_file
+    command_output_file="$(mktemp)"
 
-    if command_output="$("$@" 2>&1)"; then
-        echo "${command_output}"
+    if "$@" 2>&1 | tee "${command_output_file}"; then
         save_junit_success "${class}" "${description}"
+        rm -f "${command_output_file}"
     else
         local ret_code="$?"
-        echo "${command_output}"
-
         local failure_body=""
         if [[ -n "$failure_message" ]]; then
             failure_body="${failure_message}
 "
         fi
-        if [[ "${#command_output}" -gt 512 ]]; then
-            command_output="...${command_output: -512}"
-        fi
-        failure_body="${failure_body}Command output: ${command_output}"
+        failure_body="${failure_body}Command output: $(tail --bytes=512 "${command_output_file}")"
 
         save_junit_failure "${class}" "${description}" "${failure_body}"
+        rm -f "${command_output_file}"
 
         return ${ret_code}
     fi
+}
+
+junit_contains_failure() {
+    local dir="$1"
+    if [[ ! -d $dir ]]; then
+        return 1
+    fi
+    # There should be few files in such dir, and they should have well-behaved names,
+    # and "return" does not mix with piping to "while read", so we use a "for" over find.
+    # shellcheck disable=SC2044
+    for f in $(find "$dir" -type f -iname '*.xml'); do
+        if grep -q '<failure ' "$f"; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 get_junit_misc_dir() {
     echo "${ARTIFACT_DIR}/junit-misc"
 }
 
+_JUNIT_RESULT_SUCCESS="SUCCESS"
+_JUNIT_RESULT_FAILURE="FAILURE"
+_JUNIT_RESULT_SKIPPED="SKIPPED"
+
 save_junit_success() {
     if [[ "$#" -ne 2 ]]; then
         die "missing args. usage: save_junit_success <class> <description>"
     fi
 
-    if [[ -z "${ARTIFACT_DIR:-}" ]]; then
-        info "Warning: save_junit_success() requires the \$ARTIFACT_DIR variable to be set"
-        return
-    fi
-
-    save_junit_record "$@"
+    _save_junit_record "${_JUNIT_RESULT_SUCCESS}" "$@"
 }
 
 save_junit_failure() {
@@ -1498,18 +2105,35 @@ save_junit_failure() {
         die "missing args. usage: save_junit_failure <class> <description> <details>"
     fi
 
-    if [[ -z "${ARTIFACT_DIR:-}" ]]; then
-        info "Warning: save_junit_failure() requires the \$ARTIFACT_DIR variable to be set"
-        return
-    fi
-
-    save_junit_record "$@"
+    _save_junit_record "${_JUNIT_RESULT_FAILURE}" "$@"
 }
 
-save_junit_record() {
+save_junit_skipped() {
+    if [[ "$#" -ne 2 ]]; then
+        die "missing args. usage: save_junit_skipped <class> <description>"
+    fi
+
+    _save_junit_record "${_JUNIT_RESULT_SKIPPED}" "$@"
+}
+
+remove_junit_record() {
     local class="$1"
-    local description="$2"
-    local details="${3:-SUCCESS}"
+    local junit_dir
+    junit_dir="$(get_junit_misc_dir)"
+    local junit_file="${junit_dir}/junit-${class}.xml"
+    rm -f "${junit_file}"
+}
+
+_save_junit_record() {
+    local disposition="$1"
+    local class="$2"
+    local description="$3"
+    local details="${4:-}"
+
+    if [[ -z "${ARTIFACT_DIR:-}" ]]; then
+        info "Warning: save_junit_success() requires the \$ARTIFACT_DIR variable to be set"
+        return
+    fi
 
     local junit_dir
     junit_dir="$(get_junit_misc_dir)"
@@ -1521,51 +2145,72 @@ save_junit_record() {
     fi
 
     # record this instance
+    local record_length=3
     local record="${junit_dir}/db/${class}.txt"
-    echo "${description}" >> "${record}"
-    echo "${details}" >> "${record}"
+    {
+        echo "${description}"
+        echo "${disposition}"
+        echo "${details}"
+     } >> "${record}"
 
     local tests
-    tests=$(( "$(wc -l < "${record}")" / 2 ))
+    tests=$(( "$(wc -l < "${record}")" / "${record_length}" ))
 
     local failures=0
+    local skipped=0
     local lines
     readarray -t lines < "${record}"
     while (( ${#lines[@]} ))
     do
-        local details="${lines[1]}"
-        if [[ "$details" != "SUCCESS" ]]; then
+        local result="${lines[1]}"
+        if [[ "${result}" == "${_JUNIT_RESULT_FAILURE}" ]]; then
             failures=$(( failures+1 ))
         fi
-        lines=( "${lines[@]:2}" )
+        if [[ "${result}" == "${_JUNIT_RESULT_SKIPPED}" ]]; then
+            skipped=$(( skipped+1 ))
+        fi
+        lines=( "${lines[@]:${record_length}}" )
     done
 
     local junit_file="${junit_dir}/junit-${class}.xml"
 
     cat << _EO_SUITE_HEADER_ > "${junit_file}"
-<testsuite name="${class}" tests="${tests}" skipped="0" failures="${failures}" errors="0">
+<testsuite name="${class}" tests="${tests}" skipped="${skipped}" failures="${failures}" errors="0">
 _EO_SUITE_HEADER_
 
     readarray -t lines < "${record}"
     while (( ${#lines[@]} ))
     do
         local description="${lines[0]}"
-        local details="${lines[1]}"
+        local result="${lines[1]}"
+        local details="${lines[2]}"
+
+        # XML escape description
+        description="${description//&/&amp;}"
+        description="${description//\"/&quot;}"
+        description="${description//\'/&#39;}"
+        description="${description//</&lt;}"
+        description="${description//>/&gt;}"
 
         cat << _EO_CASE_HEADER_ >> "${junit_file}"
         <testcase name="${description}" classname="${class}">
 _EO_CASE_HEADER_
 
-        if [[ "$details" != "SUCCESS" ]]; then
+        if [[ "$result" == "${_JUNIT_RESULT_FAILURE}" ]]; then
             details="$(base64 --decode <<< "$details")"
         cat << _EO_FAILURE_ >> "${junit_file}"
             <failure><![CDATA[${details}]]></failure>
 _EO_FAILURE_
         fi
+        if [[ "$result" == "${_JUNIT_RESULT_SKIPPED}" ]]; then
+        cat << _EO_SKIPPED_ >> "${junit_file}"
+            <skipped/>
+_EO_SKIPPED_
+        fi
 
         echo "        </testcase>" >> "${junit_file}"
 
-        lines=( "${lines[@]:2}" )
+        lines=( "${lines[@]:3}" )
     done
 
     echo "</testsuite>" >> "${junit_file}"
@@ -1609,12 +2254,8 @@ EOT
     hub-comment -type build -template-file "$tmpfile"
 }
 
-get_junit_parse_cli() {
-    go install github.com/stackrox/junit-parse@latest
-}
-
 is_system_test_without_images() {
-    case "${CI_JOB_NAME:-missing}" in
+    case "${JOB_NAME:-missing}" in
         *-e2e-tests|*-upgrade-tests|*-version-compatibility-tests)
             [[ ! -f "${STATE_IMAGES_AVAILABLE}" ]]
             ;;
@@ -1663,13 +2304,9 @@ slack_prow_notice() {
             # send to #acs-slack-integration-testing when testing the release process
             webhook_url="${SLACK_MAIN_WEBHOOK}"
         else
-            # send to #forum-acs-eng-release
+            # send to #acs-release-notifications
             webhook_url="${RELEASE_WORKFLOW_NOTIFY_WEBHOOK}"
         fi
-    elif is_nightly_run; then
-        build_url="https://prow.ci.openshift.org/?repo=stackrox%2Fstackrox&job=*stackrox*night*"
-        # send to #acs-nightly-ci-runs
-        webhook_url="${NIGHTLY_WORKFLOW_NOTIFY_WEBHOOK}"
     else
         die "unexpected"
     fi
@@ -1695,12 +2332,12 @@ highlight_cluster_versions() {
         return
     fi
 
-    artifact_file="$ARTIFACT_DIR/cluster-version-summary.html"
+    artifact_file="$ARTIFACT_DIR/cluster-version.html"
 
     cat > "$artifact_file" <<- HEAD
 <html>
     <head>
-        <title><h4>Cluster Versions</h4></title>
+        <title>Cluster Versions</title>
         <style>
           body { color: #e8e8e8; background-color: #424242; font-family: "Roboto", "Helvetica", "Arial", sans-serif }
           a { color: #ff8caa }

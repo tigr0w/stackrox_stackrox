@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	ptypes "github.com/gogo/protobuf/types"
-	"github.com/golang/mock/gomock"
 	"github.com/graph-gophers/graphql-go"
 	"github.com/stackrox/rox/central/graphql/resolvers"
 	"github.com/stackrox/rox/central/graphql/resolvers/loaders"
@@ -17,17 +15,20 @@ import (
 	collectionDS "github.com/stackrox/rox/central/resourcecollection/datastore"
 	collectionSearch "github.com/stackrox/rox/central/resourcecollection/datastore/search"
 	collectionPostgres "github.com/stackrox/rox/central/resourcecollection/datastore/store/postgres"
+	imagesView "github.com/stackrox/rox/central/views/images"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/grpc/authz/allow"
 	types2 "github.com/stackrox/rox/pkg/images/types"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	postgresSchema "github.com/stackrox/rox/pkg/postgres/schema"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestReportingWithCollections(t *testing.T) {
@@ -62,6 +63,7 @@ func (s *ReportingWithCollectionsTestSuite) SetupSuite() {
 	imageDataStore := resolvers.CreateTestImageDatastore(s.T(), s.testDB, mockCtrl)
 	s.resolver, s.schema = resolvers.SetupTestResolver(s.T(),
 		imageDataStore,
+		imagesView.NewImageView(s.testDB.DB),
 		resolvers.CreateTestImageComponentDatastore(s.T(), s.testDB, mockCtrl),
 		resolvers.CreateTestImageCVEDatastore(s.T(), s.testDB),
 		resolvers.CreateTestImageComponentCVEEdgeDatastore(s.T(), s.testDB),
@@ -71,8 +73,7 @@ func (s *ReportingWithCollectionsTestSuite) SetupSuite() {
 
 	var err error
 	collectionStore := collectionPostgres.CreateTableAndNewStore(s.ctx, s.testDB.DB, s.testDB.GetGormDB(s.T()))
-	index := collectionPostgres.NewIndexer(s.testDB.DB)
-	s.collectionDatastore, s.collectionQueryResolver, err = collectionDS.New(collectionStore, index, collectionSearch.New(collectionStore, index))
+	s.collectionDatastore, s.collectionQueryResolver, err = collectionDS.New(collectionStore, collectionSearch.New(collectionStore))
 	s.NoError(err)
 
 	s.reportScheduler = newSchedulerImpl(nil, nil, nil, nil,
@@ -170,7 +171,7 @@ func (s *ReportingWithCollectionsTestSuite) TestGetReportData() {
 	}
 
 	for _, c := range testCases {
-		err := s.collectionDatastore.AddCollection(s.ctx, c.collection)
+		_, err := s.collectionDatastore.AddCollection(s.ctx, c.collection)
 		s.NoError(err)
 
 		reportConfig := testReportConfig(c.collection.GetId(), c.fixability, c.severities)
@@ -240,7 +241,7 @@ func testDeployment(deploymentName, cluster, namespace string, image *storage.Im
 }
 
 func testImage(deployment string) *storage.Image {
-	t, err := ptypes.TimestampProto(time.Unix(0, 1000))
+	t, err := protocompat.ConvertTimeToTimestampOrError(time.Unix(0, 1000))
 	utils.CrashOnError(err)
 	return &storage.Image{
 		Id:   fmt.Sprintf("%s_img", deployment),
@@ -348,7 +349,7 @@ func testReportConfig(collectionID string, fixability storage.VulnerabilityRepor
 	return config
 }
 
-func extractVulnReportData(results []common.Result) *vulnReportData {
+func extractVulnReportData(results []common.DeployedImagesResult) *vulnReportData {
 	deploymentNames := make([]string, 0)
 	imageNames := make([]string, 0)
 	componentNames := make([]string, 0)

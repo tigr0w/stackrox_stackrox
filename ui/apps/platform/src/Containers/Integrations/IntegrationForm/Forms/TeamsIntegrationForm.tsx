@@ -1,6 +1,7 @@
 import React, { ReactElement } from 'react';
 import { TextInput, PageSection, Form } from '@patternfly/react-core';
 import * as yup from 'yup';
+import merge from 'lodash/merge';
 
 import { NotifierIntegrationBase } from 'services/NotifierIntegrationsService';
 
@@ -41,9 +42,7 @@ function TeamsIntegrationForm({
     initialValues = null,
     isEditable = false,
 }: IntegrationFormProps<TeamsIntegration>): ReactElement {
-    const formInitialValues = initialValues
-        ? { ...defaultValues, ...initialValues }
-        : defaultValues;
+    const formInitialValues: TeamsIntegration = merge({}, defaultValues, initialValues);
     const {
         values,
         touched,
@@ -85,7 +84,7 @@ function TeamsIntegrationForm({
                             id="name"
                             value={values.name}
                             placeholder="(example, Teams Integration)"
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -103,7 +102,7 @@ function TeamsIntegrationForm({
                             type="text"
                             id="labelDefault"
                             value={values.labelDefault}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -118,7 +117,7 @@ function TeamsIntegrationForm({
                             type="text"
                             id="labelKey"
                             value={values.labelKey}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             isDisabled={!isEditable}
                         />
                     </FormLabelGroup>

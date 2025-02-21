@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *LogImbuesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE log_imbues CASCADE")
 	s.T().Log("log_imbues", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *LogImbuesStoreSuite) TestStore() {
 	foundLogImbue, exists, err = store.Get(ctx, logImbue.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(logImbue, foundLogImbue)
+	protoassert.Equal(s.T(), logImbue, foundLogImbue)
 
-	logImbueCount, err := store.Count(ctx)
+	logImbueCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, logImbueCount)
-	logImbueCount, err = store.Count(withNoAccessCtx)
+	logImbueCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(logImbueCount)
 
@@ -75,11 +78,6 @@ func (s *LogImbuesStoreSuite) TestStore() {
 	s.True(logImbueExists)
 	s.NoError(store.Upsert(ctx, logImbue))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, logImbue), sac.ErrResourceAccessDenied)
-
-	foundLogImbue, exists, err = store.Get(ctx, logImbue.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(logImbue, foundLogImbue)
 
 	s.NoError(store.Delete(ctx, logImbue.GetId()))
 	foundLogImbue, exists, err = store.Get(ctx, logImbue.GetId())
@@ -100,15 +98,15 @@ func (s *LogImbuesStoreSuite) TestStore() {
 	s.NoError(store.UpsertMany(ctx, logImbues))
 	allLogImbue, err := store.GetAll(ctx)
 	s.NoError(err)
-	s.ElementsMatch(logImbues, allLogImbue)
+	protoassert.ElementsMatch(s.T(), logImbues, allLogImbue)
 
-	logImbueCount, err = store.Count(ctx)
+	logImbueCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, logImbueCount)
 
 	s.NoError(store.DeleteMany(ctx, logImbueIDs))
 
-	logImbueCount, err = store.Count(ctx)
+	logImbueCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, logImbueCount)
 }

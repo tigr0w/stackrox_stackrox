@@ -1,7 +1,6 @@
 import React from 'react';
 import {
     Alert,
-    AlertVariant,
     Bullseye,
     Button,
     Checkbox,
@@ -21,7 +20,7 @@ import { HelpIcon } from '@patternfly/react-icons';
 
 import download from 'utils/download';
 import { Deployment } from 'types/deployment.proto';
-import { NetworkPolicyModification } from 'Containers/Network/networkTypes';
+import { NetworkPolicyModification } from 'types/networkPolicy.proto';
 import { AdvancedFlowsFilterType } from '../common/AdvancedFlowsFilter/types';
 import { filterNetworkFlows, getAllUniquePorts, getNumFlows } from '../utils/flowUtils';
 
@@ -141,23 +140,24 @@ function DeploymentBaselines({ deployment, deploymentId, onNodeSelect }: Deploym
     if (isLoading || isModifying || isToggling) {
         return (
             <Bullseye>
-                <Spinner isSVG size="lg" />
+                <Spinner size="lg" />
             </Bullseye>
         );
     }
 
     return (
-        <div className="pf-u-h-100 pf-u-p-md">
+        <div className="pf-v5-u-h-100 pf-v5-u-p-md">
             {errorMessage && (
                 <Alert
                     isInline
-                    variant={AlertVariant.danger}
+                    variant="danger"
                     title={errorMessage}
-                    className="pf-u-mb-sm"
+                    component="p"
+                    className="pf-v5-u-mb-sm"
                 />
             )}
             <Stack>
-                <StackItem className="pf-u-pb-md">
+                <StackItem className="pf-v5-u-pb-md">
                     <Flex alignItems={{ default: 'alignItemsCenter' }}>
                         <FlexItem>
                             <Switch
@@ -179,7 +179,7 @@ function DeploymentBaselines({ deployment, deploymentId, onNodeSelect }: Deploym
                                     </div>
                                 }
                             >
-                                <HelpIcon className="pf-u-color-200" />
+                                <HelpIcon className="pf-v5-u-color-200" />
                             </Tooltip>
                         </FlexItem>
                     </Flex>
@@ -201,14 +201,14 @@ function DeploymentBaselines({ deployment, deploymentId, onNodeSelect }: Deploym
                         </FlexItem>
                     </Flex>
                 </StackItem>
-                <Divider component="hr" className="pf-u-py-md" />
-                <StackItem className="pf-u-pb-md">
-                    <Toolbar className="pf-u-p-0">
-                        <ToolbarContent className="pf-u-px-0">
+                <Divider component="hr" className="pf-v5-u-py-md" />
+                <StackItem className="pf-v5-u-pb-md">
+                    <Toolbar className="pf-v5-u-p-0">
+                        <ToolbarContent className="pf-v5-u-px-0">
                             <ToolbarItem>
                                 <FlowsTableHeaderText type="baseline" numFlows={numBaselines} />
                             </ToolbarItem>
-                            <ToolbarItem alignment={{ default: 'alignRight' }}>
+                            <ToolbarItem align={{ default: 'alignRight' }}>
                                 <FlowsBulkActions
                                     type="baseline"
                                     selectedRows={selectedRows}
@@ -235,9 +235,9 @@ function DeploymentBaselines({ deployment, deploymentId, onNodeSelect }: Deploym
                         onSelectFlow={onSelectFlow}
                     />
                 </StackItem>
-                <StackItem className="pf-u-pt-md">
+                <StackItem className="pf-v5-u-pt-md">
                     <Flex
-                        className="pf-u-pb-md"
+                        className="pf-v5-u-pb-md"
                         direction={{ default: 'column' }}
                         spaceItems={{ default: 'spaceItemsMd' }}
                         alignItems={{ default: 'alignItemsCenter' }}
@@ -248,7 +248,7 @@ function DeploymentBaselines({ deployment, deploymentId, onNodeSelect }: Deploym
                                 id="exclude-ports-and-protocols-checkbox"
                                 label="Exclude ports & protocols"
                                 isChecked={isExcludingPortsAndProtocols}
-                                onChange={setIsExcludingPortsAndProtocols}
+                                onChange={(_event, val) => setIsExcludingPortsAndProtocols(val)}
                             />
                         </FlexItem>
                         <FlexItem>

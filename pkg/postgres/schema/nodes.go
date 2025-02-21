@@ -11,6 +11,7 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/postgres/mapping"
 )
@@ -50,6 +51,7 @@ var (
 			v1.SearchCategory_NODES,
 			v1.SearchCategory_CLUSTERS,
 		}...)
+		schema.ScopingResource = resources.Node
 		RegisterTable(schema, CreateTableNodesStmt)
 		mapping.RegisterCategoryToTable(v1.SearchCategory_NODES, schema)
 		return schema
@@ -57,15 +59,17 @@ var (
 )
 
 const (
-	NodesTableName       = "nodes"
+	// NodesTableName specifies the name of the table in postgres.
+	NodesTableName = "nodes"
+	// NodesTaintsTableName specifies the name of the table in postgres.
 	NodesTaintsTableName = "nodes_taints"
 )
 
 // Nodes holds the Gorm model for Postgres table `nodes`.
 type Nodes struct {
-	Id                      string            `gorm:"column:id;type:uuid;primaryKey"`
+	ID                      string            `gorm:"column:id;type:uuid;primaryKey"`
 	Name                    string            `gorm:"column:name;type:varchar"`
-	ClusterId               string            `gorm:"column:clusterid;type:uuid;index:nodes_sac_filter,type:hash"`
+	ClusterID               string            `gorm:"column:clusterid;type:uuid;index:nodes_sac_filter,type:hash"`
 	ClusterName             string            `gorm:"column:clustername;type:varchar"`
 	Labels                  map[string]string `gorm:"column:labels;type:jsonb"`
 	Annotations             map[string]string `gorm:"column:annotations;type:jsonb"`
@@ -85,7 +89,7 @@ type Nodes struct {
 
 // NodesTaints holds the Gorm model for Postgres table `nodes_taints`.
 type NodesTaints struct {
-	NodesId     string              `gorm:"column:nodes_id;type:uuid;primaryKey"`
+	NodesID     string              `gorm:"column:nodes_id;type:uuid;primaryKey"`
 	Idx         int                 `gorm:"column:idx;type:integer;primaryKey;index:nodestaints_idx,type:btree"`
 	Key         string              `gorm:"column:key;type:varchar"`
 	Value       string              `gorm:"column:value;type:varchar"`

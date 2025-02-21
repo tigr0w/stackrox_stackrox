@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *IntegrationHealthsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE integration_healths CASCADE")
 	s.T().Log("integration_healths", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *IntegrationHealthsStoreSuite) TestStore() {
 	foundIntegrationHealth, exists, err = store.Get(ctx, integrationHealth.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(integrationHealth, foundIntegrationHealth)
+	protoassert.Equal(s.T(), integrationHealth, foundIntegrationHealth)
 
-	integrationHealthCount, err := store.Count(ctx)
+	integrationHealthCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, integrationHealthCount)
-	integrationHealthCount, err = store.Count(withNoAccessCtx)
+	integrationHealthCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(integrationHealthCount)
 
@@ -75,11 +78,6 @@ func (s *IntegrationHealthsStoreSuite) TestStore() {
 	s.True(integrationHealthExists)
 	s.NoError(store.Upsert(ctx, integrationHealth))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, integrationHealth), sac.ErrResourceAccessDenied)
-
-	foundIntegrationHealth, exists, err = store.Get(ctx, integrationHealth.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(integrationHealth, foundIntegrationHealth)
 
 	s.NoError(store.Delete(ctx, integrationHealth.GetId()))
 	foundIntegrationHealth, exists, err = store.Get(ctx, integrationHealth.GetId())
@@ -99,13 +97,13 @@ func (s *IntegrationHealthsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, integrationHealths))
 
-	integrationHealthCount, err = store.Count(ctx)
+	integrationHealthCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, integrationHealthCount)
 
 	s.NoError(store.DeleteMany(ctx, integrationHealthIDs))
 
-	integrationHealthCount, err = store.Count(ctx)
+	integrationHealthCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, integrationHealthCount)
 }

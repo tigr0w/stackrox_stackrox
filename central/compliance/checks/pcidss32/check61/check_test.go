@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/central/compliance/framework"
 	"github.com/stackrox/rox/central/compliance/framework/mocks"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestCheck(t *testing.T) {
@@ -61,7 +61,7 @@ func (s *suiteImpl) TestPassFail() {
 	run, err := framework.NewComplianceRun(check)
 	s.NoError(err)
 
-	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil, nil)
+	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil)
 	err = run.Run(context.Background(), "standard", domain, data)
 	s.NoError(err)
 
@@ -112,7 +112,7 @@ func (s *suiteImpl) TestPass() {
 	run, err := framework.NewComplianceRun(check)
 	s.NoError(err)
 
-	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil, nil)
+	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil)
 	err = run.Run(context.Background(), "standard", domain, data)
 	s.NoError(err)
 

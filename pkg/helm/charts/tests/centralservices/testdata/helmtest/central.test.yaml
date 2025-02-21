@@ -9,14 +9,17 @@ values:
     cert: ""
     key: ""
   central:
-    persistence:
-      none: true
     serviceTLS:
       cert: ""
       key: ""
     dbServiceTLS:
       cert: ""
       key: ""
+  imagePullSecrets:
+    allowNone: true
+  monitoring:
+    openshift:
+      enabled: false
 tests:
 - name: "central with default settings"
   expect: |
@@ -58,26 +61,22 @@ tests:
     .rolebindings["stackrox-central-psp"] | assertThat(. == null)
     .clusterroles["stackrox-central-psp"] | assertThat(. == null)
 
-- name: "central with OpenShift 3 and enabled SCCs"
-  server:
-    visibleSchemas:
-    - openshift-3.11.0
-    availableSchemas:
-    - openshift-3.11.0
-  values:
-    env:
-      openshift: 3
-    system:
-      createSCCs: true
+- name: "central with network policies enabled"
+  set:
+    network.enableNetworkPolicies: true
   expect: |
-    .securitycontextconstraints["stackrox-central"] | .users[0] | assertThat(contains("system:serviceaccount:stackrox:central"))
-    .roles["use-central-scc"] | assertThat(. == null)
-    .rolebindings["central-use-scc"] | assertThat(. == null)
-    .deployments["central"].spec.template.spec.affinity.nodeAffinity | .preferredDuringSchedulingIgnoredDuringExecution | assertThat(length == 5)
-    verifyNodeAffinities(.deployments["central"])
-    envVars(.deployments.central; "central") | assertThat(has("ROX_OPENSHIFT") == true)
+    .networkpolicys["allow-ext-to-central"] | assertThat(. != null)
+    .networkpolicys["central-db"] | assertThat(. != null)
 
-- name: "central with OpenShift 4 and disabled SCCs"
+- name: "central with network policies disabled"
+  set:
+    network.enableNetworkPolicies: false
+  expect: |
+    .networkpolicys["allow-ext-to-central"] | assertThat(. == null)
+    .networkpolicys["central-db"] | assertThat(. == null)
+
+# TODO(ROX-21206): Add test case for OS4 with stock SCCs and set hostPath, to check for hostmount-anyuid
+- name: "central with OpenShift 4 and stock SCCs"
   server:
     visibleSchemas:
     - openshift-4.1.0
@@ -86,12 +85,9 @@ tests:
   values:
     env:
       openshift: 4
-    system:
-      createSCCs: false
   expect: |
-    .roles["use-central-scc"] | assertThat(. != null)
+    .roles["use-central-scc"] | .rules[0].resourceNames[0] | assertThat(contains("nonroot-v2"))
     .rolebindings["central-use-scc"] | assertThat(. != null)
-    .securitycontextconstraints["stackrox-central"] | assertThat(. == null)
     .deployments["central"].spec.template.spec.affinity.nodeAffinity | .preferredDuringSchedulingIgnoredDuringExecution | assertThat(length == 5)
     verifyNodeAffinities(.deployments["central"])
     envVars(.deployments.central; "central") | assertThat(has("ROX_OPENSHIFT") == true)
@@ -114,3 +110,17 @@ tests:
     env.managedServices: false
   expect: |
     envVars(.deployments.central; "central") | assertThat(has("ROX_TENANT_ID") == false)
+
+- name: "override affinity"
+  values:
+    central:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/master
+                    operator: Exists
+  expect: |
+    .deployments["central"].spec.template.spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution | assertThat(length == 1)

@@ -4,14 +4,14 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	clusterDataStore "github.com/stackrox/rox/central/cluster/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	siStore "github.com/stackrox/rox/central/serviceidentities/datastore"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	pkgGRPC "github.com/stackrox/rox/pkg/grpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/grpc/routes"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"google.golang.org/grpc"
 )
 
@@ -37,13 +37,19 @@ func (s *serviceImpl) CustomRoutes() []routes.CustomRoute {
 		{
 			Route:         "/api/extensions/certgen/central",
 			Authorizer:    user.With(permissions.Modify(resources.Administration)),
-			ServerHandler: http.HandlerFunc(s.centralHandler),
+			ServerHandler: routes.NotImplementedOnManagedServices(http.HandlerFunc(s.centralHandler)),
+			Compression:   false,
+		},
+		{
+			Route:         "/api/extensions/certgen/central-db",
+			Authorizer:    user.With(permissions.Modify(resources.Administration)),
+			ServerHandler: routes.NotImplementedOnManagedServices(http.HandlerFunc(s.centralDBHandler)),
 			Compression:   false,
 		},
 		{
 			Route:         "/api/extensions/certgen/scanner",
 			Authorizer:    user.With(permissions.Modify(resources.Administration)),
-			ServerHandler: http.HandlerFunc(s.scannerHandler),
+			ServerHandler: routes.NotImplementedOnManagedServices(http.HandlerFunc(s.scannerHandler)),
 			Compression:   false,
 		},
 
@@ -51,12 +57,6 @@ func (s *serviceImpl) CustomRoutes() []routes.CustomRoute {
 			Route:         "/api/extensions/certgen/cluster",
 			Authorizer:    user.With(permissions.Modify(resources.Administration)),
 			ServerHandler: http.HandlerFunc(s.securedClusterHandler),
-			Compression:   false,
-		},
-		{
-			Route:         "/api/extensions/certgen/centraldb",
-			Authorizer:    user.With(permissions.Modify(resources.Administration)),
-			ServerHandler: http.HandlerFunc(s.centralDBHandler),
 			Compression:   false,
 		},
 	}

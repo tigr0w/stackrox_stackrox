@@ -7,7 +7,6 @@ import {
     nonSortableHeaderClassName,
 } from 'Components/Table';
 import TopCvssLabel from 'Components/TopCvssLabel';
-import WorkflowListPage from 'Containers/Workflow/WorkflowListPage';
 import entityTypes from 'constants/entityTypes';
 import { LIST_PAGE_SIZE } from 'constants/workflowPages.constants';
 import CVEStackedPill from 'Components/CVEStackedPill';
@@ -18,9 +17,11 @@ import { workflowListPropTypes, workflowListDefaultProps } from 'constants/entit
 import removeEntityContextColumns from 'utils/tableUtils';
 import { componentSortFields } from 'constants/sortFields';
 
+import TableCellLink from 'Components/TableCellLink';
 import TableCountLink from 'Components/workflow/TableCountLink';
-import useFeatureFlags from 'hooks/useFeatureFlags';
 import { getFilteredComponentColumns } from './ListImageComponents.utils';
+import WorkflowListPage from '../WorkflowListPage';
+import { getVulnMgmtPathForEntitiesAndId } from '../../VulnMgmt.utils/entities';
 
 export const defaultComponentSort = [
     {
@@ -29,7 +30,7 @@ export const defaultComponentSort = [
     },
 ];
 
-export function getComponentTableColumns(showVMUpdates) {
+export function getComponentTableColumns() {
     return function getTableColumns(workflowState, isFeatureFlagEnabled) {
         const tableColumns = [
             {
@@ -42,9 +43,13 @@ export function getComponentTableColumns(showVMUpdates) {
                 Header: `Component`,
                 headerClassName: `w-1/4 ${defaultHeaderClassName}`,
                 className: `w-1/4 ${defaultColumnClassName}`,
-                Cell: ({ original }) => {
-                    const { version, name } = original;
-                    return `${name} ${version}`;
+                Cell: ({ original, pdf }) => {
+                    const url = getVulnMgmtPathForEntitiesAndId('IMAGE_COMPONENT', original.id);
+                    return (
+                        <TableCellLink pdf={pdf} url={url}>
+                            {`${original.name} ${original.version}`}
+                        </TableCellLink>
+                    );
                 },
                 id: componentSortFields.COMPONENT,
                 accessor: 'name',
@@ -59,8 +64,8 @@ export function getComponentTableColumns(showVMUpdates) {
                 sortField: componentSortFields.OPERATING_SYSTEM,
             },
             {
-                Header: showVMUpdates ? `Image CVEs` : 'CVEs',
-                entityType: entityTypes.CVE,
+                Header: `Image CVEs`,
+                entityType: entityTypes.IMAGE_CVE,
                 headerClassName: `w-1/8 ${defaultHeaderClassName}`,
                 className: `w-1/8 ${defaultColumnClassName}`,
                 Cell: ({ original, pdf }) => {
@@ -69,9 +74,7 @@ export function getComponentTableColumns(showVMUpdates) {
                         return 'No CVEs';
                     }
 
-                    const newState = workflowState
-                        .pushListItem(id)
-                        .pushList(showVMUpdates ? entityTypes.IMAGE_CVE : entityTypes.CVE);
+                    const newState = workflowState.pushListItem(id).pushList(entityTypes.IMAGE_CVE);
                     const url = newState.toUrl();
                     const fixableUrl = newState.setSearch({ Fixable: true }).toUrl();
 
@@ -92,7 +95,6 @@ export function getComponentTableColumns(showVMUpdates) {
                 Header: `Active`,
                 headerClassName: `w-1/10 text-center ${nonSortableHeaderClassName}`,
                 className: `w-1/10 ${defaultColumnClassName}`,
-                // eslint-disable-next-line
                 Cell: ({ original }) => {
                     return original.activeState?.state || 'Undetermined';
                 },
@@ -203,9 +205,6 @@ export function getComponentTableColumns(showVMUpdates) {
 }
 
 const VulnMgmtNodeComponents = ({ selectedRowId, search, sort, page, data, totalResults }) => {
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVMUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-
     const query = gql`
         query getImageComponents($query: String, $pagination: Pagination) {
             results: imageComponents(query: $query, pagination: $pagination) {
@@ -224,7 +223,7 @@ const VulnMgmtNodeComponents = ({ selectedRowId, search, sort, page, data, total
         },
     };
 
-    const getTableColumns = getComponentTableColumns(showVMUpdates);
+    const getTableColumns = getComponentTableColumns();
 
     return (
         <WorkflowListPage

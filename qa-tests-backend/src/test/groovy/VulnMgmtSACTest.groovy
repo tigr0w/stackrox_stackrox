@@ -6,7 +6,6 @@ import io.stackrox.proto.storage.RoleOuterClass
 import services.ApiTokenService
 import services.BaseService
 import services.GraphQLService
-import services.ImageIntegrationService
 import services.ImageService
 import services.RoleService
 
@@ -14,7 +13,9 @@ import spock.lang.Retry
 import spock.lang.Tag
 import spock.lang.Unroll
 
+@Retry(count = 3)
 @Tag("Begin")
+@Tag("PZ")
 class VulnMgmtSACTest extends BaseSpecification {
     static final private String NONE = "None"
 
@@ -62,22 +63,6 @@ class VulnMgmtSACTest extends BaseSpecification {
     }
     fragment cveFields on NodeVulnerability {
         cve
-    }
-    """
-
-    private static final GET_COMPONENTS_QUERY = """
-    query getComponents(\$query: String, \$pagination: Pagination)
-    {
-        results: components(query: \$query, pagination: \$pagination) {
-            ...componentFields
-            __typename
-        }
-        count: componentCount(query: \$query)
-    }
-
-    fragment componentFields on EmbeddedImageScanComponent {
-        name
-        version
     }
     """
 
@@ -129,7 +114,6 @@ class VulnMgmtSACTest extends BaseSpecification {
     def setupSpec() {
         // Purposefully add an image (centos7-base) that is not running to check the case
         // where an image is orphaned. The image is actually part of the re-scanned image set.
-        ImageIntegrationService.addStackroxScannerIntegration()
         // Re-scan the images used in previous test cases to ensure pruning did not leave orphan CVEs.
         for ( imageToScan in IMAGES_TO_RESCAN ) {
             ImageService.scanImage(imageToScan)
@@ -144,7 +128,6 @@ class VulnMgmtSACTest extends BaseSpecification {
 
     def cleanupSpec() {
         BaseService.useBasicAuth()
-        ImageIntegrationService.deleteStackRoxScannerIntegrationIfExists()
         RoleService.deleteRole(NODE_ROLE)
         RoleService.deleteRole(IMAGE_ROLE)
         RoleService.deleteRole(NODE_IMAGE_ROLE)
@@ -168,22 +151,21 @@ class VulnMgmtSACTest extends BaseSpecification {
     }
 
     def getImageCVEQuery() {
-        return isPostgresRun() ? GET_IMAGE_CVES_QUERY : GET_CVES_QUERY
+        return GET_IMAGE_CVES_QUERY
     }
 
     def getNodeCVEQuery() {
-        return isPostgresRun() ? GET_NODE_CVES_QUERY : GET_CVES_QUERY
+        return GET_NODE_CVES_QUERY
     }
 
     def getImageComponentQuery() {
-        return isPostgresRun() ? GET_IMAGE_COMPONENTS_QUERY : GET_COMPONENTS_QUERY
+        return GET_IMAGE_COMPONENTS_QUERY
     }
 
     def getNodeComponentQuery() {
-        return isPostgresRun() ? GET_NODE_COMPONENTS_QUERY : GET_COMPONENTS_QUERY
+        return GET_NODE_COMPONENTS_QUERY
     }
 
-    @Retry(count = 1)
     @Unroll
     def "Verify role based scoping on vuln mgmt: node-role Node:*"() {
         when:
@@ -225,7 +207,6 @@ class VulnMgmtSACTest extends BaseSpecification {
         BaseService.useBasicAuth()
     }
 
-    @Retry(count = 1)
     @Unroll
     def "Verify role based scoping on vuln mgmt: image-role Image:*"() {
         when:
@@ -279,7 +260,6 @@ class VulnMgmtSACTest extends BaseSpecification {
         BaseService.useBasicAuth()
     }
 
-    @Retry(count = 1)
     @Unroll
     def "Verify role based scoping on vuln mgmt: #roleName #baseQuery"() {
         when:
@@ -290,8 +270,8 @@ class VulnMgmtSACTest extends BaseSpecification {
         def imageComponentQuery = getImageComponentQuery()
         def nodeCveQuery = getNodeCVEQuery()
         def nodeComponentQuery = getNodeComponentQuery()
-        def imageBaseQuery = isPostgresRun() ? imageQuery : baseQuery
-        def nodeBaseQuery = isPostgresRun() ? nodeQuery : baseQuery
+        def imageBaseQuery = imageQuery
+        def nodeBaseQuery = nodeQuery
         def baseImageVulnCallResult = gqlService.Call(imageCveQuery, [query: imageBaseQuery])
         assert baseImageVulnCallResult.hasNoErrors()
         def baseImageComponentCallResult = gqlService.Call(imageComponentQuery, [query: imageBaseQuery])
@@ -335,7 +315,6 @@ class VulnMgmtSACTest extends BaseSpecification {
         NODE_IMAGE_ROLE | "Component:*" | "ImageComponent:*" | "NodeComponent:*"
     }
 
-    @Retry(count = 0)
     @Unroll
     def "Verify permissions on vuln mgmt: role with no CVE permissions is rejected"() {
         when:

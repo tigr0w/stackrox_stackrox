@@ -4,24 +4,22 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/central/audit"
 	clusterMocks "github.com/stackrox/rox/central/cluster/datastore/mocks"
-	clusterMappings "github.com/stackrox/rox/central/cluster/index/mappings"
-	cveMocks "github.com/stackrox/rox/central/cve/datastore/mocks"
 	deploymentMocks "github.com/stackrox/rox/central/deployment/datastore/mocks"
 	"github.com/stackrox/rox/central/graphql/resolvers"
 	imageMocks "github.com/stackrox/rox/central/image/datastore/mocks"
 	componentMocks "github.com/stackrox/rox/central/imagecomponent/datastore/mocks"
-	componentMappings "github.com/stackrox/rox/central/imagecomponent/mappings"
 	nsMocks "github.com/stackrox/rox/central/namespace/datastore/mocks"
 	nodeMocks "github.com/stackrox/rox/central/node/datastore/mocks"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	notifierMocks "github.com/stackrox/rox/pkg/notifier/mocks"
+	"github.com/stackrox/rox/pkg/postgres/schema"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/scoped"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestCVEScoping(t *testing.T) {
@@ -39,7 +37,6 @@ type CVEScopingTestSuite struct {
 	imageDataStore      *imageMocks.MockDataStore
 	nodeDataStore       *nodeMocks.MockDataStore
 	componentDataStore  *componentMocks.MockDataStore
-	cveDataStore        *cveMocks.MockDataStore
 	resolver            *resolvers.Resolver
 	handler             *HandlerImpl
 }
@@ -52,7 +49,6 @@ func (suite *CVEScopingTestSuite) SetupTest() {
 	suite.imageDataStore = imageMocks.NewMockDataStore(suite.mockCtrl)
 	suite.nodeDataStore = nodeMocks.NewMockDataStore(suite.mockCtrl)
 	suite.componentDataStore = componentMocks.NewMockDataStore(suite.mockCtrl)
-	suite.cveDataStore = cveMocks.NewMockDataStore(suite.mockCtrl)
 	notifierMock := notifierMocks.NewMockProcessor(suite.mockCtrl)
 
 	notifierMock.EXPECT().HasEnabledAuditNotifiers().Return(false).AnyTimes()
@@ -64,7 +60,6 @@ func (suite *CVEScopingTestSuite) SetupTest() {
 		ImageDataStore:          suite.imageDataStore,
 		NodeDataStore:           suite.nodeDataStore,
 		ImageComponentDataStore: suite.componentDataStore,
-		CVEDataStore:            suite.cveDataStore,
 		AuditLogger:             audit.New(notifierMock),
 	}
 
@@ -157,12 +152,13 @@ func newTestHandler(resolver *resolvers.Resolver) *HandlerImpl {
 		resolver,
 		// CVEs must be scoped from lowest entities to highest entities. DO NOT CHANGE THE ORDER.
 		[]*SearchWrapper{
-			NewSearchWrapper(v1.SearchCategory_IMAGE_COMPONENTS, componentMappings.OptionsMap, resolver.ImageComponentDataStore),
+			NewSearchWrapper(v1.SearchCategory_IMAGE_COMPONENTS, schema.ImageComponentsSchema.OptionsMap,
+				resolver.ImageComponentDataStore),
 			NewSearchWrapper(v1.SearchCategory_IMAGES, ImageOnlyOptionsMap, resolver.ImageDataStore),
 			NewSearchWrapper(v1.SearchCategory_DEPLOYMENTS, DeploymentOnlyOptionsMap, resolver.DeploymentDataStore),
 			NewSearchWrapper(v1.SearchCategory_NAMESPACES, NamespaceOnlyOptionsMap, resolver.NamespaceDataStore),
 			NewSearchWrapper(v1.SearchCategory_NODES, NodeOnlyOptionsMap, resolver.NodeDataStore),
-			NewSearchWrapper(v1.SearchCategory_CLUSTERS, clusterMappings.OptionsMap, resolver.ClusterDataStore),
+			NewSearchWrapper(v1.SearchCategory_CLUSTERS, schema.ClustersSchema.OptionsMap, resolver.ClusterDataStore),
 		},
 	)
 }

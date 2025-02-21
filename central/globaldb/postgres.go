@@ -8,9 +8,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stackrox/rox/central/globaldb/metrics"
 	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgadmin"
 	"github.com/stackrox/rox/pkg/postgres/pgconfig"
+	pgStats "github.com/stackrox/rox/pkg/postgres/stats"
 	"github.com/stackrox/rox/pkg/retry"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
@@ -18,54 +20,81 @@ import (
 )
 
 const (
-	tableQuery = `WITH RECURSIVE pg_inherit(inhrelid, inhparent) AS
-    (select inhrelid, inhparent
-    FROM pg_inherits
-    UNION
-    SELECT child.inhrelid, parent.inhparent
-    FROM pg_inherit child, pg_inherits parent
-    WHERE child.inhparent = parent.inhrelid),
-pg_inherit_short AS (SELECT * FROM pg_inherit WHERE inhparent NOT IN (SELECT inhrelid FROM pg_inherit))
-SELECT TABLE_NAME
-    , row_estimate
-    , total_bytes AS total
-    , index_bytes AS INDEX
-    , toast_bytes AS toast
-    , table_bytes AS TABLE
-  FROM (
-    SELECT *, total_bytes-index_bytes-COALESCE(toast_bytes,0) AS table_bytes
-    FROM (
-         SELECT c.oid
-              , relname AS TABLE_NAME
-              , SUM(c.reltuples) OVER (partition BY parent) AS row_estimate
-              , SUM(pg_total_relation_size(c.oid)) OVER (partition BY parent) AS total_bytes
-              , SUM(pg_indexes_size(c.oid)) OVER (partition BY parent) AS index_bytes
-              , SUM(COALESCE(pg_total_relation_size(reltoastrelid), 0)) OVER (partition BY parent) AS toast_bytes
-              , parent
-          FROM (
-                SELECT pg_class.oid
-                    , reltuples
-                    , relname
-                    , relnamespace
-                    , pg_class.reltoastrelid
-                    , COALESCE(inhparent, pg_class.oid) parent
-                FROM pg_class
-                    LEFT JOIN pg_inherit_short ON inhrelid = oid
-                WHERE relkind IN ('r', 'p')
-             ) c
-             LEFT JOIN pg_namespace n ON n.oid = c.relnamespace WHERE nspname = 'public'
-  ) a
-  WHERE oid = parent
-) a;`
+	tableQuery = `
+WITH
+    -- all partitioned tables
+    partition_roots AS (
+        SELECT oid FROM pg_class
+        WHERE relkind = 'p'
+    ),
+
+    -- all partitions of some partitioned table
+    partitions AS (
+        SELECT c.oid, (pg_partition_tree(c.oid)).relid
+        FROM pg_class c
+        WHERE c.relkind = 'r'
+    ),
+
+    -- rest of the relations
+    non_partitioned AS (
+        SELECT oid FROM pg_class
+        where
+            relkind = 'r' AND
+            oid NOT IN (SELECT oid FROM partitions)
+    )
+
+-- Select size information about partitions summarized by partitioned table
+SELECT
+    c.relname AS table_name,
+    pts.*,
+    COALESCE(pts.total_bytes - pts.indexes_bytes - pts.toast_bytes, 0) as table_bytes
+    FROM partition_roots p
+    LEFT JOIN LATERAL (
+        SELECT
+            -- Estimated number of live rows
+            SUM(c.reltuples) AS rows_estimate,
+            -- Total disk space used by the table, including all indexes and TOAST
+            SUM(pg_total_relation_size(relid)) AS total_bytes,
+            -- Total disk space used by indexes attached to the table
+            SUM(pg_indexes_size(relid)) AS indexes_bytes,
+            -- Total disk space used by the TOAST table
+            SUM(COALESCE(pg_total_relation_size(c.reltoastrelid), 0)) AS toast_bytes
+        FROM pg_partition_tree(p.oid)
+        LEFT JOIN pg_class c ON relid = c.oid
+    ) pts ON TRUE
+    LEFT JOIN pg_class c ON p.oid = c.oid
+    LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE
+        n.nspname NOT IN ('pg_catalog', 'information_schema')
+UNION
+-- Select size information about the rest of relations
+SELECT
+        c.relname AS table_name,
+        -- Estimated number of live rows
+        c.reltuples AS rows_estimate,
+        -- Total disk space used by the table, including all indexes and TOAST
+        pg_total_relation_size(np.oid) AS total_bytes,
+        -- Total disk space used by indexes attached to the table
+        pg_indexes_size(np.oid) AS indexes_bytes,
+        -- Total disk space used by the TOAST table
+        COALESCE(pg_total_relation_size(c.reltoastrelid), 0) AS toast_bytes,
+        COALESCE(pg_total_relation_size(np.oid) - pg_indexes_size(np.oid) - pg_total_relation_size(c.reltoastrelid), 0) as table_bytes
+    FROM non_partitioned np
+    LEFT JOIN pg_class c ON np.oid = c.oid;
+`
 
 	versionQuery = `SHOW server_version;`
 
 	totalConnectionQuery = `SELECT state, COUNT(datid) FROM pg_stat_activity WHERE state IS NOT NULL GROUP BY state;`
 
 	maxConnectionQuery = `SELECT current_setting('max_connections')::int;`
+
+	pgStatStatementsMax = 1000
 )
 
 var (
+	log = logging.LoggerForModule()
+
 	postgresOpenRetries        = 10
 	postgresTimeBetweenRetries = 10 * time.Second
 	postgresDB                 postgres.DB
@@ -101,11 +130,14 @@ func InitializePostgres(ctx context.Context) postgres.DB {
 			log.Fatalf("Could not parse postgres config: %v", err)
 		}
 
-		// Get the active database name for the connection
-		activeDB := pgconfig.GetActiveDB()
+		// TODO(ROX-18005): remove this when we no longer have to worry about changing databases
+		if !pgconfig.IsExternalDatabase() {
+			// Get the active database name for the connection
+			activeDB := pgconfig.GetActiveDB()
 
-		// Set the connection to be the active database.
-		dbConfig.ConnConfig.Database = activeDB
+			// Set the connection to be the active database.
+			dbConfig.ConnConfig.Database = activeDB
+		}
 
 		if err := retry.WithRetry(func() error {
 			postgresDB, err = postgres.New(ctx, dbConfig)
@@ -120,7 +152,7 @@ func InitializePostgres(ctx context.Context) postgres.DB {
 
 		_, err = postgresDB.Exec(ctx, "create extension if not exists pg_stat_statements")
 		if err != nil {
-			log.Errorf("Could not create pg_stat_statements extension: %v", err)
+			log.Warnf("Could not create pg_stat_statements extension.  Statement planning and execution stats may not be tracked: %v", err)
 		}
 		go startMonitoringPostgres(ctx, postgresDB, dbConfig)
 
@@ -211,11 +243,17 @@ func CollectPostgresStats(ctx context.Context, db postgres.DB) *stats.DatabaseSt
 // CollectPostgresDatabaseSizes -- collect database sizing stats for Postgres
 func CollectPostgresDatabaseSizes(postgresConfig *postgres.Config) []*stats.DatabaseDetailsStats {
 	detailsSlice := make([]*stats.DatabaseDetailsStats, 0)
+	var databases []string
+	var err error
 
-	databases, err := pgadmin.GetAllDatabases(postgresConfig)
-	if err != nil {
-		log.Errorf("unable to get the databases: %v", err)
-		return detailsSlice
+	if !env.ManagedCentral.BooleanSetting() && !pgconfig.IsExternalDatabase() {
+		databases, err = pgadmin.GetAllDatabases(postgresConfig)
+		if err != nil {
+			log.Errorf("unable to get the databases: %v", err)
+			return detailsSlice
+		}
+	} else {
+		databases = append(databases, postgresConfig.ConnConfig.Database)
 	}
 
 	for _, database := range databases {
@@ -244,15 +282,15 @@ func CollectPostgresDatabaseStats(postgresConfig *postgres.Config) {
 		metrics.PostgresDBSize.With(databaseLabel).Set(float64(dbStat.DatabaseSize))
 	}
 
-	totalSize, err := pgadmin.GetTotalPostgresSize(postgresConfig)
-	if err != nil {
-		log.Errorf("error fetching total database size: %v", err)
-		return
-	}
-	metrics.PostgresTotalSize.Set(float64(totalSize))
+	if !env.ManagedCentral.BooleanSetting() && !pgconfig.IsExternalDatabase() {
+		totalSize, err := pgadmin.GetTotalPostgresSize(postgresConfig)
+		if err != nil {
+			log.Errorf("error fetching total database size: %v", err)
+			return
+		}
+		metrics.PostgresTotalSize.Set(float64(totalSize))
 
-	// Check Postgres remaining capacity
-	if !env.ManagedCentral.BooleanSetting() {
+		// Check Postgres remaining capacity
 		availableDBBytes, err := pgadmin.GetRemainingCapacity(postgresConfig)
 		if err != nil {
 			if !loggedCapacityCalculationError {
@@ -263,6 +301,20 @@ func CollectPostgresDatabaseStats(postgresConfig *postgres.Config) {
 		}
 
 		metrics.PostgresRemainingCapacity.Set(float64(availableDBBytes))
+	}
+}
+
+// CollectPostgresTupleStats -- collect tuple stats for Postgres
+func CollectPostgresTupleStats(ctx context.Context, db postgres.DB) {
+	tupleStats := pgStats.GetPGTupleStats(ctx, db, pgStatStatementsMax)
+	if tupleStats == nil {
+		return
+	}
+
+	for _, tuple := range tupleStats.Tuples {
+		tableLabel := prometheus.Labels{"table": tuple.Table}
+		metrics.PostgresTableLiveTuples.With(tableLabel).Set(float64(tuple.NumLiveTuples))
+		metrics.PostgresTableDeadTuples.With(tableLabel).Set(float64(tuple.NumDeadTuples))
 	}
 }
 
@@ -326,22 +378,6 @@ func getMaxConnections(ctx context.Context, db postgres.DB) {
 	metrics.PostgresMaximumConnections.Set(float64(connectionCount))
 }
 
-func processConnectionCountRow(metric *prometheus.GaugeVec, rows *postgres.Rows) {
-	for rows.Next() {
-		var (
-			databaseName    string
-			connectionCount int
-		)
-		if err := rows.Scan(&databaseName, &connectionCount); err != nil {
-			log.Errorf("error scanning row for connection data: %v", err)
-			return
-		}
-
-		databaseLabel := prometheus.Labels{"database": databaseName}
-		metric.With(databaseLabel).Set(float64(connectionCount))
-	}
-}
-
 func startMonitoringPostgres(ctx context.Context, db postgres.DB, postgresConfig *postgres.Config) {
 	t := time.NewTicker(1 * time.Minute)
 	defer t.Stop()
@@ -349,5 +385,6 @@ func startMonitoringPostgres(ctx context.Context, db postgres.DB, postgresConfig
 		_ = CollectPostgresStats(ctx, db)
 		CollectPostgresDatabaseStats(postgresConfig)
 		CollectPostgresConnectionStats(ctx, db)
+		CollectPostgresTupleStats(ctx, db)
 	}
 }

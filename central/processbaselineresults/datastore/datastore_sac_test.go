@@ -6,13 +6,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stackrox/rox/central/role/resources"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
-	"github.com/stackrox/rox/pkg/rocksdb"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sac/testconsts"
 	"github.com/stackrox/rox/pkg/sac/testutils"
 	"github.com/stackrox/rox/pkg/uuid"
@@ -26,8 +25,6 @@ func TestProcessBaselineResultsDatastoreSAC(t *testing.T) {
 type processBaselineResultsDatastoreSACSuite struct {
 	suite.Suite
 
-	engine *rocksdb.RocksDB
-
 	pool postgres.DB
 
 	datastore                  DataStore
@@ -37,30 +34,18 @@ type processBaselineResultsDatastoreSACSuite struct {
 
 func (s *processBaselineResultsDatastoreSACSuite) SetupSuite() {
 	var err error
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		pgtestbase := pgtest.ForT(s.T())
-		s.Require().NotNil(pgtestbase)
-		s.pool = pgtestbase.DB
-		s.datastore, err = GetTestPostgresDataStore(s.T(), s.pool)
-		s.Require().NoError(err)
-	} else {
-		s.engine, err = rocksdb.NewTemp("riskSACTest")
-		s.Require().NoError(err)
-
-		s.datastore, err = GetTestRocksBleveDataStore(s.T(), s.engine)
-		s.Require().NoError(err)
-	}
+	pgtestbase := pgtest.ForT(s.T())
+	s.Require().NotNil(pgtestbase)
+	s.pool = pgtestbase.DB
+	s.datastore, err = GetTestPostgresDataStore(s.T(), s.pool)
+	s.Require().NoError(err)
 
 	s.testContexts = testutils.GetNamespaceScopedTestContexts(context.Background(), s.T(),
 		resources.DeploymentExtension)
 }
 
 func (s *processBaselineResultsDatastoreSACSuite) TearDownSuite() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.pool.Close()
-	} else {
-		s.Require().NoError(rocksdb.CloseAndRemove(s.engine))
-	}
+	s.pool.Close()
 }
 
 func (s *processBaselineResultsDatastoreSACSuite) SetupTest() {
@@ -124,7 +109,7 @@ func (s *processBaselineResultsDatastoreSACSuite) TestGetBaselineResults() {
 			res, err := s.datastore.GetBaselineResults(ctx, processBaselineResult.GetDeploymentId())
 			if c.ExpectedFound {
 				s.NoError(err)
-				s.Equal(*processBaselineResult, *res)
+				protoassert.Equal(s.T(), processBaselineResult, res)
 			} else {
 				s.Require().Error(err)
 				s.ErrorIs(err, sac.ErrResourceAccessDenied)

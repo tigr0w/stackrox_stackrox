@@ -25,13 +25,13 @@ const Control = ({ className, ...props }) => (
         {...props}
         className={`${className} ${
             props.isDisabled ? 'bg-base-200' : 'bg-base-100'
-        } h-full cursor-text border-2 leading-normal min-h-10 border-base-300 flex items-center font-600 shadow-none overflow-auto hover:border-base-400`}
+        } h-full cursor-text border-2 leading-normal min-h-10 border-base-300 flex items-center shadow-none overflow-auto hover:border-base-400`}
     />
 );
 
 const Menu = ({ className, ...props }) => (
     <selectComponents.Menu
-        className={`${className} bg-base-200 shadow-lg z-60 font-600 text-left`}
+        className={`${className} bg-base-200 shadow-lg z-60 text-left`}
         {...props}
     />
 );
@@ -60,7 +60,7 @@ export const defaultSelectStyles = {
  *   3. value property expects only option value (not the whole option object with label and value)
  */
 function withAdjustedBehavior(SelectComponent) {
-    return class extends Component {
+    return class ReactSelectComponent extends Component {
         static propTypes = {
             /* Note: getOptionValue isn't fully supported by react-select Creatable component, it's recommended to use { label, value } options */
             getOptionValue: PropTypes.func,
@@ -197,6 +197,8 @@ function withAdjustedBehavior(SelectComponent) {
         };
 
         render() {
+            // disable because unused onChange might be specified for rest spread idiom.
+            /* eslint-disable no-unused-vars */
             const {
                 getOptionValue,
                 onChange,
@@ -210,6 +212,7 @@ function withAdjustedBehavior(SelectComponent) {
                 isDisabled,
                 ...rest
             } = this.props;
+            /* eslint-enable no-unused-vars */
             const valueToPass = this.transformValue(getOptionValue, options, value, optionValue);
             let mergedComponents = {
                 ...defaultComponents,

@@ -1,6 +1,15 @@
 import React, { ReactElement } from 'react';
-import { Form, PageSection, TextInput, ToggleGroup, ToggleGroupItem } from '@patternfly/react-core';
+import {
+    Alert,
+    Form,
+    PageSection,
+    Text,
+    TextInput,
+    ToggleGroup,
+    ToggleGroupItem,
+} from '@patternfly/react-core';
 import * as yup from 'yup';
+import merge from 'lodash/merge';
 
 import { ClairifyImageIntegration } from 'types/imageIntegration.proto';
 
@@ -53,9 +62,7 @@ function ClairifyIntegrationForm({
     initialValues = null,
     isEditable = false,
 }: IntegrationFormProps<ClairifyImageIntegration>): ReactElement {
-    const formInitialValues = initialValues
-        ? { ...defaultValues, ...initialValues }
-        : defaultValues;
+    const formInitialValues: ClairifyImageIntegration = merge({}, defaultValues, initialValues);
     const {
         values,
         touched,
@@ -82,6 +89,17 @@ function ClairifyIntegrationForm({
     return (
         <>
             <PageSection variant="light" isFilled hasOverflowScroll>
+                <Alert
+                    title="Deprecation notice"
+                    component="p"
+                    variant={'warning'}
+                    isInline
+                    className="pf-v5-u-mb-lg"
+                >
+                    <Text>StackRox Scanner will be removed in a future release.</Text>
+                    <Text>No new enhancements for StackRox Scanner will be done or accepted.</Text>
+                    <Text>It is recommended to use Scanner V4, instead.</Text>
+                </Alert>
                 <FormMessage message={message} />
                 <Form isWidthLimited>
                     <FormLabelGroup
@@ -97,7 +115,7 @@ function ClairifyIntegrationForm({
                             id="name"
                             value={values.name}
                             placeholder="(example, StackRox Scanner Integration)"
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -142,7 +160,7 @@ function ClairifyIntegrationForm({
                             type="text"
                             id="clairify.endpoint"
                             value={values.clairify.endpoint}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -150,7 +168,7 @@ function ClairifyIntegrationForm({
                     <FormLabelGroup
                         label="GRPC endpoint"
                         fieldId="clairify.grpcEndpoint"
-                        helperText="Used For Node Scanning"
+                        helperText="Used for node scanning"
                         touched={touched}
                         errors={errors}
                     >
@@ -159,7 +177,7 @@ function ClairifyIntegrationForm({
                             type="text"
                             id="clairify.grpcEndpoint"
                             value={values.clairify.grpcEndpoint}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />
@@ -176,7 +194,7 @@ function ClairifyIntegrationForm({
                             type="number"
                             id="clairify.numConcurrentScans"
                             value={values.clairify.numConcurrentScans}
-                            onChange={onChange}
+                            onChange={(event, value) => onChange(value, event)}
                             onBlur={handleBlur}
                             isDisabled={!isEditable}
                         />

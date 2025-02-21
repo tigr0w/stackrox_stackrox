@@ -8,16 +8,14 @@ import (
 	clusterDataStore "github.com/stackrox/rox/central/cluster/datastore"
 	clusterCVEEdgeDataStore "github.com/stackrox/rox/central/clustercveedge/datastore"
 	clusterCVEDataStore "github.com/stackrox/rox/central/cve/cluster/datastore"
-	"github.com/stackrox/rox/central/cve/converter"
 	"github.com/stackrox/rox/central/cve/converter/utils"
 	converterV2 "github.com/stackrox/rox/central/cve/converter/v2"
-	cveDataStore "github.com/stackrox/rox/central/cve/datastore"
 	cveMatcher "github.com/stackrox/rox/central/cve/matcher"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/errorhelpers"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	pkgScanners "github.com/stackrox/rox/pkg/scanners"
 	"github.com/stackrox/rox/pkg/scanners/types"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
@@ -38,7 +36,6 @@ var (
 type orchestratorCVEManager struct {
 	clusterDataStore        clusterDataStore.DataStore
 	clusterCVEDataStore     clusterCVEDataStore.DataStore
-	legacyCVEDataStore      cveDataStore.DataStore
 	clusterCVEEdgeDataStore clusterCVEEdgeDataStore.DataStore
 	cveMatcher              *cveMatcher.CVEMatcher
 
@@ -76,13 +73,13 @@ func (m *orchestratorCVEManager) Reconcile() {
 }
 
 func (m *orchestratorCVEManager) Scan(version string, cveType utils.CVEType) ([]*storage.EmbeddedVulnerability, error) {
-	scanners := map[string]types.OrchestratorScanner{}
+	scanners := make(map[string]types.OrchestratorScanner)
 
-	m.mutex.Lock()
-	for k, v := range m.scanners {
-		scanners[k] = v
-	}
-	m.mutex.Unlock()
+	concurrency.WithLock(&m.mutex, func() {
+		for k, v := range m.scanners {
+			scanners[k] = v
+		}
+	})
 
 	if len(scanners) == 0 {
 		return nil, errors.New("no orchestrator scanners are integrated")
@@ -99,33 +96,17 @@ func (m *orchestratorCVEManager) Scan(version string, cveType utils.CVEType) ([]
 }
 
 func (m *orchestratorCVEManager) updateCVEs(embeddedCVEs []*storage.EmbeddedVulnerability, embeddedCVEToClusters map[string][]*storage.Cluster, cveType utils.CVEType) error {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		var newCVEs []converterV2.ClusterCVEParts
-		for _, embeddedCVE := range embeddedCVEs {
-			cve := utils.EmbeddedVulnerabilityToClusterCVE(cveType.ToStorageCVEType(), embeddedCVE)
-			newCVEs = append(newCVEs, converterV2.NewClusterCVEParts(cve, embeddedCVEToClusters[embeddedCVE.GetCve()], embeddedCVE.GetFixedBy()))
-		}
-		return m.updateCVEsInPostgres(newCVEs, cveType)
-	}
-
-	var newCVEs []converter.ClusterCVEParts
+	var newCVEs []converterV2.ClusterCVEParts
 	for _, embeddedCVE := range embeddedCVEs {
-		cve := utils.EmbeddedCVEToProtoCVE("", embeddedCVE)
-		newCVEs = append(newCVEs, converter.NewClusterCVEParts(cve, embeddedCVEToClusters[embeddedCVE.GetCve()], embeddedCVE.GetFixedBy()))
+		cve := utils.EmbeddedVulnerabilityToClusterCVE(cveType.ToStorageCVEType(), embeddedCVE)
+		newCVEs = append(newCVEs, converterV2.NewClusterCVEParts(cve, embeddedCVEToClusters[embeddedCVE.GetCve()], embeddedCVE.GetFixedBy()))
 	}
-	return m.updateCVEsInDB(newCVEs, cveType)
+	return m.updateCVEsInPostgres(newCVEs, cveType)
 }
 
 func (m *orchestratorCVEManager) updateCVEsInPostgres(cves []converterV2.ClusterCVEParts, cveType utils.CVEType) error {
 	return m.clusterCVEDataStore.UpsertClusterCVEsInternal(allAccessCtx, cveType.ToStorageCVEType(), cves...)
 	// Reconciliation is performed in postgres store.
-}
-
-func (m *orchestratorCVEManager) updateCVEsInDB(cves []converter.ClusterCVEParts, cveType utils.CVEType) error {
-	if err := m.clusterCVEEdgeDataStore.Upsert(allAccessCtx, cves...); err != nil {
-		return err
-	}
-	return reconcileCVEsInDB(m.legacyCVEDataStore, m.clusterCVEEdgeDataStore, cveType.ToStorageCVEType(), cves)
 }
 
 // createOrchestratorScanner creates a types.OrchestratorScanner out of the given storage.OrchestratorIntegration.

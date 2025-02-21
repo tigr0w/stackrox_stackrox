@@ -29,8 +29,9 @@ function PoliciesPage() {
     const { policyId } = useParams();
 
     const { hasReadAccess, hasReadWriteAccess } = usePermissions();
-    const hasReadAccessForPolicy = hasReadAccess('Policy');
-    const hasWriteAccessForPolicy = hasReadWriteAccess('Policy');
+    const hasReadAccessForPolicy = hasReadAccess('WorkflowAdministration');
+    const hasWriteAccessForPolicy =
+        hasReadWriteAccess('WorkflowAdministration') && hasReadAccess('Alert');
 
     if (!hasReadAccessForPolicy) {
         return <NotFoundMessage title="404: We couldn't find that page" />;

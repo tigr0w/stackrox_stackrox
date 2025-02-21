@@ -6,7 +6,6 @@ import {
     Button,
     Flex,
     FlexItem,
-    ButtonVariant,
     Divider,
     Alert,
     AlertActionCloseButton,
@@ -16,7 +15,7 @@ import {
 import PageTitle from 'Components/PageTitle';
 import LinkShim from 'Components/PatternFly/LinkShim';
 import { collectionsBasePath } from 'routePaths';
-import useRestQuery from 'Containers/Dashboard/hooks/useRestQuery';
+import useRestQuery from 'hooks/useRestQuery';
 import {
     Collection,
     deleteCollection,
@@ -52,7 +51,7 @@ function CollectionsTablePage({ hasWriteAccessForCollections }: CollectionsTable
     );
     const {
         data: listData,
-        loading: listLoading,
+        isLoading: listLoading,
         error: listError,
         refetch: listRefetch,
     } = useRestQuery(listQuery);
@@ -60,7 +59,7 @@ function CollectionsTablePage({ hasWriteAccessForCollections }: CollectionsTable
     const countQuery = useCallback(() => getCollectionCount(searchFilter), [searchFilter]);
     const {
         data: countData,
-        loading: countLoading,
+        isLoading: countLoading,
         error: countError,
         refetch: countRefetch,
     } = useRestQuery(countQuery);
@@ -97,7 +96,7 @@ function CollectionsTablePage({ hasWriteAccessForCollections }: CollectionsTable
                     {hasWriteAccessForCollections && (
                         <FlexItem align={{ default: 'alignRight' }}>
                             <Button
-                                variant={ButtonVariant.primary}
+                                variant="primary"
                                 component={LinkShim}
                                 href={`${collectionsBasePath}?action=create`}
                             >
@@ -131,6 +130,7 @@ function CollectionsTablePage({ hasWriteAccessForCollections }: CollectionsTable
                         key={key}
                         variant={variant}
                         title={title}
+                        component="p"
                         timeout
                         onTimeout={() => removeToast(key)}
                         actionClose={

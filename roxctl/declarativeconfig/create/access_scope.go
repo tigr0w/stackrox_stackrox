@@ -16,11 +16,12 @@ import (
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/declarativeconfig/transform"
 	"github.com/stackrox/rox/pkg/errox"
-	"github.com/stackrox/rox/pkg/maputil"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/roxctl/common/environment"
+	"github.com/stackrox/rox/roxctl/common/flags"
 	"github.com/stackrox/rox/roxctl/declarativeconfig/k8sobject"
 	"github.com/stackrox/rox/roxctl/declarativeconfig/lint"
+	"golang.org/x/exp/maps"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,12 +61,12 @@ func accessScopeCommand(cliEnvironment environment.Environment) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&accessScopeCmd.accessScope.Name, "name", "", "name of the access scope")
+	cmd.Flags().StringVar(&accessScopeCmd.accessScope.Name, "name", "", "Name of the access scope")
 	cmd.Flags().StringVar(&accessScopeCmd.accessScope.Description, "description", "",
-		"description of the access scope")
+		"Description of the access scope")
 
 	cmd.Flags().Var(&includedObjectsFlag{includedObjects: &accessScopeCmd.accessScope.Rules.IncludedObjects}, "included",
-		`list of clusters and their namespaces that should be included within the access scope.
+		`List of clusters and their namespaces that should be included within the access scope.
 In case all namespaces of a specific cluster should be included, specify --included cluster-name.
 In case only a subset of namespace should be included, specify --included cluster-name=namespaceA,namespaceB`)
 
@@ -82,6 +83,8 @@ In case only a subset of namespace should be included, specify --included cluste
 		fmt.Sprintf(labelSelectorUsage, "namespace-label-selector", "namespace-label-selector"))
 
 	utils.Must(cmd.MarkFlagRequired("name"))
+
+	flags.HideInheritedFlags(cmd, k8sobject.ConfigMapFlag, k8sobject.NamespaceFlag)
 
 	return cmd
 }
@@ -256,7 +259,7 @@ func retrieveRequirement(s string) (*declarativeconfig.Requirement, error) {
 			op, ok := storage.SetBasedLabelSelector_Operator_value[kv[1]]
 			if !ok {
 				return nil, fmt.Errorf("operator %s must be one of the allowed values: [%s]", kvPair,
-					strings.Join(maputil.Keys(storage.SetBasedLabelSelector_Operator_value), ","))
+					strings.Join(maps.Keys(storage.SetBasedLabelSelector_Operator_value), ","))
 			}
 			requirement.Operator = declarativeconfig.Operator(op)
 		case "values":

@@ -2,18 +2,25 @@ package compliance
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 
-	"github.com/grpc-ecosystem/go-grpc-middleware/util/metautils"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	metautils "github.com/grpc-ecosystem/go-grpc-middleware/v2/metadata"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
+	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/internalapi/compliance"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/centralsensor"
+	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/grpc/authz/idcheck"
 	"github.com/stackrox/rox/pkg/k8sutil"
+	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/sensor/common"
+	"github.com/stackrox/rox/sensor/common/compliance/index"
+	"github.com/stackrox/rox/sensor/common/message"
 	"github.com/stackrox/rox/sensor/common/orchestrator"
 	"google.golang.org/grpc"
 )
@@ -22,9 +29,10 @@ import (
 type serviceImpl struct {
 	sensor.UnimplementedComplianceServiceServer
 
-	output          chan *compliance.ComplianceReturn
-	auditEvents     chan *sensor.AuditEvents
-	nodeInventories chan *storage.NodeInventory
+	output           chan *compliance.ComplianceReturn
+	auditEvents      chan *sensor.AuditEvents
+	nodeInventories  chan *storage.NodeInventory
+	indexReportWraps chan *index.IndexReportWrap
 
 	complianceC <-chan common.MessageToComplianceWithAddress
 
@@ -32,8 +40,45 @@ type serviceImpl struct {
 
 	orchestrator orchestrator.Orchestrator
 
-	multiplexer       *Multiplexer
 	connectionManager *connectionManager
+
+	offlineMode *atomic.Bool
+	stopperLock sync.Mutex
+	stopper     set.Set[concurrency.Stopper]
+}
+
+func (s *serviceImpl) Notify(e common.SensorComponentEvent) {
+	switch e {
+	case common.SensorComponentEventCentralReachable:
+		s.offlineMode.Store(false)
+	case common.SensorComponentEventOfflineMode:
+		s.offlineMode.Store(true)
+	}
+}
+
+func (s *serviceImpl) Start() error {
+	return nil
+}
+
+func (s *serviceImpl) Stop(_ error) {
+	concurrency.WithLock(&s.stopperLock, func() {
+		for _, stopper := range s.stopper.AsSlice() {
+			stopper.Client().Stop()
+			_ = stopper.Client().Stopped().Wait()
+		}
+	})
+}
+
+func (s *serviceImpl) Capabilities() []centralsensor.SensorCapability {
+	return nil
+}
+
+func (s *serviceImpl) ProcessMessage(_ *central.MsgToSensor) error {
+	return nil
+}
+
+func (s *serviceImpl) ResponsesC() <-chan *message.ExpiringMessage {
+	return nil
 }
 
 type connectionManager struct {
@@ -85,29 +130,44 @@ func (s *serviceImpl) GetScrapeConfig(_ context.Context, nodeName string) (*sens
 	}, nil
 }
 
-func (s *serviceImpl) startSendingLoop() {
-	for msg := range s.complianceC {
-		if msg.Broadcast {
-			s.connectionManager.forEach(func(node string, server sensor.ComplianceService_CommunicateServer) {
-				err := server.Send(msg.Msg)
-				if err != nil {
-					log.Errorf("Error sending broadcast MessageToComplianceWithAddress to node %q: %v", node, err)
-					return
-				}
-			})
-		} else {
-			con, ok := s.connectionManager.connectionMap[msg.Hostname]
+func (s *serviceImpl) startSendingLoop(stopper concurrency.Stopper) {
+	defer stopper.Flow().ReportStopped()
+	for {
+		select {
+		case <-stopper.Flow().StopRequested():
+			return
+		case msg, ok := <-s.complianceC:
 			if !ok {
-				log.Errorf("Unable to find connection to compliance: %q", msg.Hostname)
+				log.Error("the complianceC was closed unexpectedly")
 				return
 			}
-			err := con.Send(msg.Msg)
-			if err != nil {
-				log.Errorf("Error sending MessageToComplianceWithAddress to node %q: %v", msg.Hostname, err)
-				return
+			if err := s.handleSendingMessage(msg); err != nil {
+				log.Errorf("Error sending message to compliance: %v", err)
 			}
 		}
 	}
+}
+
+func (s *serviceImpl) handleSendingMessage(msg common.MessageToComplianceWithAddress) error {
+	if msg.Broadcast {
+		s.connectionManager.forEach(func(node string, server sensor.ComplianceService_CommunicateServer) {
+			err := server.Send(msg.Msg)
+			if err != nil {
+				log.Errorf("Error sending broadcast compliance-message to node %q: %v", node, err)
+				return
+			}
+		})
+		return nil
+	}
+	conn, found := s.connectionManager.connectionMap[msg.Hostname]
+	if !found {
+		return fmt.Errorf("unable to find connection to compliance: %q", msg.Hostname)
+
+	}
+	if err := conn.Send(msg.Msg); err != nil {
+		return fmt.Errorf("sending message to compliance on node %q: %w", msg.Hostname, err)
+	}
+	return nil
 }
 
 func (s *serviceImpl) RunScrape(msg *sensor.MsgToCompliance) int {
@@ -160,12 +220,18 @@ func (s *serviceImpl) Communicate(server sensor.ComplianceService_CommunicateSer
 		defer s.auditLogCollectionManager.RemoveEligibleComplianceNode(hostname)
 	}
 
-	go s.startSendingLoop()
+	stopper := concurrency.NewStopper()
+	concurrency.WithLock(&s.stopperLock, func() {
+		s.stopper.Add(stopper)
+	})
+	go s.startSendingLoop(stopper)
 
 	for {
 		msg, err := server.Recv()
 		if err != nil {
-			log.Errorf("error receiving from compliance %q: %v", hostname, err)
+			log.Errorf("receiving from compliance %q: %v", hostname, err)
+			// Make sure the stopper stops if there is an error with the connection
+			stopper.Client().Stop()
 			return err
 		}
 		switch t := msg.Msg.(type) {
@@ -173,11 +239,22 @@ func (s *serviceImpl) Communicate(server sensor.ComplianceService_CommunicateSer
 			log.Infof("Received compliance return from %q", msg.GetNode())
 			s.output <- t.Return
 		case *sensor.MsgFromCompliance_AuditEvents:
+			// if we are offline we do not send more audit logs to the manager nor the detector.
+			// Upon reconnection Central will sync the last state and Sensor will request to Compliance to start
+			// sending the audit logs based on that state.
+			if s.offlineMode.Load() {
+				continue
+			}
 			s.auditEvents <- t.AuditEvents
 			s.auditLogCollectionManager.AuditMessagesChan() <- msg
 		case *sensor.MsgFromCompliance_NodeInventory:
-			if env.RHCOSNodeScanning.BooleanSetting() {
-				s.nodeInventories <- t.NodeInventory
+			s.nodeInventories <- t.NodeInventory
+		case *sensor.MsgFromCompliance_IndexReport:
+			log.Infof("Received index report from %q with %d packages",
+				msg.GetNode(), len(msg.GetIndexReport().GetContents().GetPackages()))
+			s.indexReportWraps <- &index.IndexReportWrap{
+				NodeName:    msg.GetNode(),
+				IndexReport: t.IndexReport,
 			}
 		}
 	}
@@ -208,4 +285,8 @@ func (s *serviceImpl) AuditEvents() chan *sensor.AuditEvents {
 
 func (s *serviceImpl) NodeInventories() <-chan *storage.NodeInventory {
 	return s.nodeInventories
+}
+
+func (s *serviceImpl) IndexReportWraps() <-chan *index.IndexReportWrap {
+	return s.indexReportWraps
 }

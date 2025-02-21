@@ -9,6 +9,7 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/postgres/mapping"
 )
@@ -28,6 +29,7 @@ var (
 		}
 		schema = walker.Walk(reflect.TypeOf((*storage.Risk)(nil)), "risks")
 		schema.SetOptionsMap(search.Walk(v1.SearchCategory_RISKS, "risk", (*storage.Risk)(nil)))
+		schema.ScopingResource = resources.DeploymentExtension
 		RegisterTable(schema, CreateTableRisksStmt)
 		mapping.RegisterCategoryToTable(v1.SearchCategory_RISKS, schema)
 		return schema
@@ -35,14 +37,15 @@ var (
 )
 
 const (
+	// RisksTableName specifies the name of the table in postgres.
 	RisksTableName = "risks"
 )
 
 // Risks holds the Gorm model for Postgres table `risks`.
 type Risks struct {
-	Id               string                  `gorm:"column:id;type:varchar;primaryKey"`
+	ID               string                  `gorm:"column:id;type:varchar;primaryKey"`
 	SubjectNamespace string                  `gorm:"column:subject_namespace;type:varchar;index:risks_sac_filter,type:btree"`
-	SubjectClusterId string                  `gorm:"column:subject_clusterid;type:uuid;index:risks_sac_filter,type:btree"`
+	SubjectClusterID string                  `gorm:"column:subject_clusterid;type:uuid;index:risks_sac_filter,type:btree"`
 	SubjectType      storage.RiskSubjectType `gorm:"column:subject_type;type:integer"`
 	Score            float32                 `gorm:"column:score;type:numeric"`
 	Serialized       []byte                  `gorm:"column:serialized;type:bytea"`

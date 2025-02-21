@@ -8,6 +8,7 @@ import (
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/networkgraph"
 	"github.com/stackrox/rox/pkg/networkgraph/tree"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/utils"
 )
@@ -46,7 +47,7 @@ func (a *aggregateToSupernetImpl) Aggregate(conns []*storage.NetworkFlow) []*sto
 			continue
 		}
 
-		conn = conn.Clone()
+		conn = conn.CloneVT()
 		srcEntity, dstEntity = conn.GetProps().GetSrcEntity(), conn.GetProps().GetDstEntity()
 
 		// If both endpoints are not external (including INTERNET), skip processing.
@@ -60,7 +61,7 @@ func (a *aggregateToSupernetImpl) Aggregate(conns []*storage.NetworkFlow) []*sto
 
 		connID := networkgraph.GetNetworkConnIndicator(conn)
 		if storedFlow := normalizedConns[connID]; storedFlow != nil {
-			if storedFlow.GetLastSeenTimestamp().Compare(conn.GetLastSeenTimestamp()) < 0 {
+			if protocompat.CompareTimestamps(storedFlow.GetLastSeenTimestamp(), conn.GetLastSeenTimestamp()) < 0 {
 				storedFlow.LastSeenTimestamp = conn.GetLastSeenTimestamp()
 			}
 		} else {
@@ -113,7 +114,7 @@ func (a *aggregateDefaultToCustomExtSrcsImpl) Aggregate(conns []*storage.Network
 			continue
 		}
 
-		conn = conn.Clone()
+		conn = conn.CloneVT()
 		srcEntity, dstEntity = conn.GetProps().GetSrcEntity(), conn.GetProps().GetDstEntity()
 
 		// If both endpoints are not external (including INTERNET), skip processing.
@@ -131,7 +132,7 @@ func (a *aggregateDefaultToCustomExtSrcsImpl) Aggregate(conns []*storage.Network
 
 		connID := networkgraph.GetNetworkConnIndicator(conn)
 		if storedFlow := normalizedConns[connID]; storedFlow != nil {
-			if storedFlow.GetLastSeenTimestamp().Compare(conn.GetLastSeenTimestamp()) < 0 {
+			if protocompat.CompareTimestamps(storedFlow.GetLastSeenTimestamp(), conn.GetLastSeenTimestamp()) < 0 {
 				storedFlow.LastSeenTimestamp = conn.GetLastSeenTimestamp()
 			}
 		} else {
@@ -172,8 +173,20 @@ func (a *aggregateExternalConnByNameImpl) Aggregate(flows []*storage.NetworkFlow
 			continue
 		}
 
-		flow = flow.Clone()
-		srcEntity, dstEntity = flow.GetProps().GetSrcEntity(), flow.GetProps().GetDstEntity()
+		flow = flow.CloneVT()
+
+		flowProps := flow.GetProps()
+		if flowProps == nil {
+			continue
+		}
+
+		// If the entity is discovered, anonymize it to avoid overloading
+		// the graph with many nodes (external IP details are still accessible
+		// via other APIs)
+		flowProps.SrcEntity = anonymizeDiscoveredEntity(flowProps.SrcEntity)
+		flowProps.DstEntity = anonymizeDiscoveredEntity(flowProps.DstEntity)
+
+		srcEntity, dstEntity = flowProps.SrcEntity, flowProps.DstEntity
 
 		// If both endpoints are not known external sources, skip processing.
 		if !networkgraph.IsKnownExternalSrc(srcEntity) && !networkgraph.IsKnownExternalSrc(dstEntity) {
@@ -188,7 +201,7 @@ func (a *aggregateExternalConnByNameImpl) Aggregate(flows []*storage.NetworkFlow
 		// If multiple connections collapse into one, use the latest connection's timestamp to correctly indicate the
 		// liveliness of the connection.
 		if storedFlow := conns[connIndicator]; storedFlow != nil {
-			if storedFlow.GetLastSeenTimestamp().Compare(flow.GetLastSeenTimestamp()) < 0 {
+			if protocompat.CompareTimestamps(storedFlow.GetLastSeenTimestamp(), flow.GetLastSeenTimestamp()) < 0 {
 				storedFlow.LastSeenTimestamp = flow.GetLastSeenTimestamp()
 			}
 		} else {
@@ -314,4 +327,13 @@ func normalizeDupNameExtSrcs(entity *storage.NetworkEntityInfo) {
 			},
 		},
 	}
+}
+
+// Return NetworkEntityInfo_INTERNET if entity is a 'discovered' external entity
+// Otherwise, return entity.
+func anonymizeDiscoveredEntity(entity *storage.NetworkEntityInfo) *storage.NetworkEntityInfo {
+	if networkgraph.IsExternalDiscovered(entity) {
+		return networkgraph.InternetEntity().ToProto()
+	}
+	return entity
 }

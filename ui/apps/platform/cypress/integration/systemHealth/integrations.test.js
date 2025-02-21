@@ -3,11 +3,11 @@ import withAuth from '../../helpers/basicAuth';
 import { visitSystemHealth } from '../../helpers/systemHealth';
 
 function getCardBodyDescendantSelector(cardTitle, descendant) {
-    return `.pf-c-card:has('h2:contains("${cardTitle}")') .pf-c-card__body ${descendant}`;
+    return `.pf-v5-c-card:has('h2:contains("${cardTitle}")') .pf-v5-c-card__body ${descendant}`;
 }
 
 function getCardHeaderDescendantSelector(cardTitle, descendant) {
-    return `.pf-c-card__header:has('h2:contains("${cardTitle}")') ${descendant}`;
+    return `.pf-v5-c-card__header:has('h2:contains("${cardTitle}")') ${descendant}`;
 }
 
 describe('System Health Integrations fixtures', () => {
@@ -20,7 +20,7 @@ describe('System Health Integrations fixtures', () => {
             'integrationhealth/externalbackups': { body: { integrationHealth } },
         });
 
-        cy.get(getCardHeaderDescendantSelector('Image Integrations', 'div:contains("no errors")'));
+        cy.get(getCardHeaderDescendantSelector('Backup Integrations', 'div:contains("no errors")'));
     });
 
     it('should not have count in healthy text for image integrations', () => {
@@ -134,7 +134,7 @@ describe('System Health Integrations fixtures', () => {
             'Error scanning "docker.io/library/nginx:latest" with scanner "Stackrox Scanner": dial tcp 10.0.1.229:5432: connect: connection refused';
         const itemSelector = getCardBodyDescendantSelector('Image Integrations', 'tbody tr:first');
         cy.get(`${itemSelector} td[data-label="Name"]`).should('have.text', name);
-        cy.get(`${itemSelector} td[data-label="Error"]`).should('have.text', errorMessage);
+        cy.get(`${itemSelector} td[data-label="Error message"]`).should('have.text', errorMessage);
     });
 
     it('should have a list with 1 declarative configuration error', () => {
@@ -144,7 +144,7 @@ describe('System Health Integrations fixtures', () => {
             {
                 id: '169b0d3f-8277-4900-bbce-1127077defae',
                 name: healthName,
-                type: 'DECLARATIVE_CONFIG',
+                resourceType: 'CONFIG_MAP',
                 status: 'UNHEALTHY',
                 errorMessage: errorMessageText,
                 lastTimestamp: '2020-12-04T00:38:17.906318735Z',
@@ -152,13 +152,16 @@ describe('System Health Integrations fixtures', () => {
         ];
 
         visitSystemHealth({
-            'integrationhealth/declarativeconfigs': { body: { integrationHealth } },
+            'declarative-config/health': { body: { healths: integrationHealth } },
         });
 
         const { widgets } = selectors.integrations;
         const itemSelector = `${widgets.declarativeConfigs} tr:first`;
         cy.get(`${itemSelector} td[data-label="Name"]`).should('have.text', healthName);
-        cy.get(`${itemSelector} td[data-label="Error"]`).should('have.text', errorMessageText);
+        cy.get(`${itemSelector} td[data-label="Error message"]`).should(
+            'have.text',
+            errorMessageText
+        );
     });
 
     it('should have no declarative configuration errors displayed', () => {
@@ -167,7 +170,7 @@ describe('System Health Integrations fixtures', () => {
             {
                 id: '169b0d3f-8277-4900-bbce-1127077defae',
                 name: healthName,
-                type: 'DECLARATIVE_CONFIG',
+                resourceType: 'CONFIG_MAP',
                 status: 'HEALTHY',
                 errorMessage: '',
                 lastTimestamp: '2020-12-04T00:38:17.906318735Z',
@@ -175,7 +178,7 @@ describe('System Health Integrations fixtures', () => {
         ];
 
         visitSystemHealth({
-            'integrationhealth/declarativeconfigs': { body: { integrationHealth } },
+            'declarative-config/health': { body: { healths: integrationHealth } },
         });
         const { widgets } = selectors.integrations;
         const itemSelector = `${widgets.declarativeConfigs} tr:first`;

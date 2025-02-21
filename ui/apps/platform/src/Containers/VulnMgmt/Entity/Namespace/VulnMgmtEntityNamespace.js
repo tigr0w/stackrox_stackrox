@@ -6,8 +6,7 @@ import { workflowEntityPropTypes, workflowEntityDefaultProps } from 'constants/e
 import entityTypes from 'constants/entityTypes';
 import { defaultCountKeyMap } from 'constants/workflowPages.constants';
 import workflowStateContext from 'Containers/workflowStateContext';
-import WorkflowEntityPage from 'Containers/Workflow/WorkflowEntityPage';
-import useFeatureFlags from 'hooks/useFeatureFlags';
+import WorkflowEntityPage from '../WorkflowEntityPage';
 import VulnMgmtNamespaceOverview from './VulnMgmtNamespaceOverview';
 import EntityList from '../../List/VulnMgmtList';
 import {
@@ -28,14 +27,8 @@ const VulnMgmtNamespace = ({
 }) => {
     const workflowState = useContext(workflowStateContext);
 
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVMUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-
     const overviewQuery = gql`
-        query getNamespace(
-            $id: ID!
-            $policyQuery: String
-        ) {
+        query getNamespace($id: ID!) {
             result: namespace(id: $id) {
                 metadata {
                     priority
@@ -47,36 +40,10 @@ const VulnMgmtNamespace = ({
                         value
                     }
                 }
-                policyStatus(query: $policyQuery) {
-                    status
-                    failingPolicies {
-                        id
-                        name
-                        description
-                        policyStatus
-                        latestViolation
-                        severity
-                        deploymentCount: failingDeploymentCount # field changed to failingDeploymentCount to improve performance
-                        lifecycleStages
-                        enforcementActions
-                        notifiers
-                        lastUpdated
-                    }
-                }
-                policyCount(query: $policyQuery)
                 deploymentCount
                 imageCount
-                ${
-                    showVMUpdates
-                        ? `
                 imageComponentCount
                 imageVulnerabilityCount
-                `
-                        : `
-                componentCount
-                vulnCount
-                `
-                }
             }
         }
     `;

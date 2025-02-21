@@ -10,7 +10,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/sensor/tests/resource"
+	"github.com/stackrox/rox/sensor/tests/helper"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	appsv1 "k8s.io/api/apps/v1"
@@ -21,12 +21,12 @@ import (
 )
 
 var (
-	NginxDeployment = resource.K8sResourceInfo{Kind: "Deployment", YamlFile: "nginx.yaml"}
-	NginxPod        = resource.K8sResourceInfo{Kind: "Pod", YamlFile: "nginx-pod.yaml"}
+	NginxDeployment = helper.K8sResourceInfo{Kind: "Deployment", YamlFile: "nginx.yaml", Name: "nginx-deployment"}
+	NginxPod        = helper.K8sResourceInfo{Kind: "Pod", YamlFile: "nginx-pod.yaml", Name: "nginx-rogue"}
 )
 
 type PodHierarchySuite struct {
-	testContext *resource.TestContext
+	testContext *helper.TestContext
 	suite.Suite
 }
 
@@ -38,8 +38,7 @@ var _ suite.SetupAllSuite = &PodHierarchySuite{}
 var _ suite.TearDownTestSuite = &PodHierarchySuite{}
 
 func (s *PodHierarchySuite) SetupSuite() {
-	s.T().Setenv("ROX_RESYNC_DISABLED", "true")
-	if testContext, err := resource.NewContext(s.T()); err != nil {
+	if testContext, err := helper.NewContext(s.T()); err != nil {
 		s.Fail("failed to setup test context: %s", err)
 	} else {
 		s.testContext = testContext
@@ -57,7 +56,7 @@ func sortAlphabetically(list []string) {
 	})
 }
 
-func assertDeploymentContainerImages(images ...string) resource.AssertFunc {
+func assertDeploymentContainerImages(images ...string) helper.AssertFunc {
 	return func(deployment *storage.Deployment, _ central.ResourceAction) error {
 		if len(deployment.GetContainers()) != len(images) {
 			return errors.Errorf("number of containers does not match slice of images provided: %d != %d", len(deployment.GetContainers()), len(images))
@@ -78,57 +77,57 @@ func assertDeploymentContainerImages(images ...string) resource.AssertFunc {
 }
 
 func (s *PodHierarchySuite) Test_ContainerSpecOnDeployment() {
-	s.testContext.RunTest(
-		resource.WithResources([]resource.K8sResourceInfo{
+	s.testContext.RunTest(s.T(),
+		helper.WithResources([]helper.K8sResourceInfo{
 			NginxDeployment,
 		}),
-		resource.WithTestCase(func(t *testing.T, testC *resource.TestContext, objects map[string]k8s.Object) {
+		helper.WithTestCase(func(t *testing.T, testC *helper.TestContext, objects map[string]k8s.Object) {
 			// wait until pods are created
-			err := wait.For(conditions.New(testC.Resources()).ResourceMatch(objects[NginxDeployment.YamlFile], func(object k8s.Object) bool {
+			err := wait.For(conditions.New(testC.Resources()).ResourceMatch(objects[NginxDeployment.Name], func(object k8s.Object) bool {
 				d := object.(*appsv1.Deployment)
 				return d.Status.AvailableReplicas == 3 && d.Status.ReadyReplicas == 3
 			}), wait.WithTimeout(time.Second*10))
 
 			s.Require().NoError(err)
 
-			testC.LastDeploymentState("nginx-deployment",
+			testC.LastDeploymentState(t, "nginx-deployment",
 				assertDeploymentContainerImages("docker.io/library/nginx:1.14.2"),
 				"nginx deployment should have a single container with nginx:1.14.2 image")
 
 			messages := testC.GetFakeCentral().GetAllMessages()
-			uniquePodNames := resource.GetUniquePodNamesFromPrefix(messages, "sensor-integration", "nginx-")
-			s.Require().Len(uniquePodNames, 3, "Should have received three different pod events")
+			uniquePodNames := helper.GetUniquePodNamesFromPrefix(messages, "sensor-integration", "nginx-")
+			s.Require().Lenf(uniquePodNames, 3, "Should have received three different pod events: %v", uniquePodNames)
 		}),
 	)
 }
 
 func (s *PodHierarchySuite) Test_ParentlessPodsAreTreatedAsDeployments() {
-	s.testContext.RunTest(
-		resource.WithResources([]resource.K8sResourceInfo{
+	s.testContext.RunTest(s.T(),
+		helper.WithResources([]helper.K8sResourceInfo{
 			NginxDeployment,
 			NginxPod,
 		}),
-		resource.WithTestCase(func(t *testing.T, testC *resource.TestContext, objects map[string]k8s.Object) {
+		helper.WithTestCase(func(t *testing.T, testC *helper.TestContext, objects map[string]k8s.Object) {
 			// wait until pods are created
-			err := wait.For(conditions.New(testC.Resources()).ResourceMatch(objects[NginxDeployment.YamlFile], func(object k8s.Object) bool {
+			err := wait.For(conditions.New(testC.Resources()).ResourceMatch(objects[NginxDeployment.Name], func(object k8s.Object) bool {
 				d := object.(*appsv1.Deployment)
 				return d.Status.AvailableReplicas == 3 && d.Status.ReadyReplicas == 3
 			}), wait.WithTimeout(time.Second*10))
 
 			s.Require().NoError(err)
 
-			testC.LastDeploymentState("nginx-rogue",
+			testC.LastDeploymentState(t, "nginx-rogue",
 				assertDeploymentContainerImages("docker.io/library/nginx:1.14.1"),
 				"nginx standalone pod should have a single container with nginx:1.14.1 image")
 
 			messages := testC.GetFakeCentral().GetAllMessages()
-			uniqueDeployments := resource.GetUniqueDeploymentNames(messages, "sensor-integration")
+			uniqueDeployments := helper.GetUniqueDeploymentNames(messages, "sensor-integration")
 			s.Contains(uniqueDeployments, "nginx-deployment",
 				"Should have receiving at least one deployment with nginx-deployment name")
 			s.Contains(uniqueDeployments, "nginx-rogue",
 				"Should have receiving at least one deployment with nginx-rogue name")
 
-			uniquePodNames := resource.GetUniquePodNamesFromPrefix(messages, "sensor-integration", "nginx-")
+			uniquePodNames := helper.GetUniquePodNamesFromPrefix(messages, "sensor-integration", "nginx-")
 			s.Require().Len(uniquePodNames, 4,
 				"Should have received four different pod events (3 from nginx-deployment and 1 from nginx-rouge")
 		}),
@@ -136,67 +135,68 @@ func (s *PodHierarchySuite) Test_ParentlessPodsAreTreatedAsDeployments() {
 }
 
 func (s *PodHierarchySuite) Test_DeleteDeployment() {
-	s.testContext.RunTest(
-		resource.WithTestCase(func(t *testing.T, testC *resource.TestContext, _ map[string]k8s.Object) {
-			var id string
-			k8sDeployment := &appsv1.Deployment{}
-			deleteDep, err := testC.ApplyResource(context.Background(), resource.DefaultNamespace, &NginxDeployment, k8sDeployment, nil)
-			require.NoError(t, err)
-			id = string(k8sDeployment.GetUID())
-			// Check the deployment is processed
-			testC.WaitForDeploymentEvent("nginx-deployment")
-			testC.GetFakeCentral().ClearReceivedBuffer()
+	s.testContext.RunTest(s.T(), helper.WithTestCase(func(t *testing.T, testC *helper.TestContext, _ map[string]k8s.Object) {
+		var id string
+		k8sDeployment := &appsv1.Deployment{}
+		deleteDep, err := testC.ApplyResourceAndWait(context.Background(), t, helper.DefaultNamespace, &NginxDeployment, k8sDeployment, nil)
+		require.NoError(t, err)
+		id = string(k8sDeployment.GetUID())
+		// Check the deployment is processed
+		testC.WaitForDeploymentEvent(t, "nginx-deployment")
+		testC.GetFakeCentral().ClearReceivedBuffer()
 
-			// Delete the deployment
-			require.NoError(t, deleteDep())
+		// Delete the deployment
+		require.NoError(t, deleteDep())
 
-			// Check deployment and action
-			testC.LastDeploymentStateWithTimeout("nginx-deployment", func(_ *storage.Deployment, action central.ResourceAction) error {
-				if action != central.ResourceAction_REMOVE_RESOURCE {
-					return errors.New("ResourceAction should be REMOVE_RESOURCE")
+		// Check deployment and action
+		testC.LastDeploymentStateWithID(t, id, func(_ *storage.Deployment, action central.ResourceAction) error {
+			if action != central.ResourceAction_REMOVE_RESOURCE {
+				return errors.New("ResourceAction should be REMOVE_RESOURCE")
+			}
+			return nil
+		}, "deployment should be deleted", time.Minute)
+		testC.LastViolationStateByIDWithTimeout(t, id, func(alertResults *central.AlertResults) error {
+			if alertResults.GetAlerts() != nil && len(alertResults.GetAlerts()) > 0 {
+				var alertNames []string
+				for _, a := range alertResults.GetAlerts() {
+					alertNames = append(alertNames, a.GetPolicy().GetName())
 				}
-				return nil
-			}, "deployment should be deleted", 5*time.Minute)
-			testC.LastViolationStateByIDWithTimeout(id, func(alertResults *central.AlertResults) error {
-				if alertResults.GetAlerts() != nil {
-					return errors.New("AlertResults should be empty")
-				}
-				return nil
-			}, "Should have an empty violation", true, 5*time.Minute)
-			testC.GetFakeCentral().ClearReceivedBuffer()
-		}),
-	)
+				t.Logf("AlertResults are not empty: %v", alertNames)
+				return errors.New("AlertResults should be empty")
+			}
+			return nil
+		}, "Should have an empty violation", true, time.Minute)
+		testC.GetFakeCentral().ClearReceivedBuffer()
+	}))
 }
 
 func (s *PodHierarchySuite) Test_DeletePod() {
-	s.testContext.RunTest(
-		resource.WithTestCase(func(t *testing.T, testC *resource.TestContext, _ map[string]k8s.Object) {
-			var id string
-			k8sPod := &v1.Pod{}
-			deletePod, err := testC.ApplyResource(context.Background(), resource.DefaultNamespace, &NginxPod, k8sPod, nil)
-			require.NoError(t, err)
-			id = string(k8sPod.GetUID())
-			// Check the pod is processed
-			testC.WaitForDeploymentEvent("nginx-rogue")
-			testC.GetFakeCentral().ClearReceivedBuffer()
+	s.testContext.RunTest(s.T(), helper.WithTestCase(func(t *testing.T, testC *helper.TestContext, _ map[string]k8s.Object) {
+		var id string
+		k8sPod := &v1.Pod{}
+		deletePod, err := testC.ApplyResourceAndWait(context.Background(), t, helper.DefaultNamespace, &NginxPod, k8sPod, nil)
+		require.NoError(t, err)
+		id = string(k8sPod.GetUID())
+		// Check the pod is processed
+		testC.WaitForDeploymentEvent(t, "nginx-rogue")
+		testC.GetFakeCentral().ClearReceivedBuffer()
 
-			// Delete the pod
-			require.NoError(t, deletePod())
+		// Delete the pod
+		require.NoError(t, deletePod())
 
-			// Check pod and action
-			testC.LastDeploymentStateWithTimeout("nginx-rogue", func(_ *storage.Deployment, action central.ResourceAction) error {
-				if action != central.ResourceAction_REMOVE_RESOURCE {
-					return errors.New("ResourceAction should be REMOVE_RESOURCE")
-				}
-				return nil
-			}, "rogue pod should be deleted", 5*time.Minute)
-			testC.LastViolationStateByIDWithTimeout(id, func(alertResults *central.AlertResults) error {
-				if alertResults.GetAlerts() != nil {
-					return errors.New("AlertResults should be empty")
-				}
-				return nil
-			}, "Should have an empty violation", true, 5*time.Minute)
-			testC.GetFakeCentral().ClearReceivedBuffer()
-		}),
-	)
+		// Check pod and action
+		testC.LastDeploymentStateWithTimeout(t, "nginx-rogue", func(_ *storage.Deployment, action central.ResourceAction) error {
+			if action != central.ResourceAction_REMOVE_RESOURCE {
+				return errors.New("ResourceAction should be REMOVE_RESOURCE")
+			}
+			return nil
+		}, "rogue pod should be deleted", 5*time.Minute)
+		testC.LastViolationStateByIDWithTimeout(t, id, func(alertResults *central.AlertResults) error {
+			if alertResults.GetAlerts() != nil {
+				return errors.New("AlertResults should be empty")
+			}
+			return nil
+		}, "Should have an empty violation", true, 5*time.Minute)
+		testC.GetFakeCentral().ClearReceivedBuffer()
+	}))
 }

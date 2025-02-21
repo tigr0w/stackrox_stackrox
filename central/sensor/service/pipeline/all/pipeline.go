@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	hashManager "github.com/stackrox/rox/central/hash/manager"
 	"github.com/stackrox/rox/central/metrics"
@@ -13,13 +12,17 @@ import (
 	"github.com/stackrox/rox/central/sensor/service/pipeline"
 	"github.com/stackrox/rox/central/sensor/service/pipeline/reconciliation"
 	"github.com/stackrox/rox/generated/internalapi/central"
+	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/errorhelpers"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/safe"
 )
 
 var (
 	log = logging.LoggerForModule()
+
+	_ pipeline.ClusterPipeline = (*pipelineImpl)(nil)
 )
 
 // NewClusterPipeline returns a new instance of a ClusterPipeline that handles all event types.
@@ -35,6 +38,15 @@ type pipelineImpl struct {
 	deduper   hashManager.Deduper
 	clusterID string
 	fragments []pipeline.Fragment
+}
+
+// Capabilities will return all capabilities of the ClusterPipeline.
+func (s *pipelineImpl) Capabilities() []centralsensor.CentralCapability {
+	caps := make([]centralsensor.CentralCapability, 0, len(s.fragments))
+	for _, fragment := range s.fragments {
+		caps = append(caps, fragment.Capabilities()...)
+	}
+	return caps
 }
 
 // Reconcile passes through the reconciliation store to all the fragments and allows them to handle their reconciliation
@@ -75,7 +87,7 @@ func (s *pipelineImpl) Run(ctx context.Context, msg *central.MsgFromSensor, inje
 		}
 	}
 	if matchCount == 0 {
-		return fmt.Errorf("no pipeline present to process message: %s", proto.MarshalTextString(msg))
+		return fmt.Errorf("no pipeline present to process message: %s", protocompat.MarshalTextString(msg))
 	}
 	s.deduper.MarkSuccessful(msg)
 	return nil

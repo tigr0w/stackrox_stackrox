@@ -14,13 +14,13 @@ import services.ClusterService
 import util.Env
 
 import spock.lang.IgnoreIf
-import spock.lang.Retry
 import spock.lang.Shared
 import spock.lang.Stepwise
 import spock.lang.Tag
 import spock.lang.Unroll
 
 @Stepwise
+@Tag("PZ")
 class AttemptedAlertsTest extends BaseSpecification {
     static final private String DEP_PREFIX = "attempted-alerts-dep"
     static final private String[] DEP_NAMES = getDeploymentNames()
@@ -29,8 +29,8 @@ class AttemptedAlertsTest extends BaseSpecification {
             (DEP_NAMES[1]): createDeployment(DEP_NAMES[1], "quay.io/rhacs-eng/qa-multi-arch-nginx:latest"),
             (DEP_NAMES[2]): createDeployment(DEP_NAMES[2], "quay.io/rhacs-eng/qa-multi-arch-nginx:latest"),
             (DEP_NAMES[3]): createDeployment(DEP_NAMES[3], "quay.io/rhacs-eng/qa-multi-arch-nginx:latest"),
-            (DEP_NAMES[4]): createDeployment(DEP_NAMES[4], "quay.io/rhacs-eng/qa-multi-arch:nginx-1-14-alpine"),
-            (DEP_NAMES[5]): createDeployment(DEP_NAMES[5], "quay.io/rhacs-eng/qa-multi-arch:nginx-1-14-alpine"),
+            (DEP_NAMES[4]): createDeployment(DEP_NAMES[4], TEST_IMAGE),
+            (DEP_NAMES[5]): createDeployment(DEP_NAMES[5], TEST_IMAGE),
     ]
 
     static final private String LATEST_TAG_POLICY_NAME = "Latest tag"
@@ -89,15 +89,14 @@ class AttemptedAlertsTest extends BaseSpecification {
             orchestrator.deleteDeployment(deployment)
         }
 
-        for (def policyName : POLICY_NAMES) {
+        POLICY_NAMES.each { String policyName ->
             def alerts = Services.getViolationsWithTimeout(DEP_PREFIX, policyName, 0)
-            for (def oldAlert : alerts) {
-                AlertService.resolveAlert(oldAlert.getId())
+            alerts.each { ListAlert oldAlert ->
+                    AlertService.resolveAlert(oldAlert.getId())
             }
         }
     }
 
-    @Retry(count = 0)
     @Unroll
     @Tag("BAT")
     @Tag("RUNTIME")
@@ -171,7 +170,6 @@ class AttemptedAlertsTest extends BaseSpecification {
                 "create enforce; no policy enforce"
     }
 
-    @Retry(count = 0)
     @Unroll
     @Tag("BAT")
     @Tag("RUNTIME")
@@ -247,7 +245,6 @@ class AttemptedAlertsTest extends BaseSpecification {
                 "no update enforce; policy enforce"
     }
 
-    @Retry(count = 0)
     @Unroll
     @Tag("BAT")
     @Tag("RUNTIME")

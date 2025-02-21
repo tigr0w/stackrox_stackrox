@@ -1,15 +1,6 @@
 import React, { ReactElement, useState } from 'react';
-import {
-    Alert,
-    AlertVariant,
-    Button,
-    Modal,
-    ModalVariant,
-    PageSection,
-    pluralize,
-    Title,
-} from '@patternfly/react-core';
-import { TableComposable, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
+import { Alert, Button, Modal, PageSection, pluralize, Title } from '@patternfly/react-core';
+import { ActionsColumn, Table, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
 
 import { AccessScope } from 'services/AccessScopesService';
 import { Group } from 'services/AuthService';
@@ -62,7 +53,7 @@ function RolesList({
         handleDelete(nameDeleting)
             .catch((error) => {
                 setAlertDelete(
-                    <Alert title="Delete role failed" variant={AlertVariant.danger} isInline>
+                    <Alert title="Delete role failed" component="p" variant="danger" isInline>
                         {error.message}
                     </Alert>
                 );
@@ -102,7 +93,7 @@ function RolesList({
             <Title headingLevel="h2">{pluralize(rolesFiltered.length, 'result')} found</Title>
             {alertDelete}
             {rolesFiltered.length !== 0 && (
-                <TableComposable variant="compact" isStickyHeader>
+                <Table variant="compact" isStickyHeader>
                     <Thead>
                         <Tr>
                             <Th width={15}>Name</Th>
@@ -110,7 +101,9 @@ function RolesList({
                             <Th width={25}>Description</Th>
                             <Th width={15}>Permission set</Th>
                             <Th width={20}>Access scope</Th>
-                            <Th width={10} aria-label="Row actions" />
+                            <Th width={10}>
+                                <span className="pf-v5-screen-reader">Row actions</span>
+                            </Th>
                         </Tr>
                     </Thead>
                     <Tbody>
@@ -140,30 +133,30 @@ function RolesList({
                                             entityName={getAccessScopeName(accessScopeId)}
                                         />
                                     </Td>
-                                    <Td
-                                        actions={{
-                                            disable:
+                                    <Td isActionCell>
+                                        <ActionsColumn
+                                            isDisabled={
                                                 !hasWriteAccessForPage ||
                                                 nameDeleting === name ||
                                                 !isUserResource(traits) ||
-                                                getHasRoleName(groups, name),
-                                            items: [
+                                                getHasRoleName(groups, name)
+                                            }
+                                            items={[
                                                 {
                                                     title: 'Delete role',
                                                     onClick: () => onClickDelete(name),
                                                 },
-                                            ],
-                                        }}
-                                        className="pf-u-text-align-right"
-                                    />
+                                            ]}
+                                        />
+                                    </Td>
                                 </Tr>
                             )
                         )}
                     </Tbody>
-                </TableComposable>
+                </Table>
             )}
             <Modal
-                variant={ModalVariant.small}
+                variant="small"
                 title="Permanently delete role?"
                 isOpen={typeof nameConfirmingDelete === 'string'}
                 onClose={onCancelDelete}

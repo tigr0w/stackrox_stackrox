@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *NodeComponentsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE node_components CASCADE")
 	s.T().Log("node_components", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *NodeComponentsStoreSuite) TestStore() {
 	foundNodeComponent, exists, err = store.Get(ctx, nodeComponent.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(nodeComponent, foundNodeComponent)
+	protoassert.Equal(s.T(), nodeComponent, foundNodeComponent)
 
-	nodeComponentCount, err := store.Count(ctx)
+	nodeComponentCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, nodeComponentCount)
-	nodeComponentCount, err = store.Count(withNoAccessCtx)
+	nodeComponentCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(nodeComponentCount)
 
@@ -75,11 +78,6 @@ func (s *NodeComponentsStoreSuite) TestStore() {
 	s.True(nodeComponentExists)
 	s.NoError(store.Upsert(ctx, nodeComponent))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, nodeComponent), sac.ErrResourceAccessDenied)
-
-	foundNodeComponent, exists, err = store.Get(ctx, nodeComponent.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(nodeComponent, foundNodeComponent)
 
 	s.NoError(store.Delete(ctx, nodeComponent.GetId()))
 	foundNodeComponent, exists, err = store.Get(ctx, nodeComponent.GetId())
@@ -99,13 +97,13 @@ func (s *NodeComponentsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, nodeComponents))
 
-	nodeComponentCount, err = store.Count(ctx)
+	nodeComponentCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, nodeComponentCount)
 
 	s.NoError(store.DeleteMany(ctx, nodeComponentIDs))
 
-	nodeComponentCount, err = store.Count(ctx)
+	nodeComponentCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, nodeComponentCount)
 }

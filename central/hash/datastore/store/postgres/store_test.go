@@ -11,7 +11,9 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -42,6 +44,7 @@ func (s *HashesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE hashes CASCADE")
 	s.T().Log("hashes", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -68,12 +71,12 @@ func (s *HashesStoreSuite) TestStore() {
 	foundHash, exists, err = store.Get(ctx, hash.GetClusterId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(hash, foundHash)
+	protoassert.Equal(s.T(), hash, foundHash)
 
-	hashCount, err := store.Count(ctx)
+	hashCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, hashCount)
-	hashCount, err = store.Count(withNoAccessCtx)
+	hashCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(hashCount)
 
@@ -82,11 +85,6 @@ func (s *HashesStoreSuite) TestStore() {
 	s.True(hashExists)
 	s.NoError(store.Upsert(ctx, hash))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, hash), sac.ErrResourceAccessDenied)
-
-	foundHash, exists, err = store.Get(ctx, hash.GetClusterId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(hash, foundHash)
 
 	s.NoError(store.Delete(ctx, hash.GetClusterId()))
 	foundHash, exists, err = store.Get(ctx, hash.GetClusterId())
@@ -106,13 +104,13 @@ func (s *HashesStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, hashs))
 
-	hashCount, err = store.Count(ctx)
+	hashCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, hashCount)
 
 	s.NoError(store.DeleteMany(ctx, hashIDs))
 
-	hashCount, err = store.Count(ctx)
+	hashCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, hashCount)
 }

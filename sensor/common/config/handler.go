@@ -12,6 +12,7 @@ import (
 	"github.com/stackrox/rox/sensor/common"
 	"github.com/stackrox/rox/sensor/common/admissioncontroller"
 	"github.com/stackrox/rox/sensor/common/compliance"
+	"github.com/stackrox/rox/sensor/common/message"
 )
 
 var (
@@ -20,6 +21,8 @@ var (
 
 // Handler is responsible for processing dynamic config updates from central and, for Helm-managed clusters, to provide
 // access to the cluster's configuration.
+//
+//go:generate mockgen-wrapper
 type Handler interface {
 	GetConfig() *storage.DynamicClusterConfig
 	GetHelmManagedConfig() *central.HelmManagedConfigInit
@@ -65,7 +68,7 @@ func (c *configHandlerImpl) Capabilities() []centralsensor.SensorCapability {
 	return nil
 }
 
-func (c *configHandlerImpl) ResponsesC() <-chan *central.MsgFromSensor {
+func (c *configHandlerImpl) ResponsesC() <-chan *message.ExpiringMessage {
 	return nil
 }
 
@@ -92,10 +95,10 @@ func (c *configHandlerImpl) ProcessMessage(msg *central.MsgToSensor) error {
 			}
 
 			if c.config.DisableAuditLogs {
-				log.Infof("Stopping audit log collection")
+				log.Info("Stopping audit log collection")
 				c.auditLogCollectionManager.DisableCollection()
 			} else {
-				log.Infof("Starting audit log collection")
+				log.Info("Starting audit log collection")
 				c.auditLogCollectionManager.EnableCollection()
 			}
 		})

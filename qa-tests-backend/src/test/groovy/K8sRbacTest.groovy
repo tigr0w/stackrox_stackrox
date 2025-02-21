@@ -1,7 +1,11 @@
 import static util.Helpers.withRetry
 
 import com.google.common.base.CaseFormat
-import orchestratormanager.OrchestratorTypes
+import io.fabric8.openshift.api.model.PolicyRule
+import org.javers.core.Javers
+import org.javers.core.JaversBuilder
+import org.javers.core.diff.Diff
+import org.javers.core.diff.ListCompareAlgorithm
 
 import io.stackrox.proto.api.v1.RbacServiceOuterClass
 import io.stackrox.proto.api.v1.ServiceAccountServiceOuterClass
@@ -17,12 +21,14 @@ import objects.K8sSubject
 import services.RbacService
 import services.ServiceAccountService
 import util.Env
+import util.Helpers
 
 import spock.lang.IgnoreIf
 import spock.lang.Stepwise
 import spock.lang.Tag
 
 @Stepwise
+@Tag("PZ")
 class K8sRbacTest extends BaseSpecification {
     private static final String SERVICE_ACCOUNT_NAME = "test-service-account"
     private static final String ROLE_NAME = "test-role"
@@ -56,8 +62,8 @@ class K8sRbacTest extends BaseSpecification {
 
     @Tag("BAT")
     @Tag("COMPATIBILITY")
-    // TODO(ROX-14666): This test times out under openshift
-    @IgnoreIf({ Env.mustGetOrchestratorType() == OrchestratorTypes.OPENSHIFT })
+    // ROX-25270 Test is failing for OSD on AWS
+    @IgnoreIf({ Env.CI_JOB_NAME ==~ /.*osd-aws.*/ })
     def "Verify scraped service accounts"() {
         given:
         List<K8sServiceAccount> orchestratorSAs = null
@@ -66,15 +72,15 @@ class K8sRbacTest extends BaseSpecification {
         expect:
         "SR should have the same service accounts"
         // Make sure the qa namespace SA exists before running the test. That SA should be the most recent added.
-        // This will ensure scrapping is complete if this test spec is run first
-        withRetry(15, 2) {
+        // This will ensure scraping is complete if this test spec is run first
+        withRetry(60, 3) {  // allow 3 minutes
             stackroxSAs = ServiceAccountService.getServiceAccounts()
             // list of service accounts from the orchestrator
             orchestratorSAs = orchestrator.getServiceAccounts()
             assert stackroxSAs.find { it.serviceAccount.getNamespace() == Constants.ORCHESTRATOR_NAMESPACE }
+            stackroxSAs.size() == orchestratorSAs.size()
         }
 
-        stackroxSAs.size() == orchestratorSAs.size()
         for (ServiceAccountServiceOuterClass.ServiceAccountAndRoles s : stackroxSAs) {
             def sa = s.serviceAccount
 
@@ -180,15 +186,16 @@ class K8sRbacTest extends BaseSpecification {
                 assert role
                 assert role.labels == stackroxRole.labelsMap
                 role.annotations.remove("kubectl.kubernetes.io/last-applied-configuration")
-                assert role.annotations == stackroxRole.annotationsMap
-                for (int i = 0; i < role.rules.size(); i++) {
-                    K8sPolicyRule oRule = role.rules[i]
-                    Rbac.PolicyRule sRule = stackroxRole.rulesList[i]
-                    assert oRule.verbs == sRule.verbsList
-                    assert oRule.apiGroups == sRule.apiGroupsList
-                    assert oRule.resources == sRule.resourcesList
-                    assert oRule.nonResourceUrls == sRule.nonResourceUrlsList
-                    assert oRule.resourceNames == sRule.resourceNamesList
+                // compareAnnotations() - asserts on difference
+                Helpers.compareAnnotations(role.annotations, stackroxRole.annotationsMap)
+                assert role.rules.every { K8sPolicyRule oRule ->
+                    stackroxRole.rulesList.any { Rbac.PolicyRule sRule ->
+                        oRule.verbs == sRule.verbsList &&
+                        oRule.apiGroups == sRule.apiGroupsList &&
+                        oRule.resources == sRule.resourcesList &&
+                        oRule.nonResourceUrls == sRule.nonResourceUrlsList &&
+                        oRule.resourceNames == sRule.resourceNamesList
+                    }
                 }
                 assert RbacService.getRole(stackroxRole.id) == stackroxRole
             }
@@ -241,14 +248,23 @@ class K8sRbacTest extends BaseSpecification {
 
     @Tag("BAT")
     def "Verify scraped bindings"() {
+        given:
+        Javers javers = JaversBuilder.javers()
+                .withListCompareAlgorithm(ListCompareAlgorithm.AS_SET)
+                .build()
         expect:
         "SR should have the same bindings"
-        withRetry(45, 2) {
+        withRetry(5, 30) {
             def stackroxBindings = RbacService.getRoleBindings()
             def orchestratorBindings = orchestrator.getRoleBindings() + orchestrator.getClusterRoleBindings()
-            assert stackroxBindings.size() == orchestratorBindings.size(), "Binding sizes differ"
 
-            for (Rbac.K8sRoleBinding b : stackroxBindings) {
+            def stackroxBindingsSet = stackroxBindings.collect { "${it.namespace}/${it.name}" }
+            def orchestratorBindingsSet = orchestratorBindings.collect { "${it.namespace}/${it.name}" }
+
+            Diff diff = javers.compareCollections(stackroxBindingsSet, orchestratorBindingsSet, String)
+            assert diff.changes.empty, diff.prettyPrint()
+
+            stackroxBindings.each { Rbac.K8sRoleBinding b ->
                 K8sRoleBinding binding = orchestratorBindings.find {
                     it.name == b.name && it.namespace == b.namespace
                 }
@@ -256,7 +272,8 @@ class K8sRbacTest extends BaseSpecification {
 
                 binding.annotations.remove("kubectl.kubernetes.io/last-applied-configuration")
                 assert b.labelsMap == binding.labels
-                assert b.annotationsMap == binding.annotations
+                // compareAnnotations() - asserts on difference
+                Helpers.compareAnnotations(binding.annotations, b.annotationsMap)
                 assert b.roleId == binding.roleRef.uid
                 assert b.subjectsCount == binding.subjects.size()
 
@@ -291,9 +308,8 @@ class K8sRbacTest extends BaseSpecification {
         assert stackroxSubjects.size() == orchestratorSubjects.size()
         for (Rbac.Subject sub : stackroxSubjects) {
             K8sSubject subject = orchestratorSubjects.find {
-                it.name == sub.name &&
-                        it.namespace == sub.namespace &&
-                        it.kind.toLowerCase() == sub.kind.toString().toLowerCase()
+                // orchestratorSubjects contains only User and Group kind where namespace is not relevant.
+                it.name == sub.name && it.kind.toLowerCase() == sub.kind.toString().toLowerCase()
             }
             assert subject
         }

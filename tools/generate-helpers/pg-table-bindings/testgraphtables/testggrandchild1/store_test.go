@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *TestGGrandChild1StoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE test_g_grand_child1 CASCADE")
 	s.T().Log("test_g_grand_child1", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *TestGGrandChild1StoreSuite) TestStore() {
 	foundTestGGrandChild1, exists, err = store.Get(ctx, testGGrandChild1.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(testGGrandChild1, foundTestGGrandChild1)
+	protoassert.Equal(s.T(), testGGrandChild1, foundTestGGrandChild1)
 
-	testGGrandChild1Count, err := store.Count(ctx)
+	testGGrandChild1Count, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, testGGrandChild1Count)
-	testGGrandChild1Count, err = store.Count(withNoAccessCtx)
+	testGGrandChild1Count, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(testGGrandChild1Count)
 
@@ -75,11 +78,6 @@ func (s *TestGGrandChild1StoreSuite) TestStore() {
 	s.True(testGGrandChild1Exists)
 	s.NoError(store.Upsert(ctx, testGGrandChild1))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, testGGrandChild1), sac.ErrResourceAccessDenied)
-
-	foundTestGGrandChild1, exists, err = store.Get(ctx, testGGrandChild1.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(testGGrandChild1, foundTestGGrandChild1)
 
 	s.NoError(store.Delete(ctx, testGGrandChild1.GetId()))
 	foundTestGGrandChild1, exists, err = store.Get(ctx, testGGrandChild1.GetId())
@@ -99,13 +97,13 @@ func (s *TestGGrandChild1StoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, testGGrandChild1s))
 
-	testGGrandChild1Count, err = store.Count(ctx)
+	testGGrandChild1Count, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, testGGrandChild1Count)
 
 	s.NoError(store.DeleteMany(ctx, testGGrandChild1IDs))
 
-	testGGrandChild1Count, err = store.Count(ctx)
+	testGGrandChild1Count, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, testGGrandChild1Count)
 }

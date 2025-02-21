@@ -6,8 +6,7 @@ import (
 
 	"github.com/pkg/errors"
 	rolePkg "github.com/stackrox/rox/central/role"
-	"github.com/stackrox/rox/central/role/resources"
-	rocksDBStore "github.com/stackrox/rox/central/role/store"
+	"github.com/stackrox/rox/central/role/store"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
@@ -15,6 +14,8 @@ import (
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/sync"
 )
 
@@ -25,9 +26,9 @@ var (
 )
 
 type dataStoreImpl struct {
-	roleStorage          rocksDBStore.RoleStore
-	permissionSetStorage rocksDBStore.PermissionSetStore
-	accessScopeStorage   rocksDBStore.SimpleAccessScopeStore
+	roleStorage          store.RoleStore
+	permissionSetStorage store.PermissionSetStore
+	accessScopeStorage   store.SimpleAccessScopeStore
 	groupGetFilteredFunc func(ctx context.Context, filter func(*storage.Group) bool) ([]*storage.Group, error)
 
 	lock sync.RWMutex
@@ -165,7 +166,7 @@ func (ds *dataStoreImpl) GetRolesFiltered(ctx context.Context, filter func(role 
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 	return filteredRoles, nil
@@ -176,7 +177,7 @@ func (ds *dataStoreImpl) CountRoles(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	return ds.roleStorage.Count(ctx)
+	return ds.roleStorage.Count(ctx, search.EmptyQuery())
 }
 
 func (ds *dataStoreImpl) getAllRolesNoScopeCheck(ctx context.Context) ([]*storage.Role, error) {
@@ -188,7 +189,7 @@ func (ds *dataStoreImpl) getAllRolesNoScopeCheck(ctx context.Context) ([]*storag
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 
@@ -300,7 +301,7 @@ func (ds *dataStoreImpl) GetAllPermissionSets(ctx context.Context) ([]*storage.P
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 
@@ -322,7 +323,7 @@ func (ds *dataStoreImpl) GetPermissionSetsFiltered(ctx context.Context,
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 
@@ -333,7 +334,7 @@ func (ds *dataStoreImpl) CountPermissionSets(ctx context.Context) (int, error) {
 	if err := sac.VerifyAuthzOK(roleSAC.ReadAllowed(ctx)); err != nil {
 		return 0, err
 	}
-	return ds.permissionSetStorage.Count(ctx)
+	return ds.permissionSetStorage.Count(ctx, search.EmptyQuery())
 }
 
 func (ds *dataStoreImpl) AddPermissionSet(ctx context.Context, permissionSet *storage.PermissionSet) error {
@@ -475,7 +476,7 @@ func (ds *dataStoreImpl) GetAllAccessScopes(ctx context.Context) ([]*storage.Sim
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 
@@ -497,7 +498,7 @@ func (ds *dataStoreImpl) GetAccessScopesFiltered(ctx context.Context,
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 
@@ -508,7 +509,7 @@ func (ds *dataStoreImpl) CountAccessScopes(ctx context.Context) (int, error) {
 	if err := sac.VerifyAuthzOK(roleSAC.ReadAllowed(ctx)); err != nil {
 		return 0, err
 	}
-	return ds.accessScopeStorage.Count(ctx)
+	return ds.accessScopeStorage.Count(ctx, search.EmptyQuery())
 }
 
 func (ds *dataStoreImpl) AccessScopeExists(ctx context.Context, id string) (bool, error) {
@@ -662,6 +663,47 @@ func (ds *dataStoreImpl) GetAndResolveRole(ctx context.Context, name string) (pe
 	}
 
 	return resolvedRole, nil
+}
+
+func (ds *dataStoreImpl) GetAllResolvedRoles(ctx context.Context) ([]permissions.ResolvedRole, error) {
+	roles, err := ds.GetAllRoles(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list all roles")
+	}
+	permissionSets, err := ds.GetAllPermissionSets(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list all permission sets")
+	}
+	accessScopes, err := ds.GetAllAccessScopes(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list all access scopes")
+	}
+	permissionSetsByID := make(map[string]*storage.PermissionSet, len(permissionSets))
+	for _, ps := range permissionSets {
+		permissionSetsByID[ps.GetId()] = ps
+	}
+	accessScopesByID := make(map[string]*storage.SimpleAccessScope, len(accessScopes))
+	for _, as := range accessScopes {
+		accessScopesByID[as.GetId()] = as
+	}
+	result := make([]permissions.ResolvedRole, 0, len(roles))
+	for _, role := range roles {
+		resolvedRole := &resolvedRoleImpl{
+			role: role,
+		}
+		if ps, ok := permissionSetsByID[role.GetPermissionSetId()]; ok {
+			resolvedRole.permissionSet = ps
+		} else {
+			return nil, errors.Wrapf(errox.InvariantViolation, "no permission set found for role %s", role.GetName())
+		}
+		if as, ok := accessScopesByID[role.GetAccessScopeId()]; ok {
+			resolvedRole.accessScope = as
+		} else {
+			return nil, errors.Wrapf(errox.InvariantViolation, "no access scope found for role %s", role.GetName())
+		}
+		result = append(result, resolvedRole)
+	}
+	return result, nil
 }
 
 func verifyAccessScopeOrigin(ctx context.Context, as *storage.SimpleAccessScope) error {

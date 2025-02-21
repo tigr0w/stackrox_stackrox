@@ -6,23 +6,29 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stackrox/rox/central/metrics"
 	countMetrics "github.com/stackrox/rox/central/metrics"
 	processIndicatorStore "github.com/stackrox/rox/central/processindicator/datastore"
 	"github.com/stackrox/rox/central/processlisteningonport/store"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/postgres"
+	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/process/id"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
+	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/uuid"
 )
 
 type datastoreImpl struct {
 	storage            store.Store
 	indicatorDataStore processIndicatorStore.DataStore
+	mutex              sync.RWMutex
+	pool               postgres.DB
 }
 
 var (
@@ -33,11 +39,23 @@ var (
 func newDatastoreImpl(
 	storage store.Store,
 	indicatorDataStore processIndicatorStore.DataStore,
+	pool postgres.DB,
 ) *datastoreImpl {
 	return &datastoreImpl{
 		storage:            storage,
 		indicatorDataStore: indicatorDataStore,
+		pool:               pool,
 	}
+}
+
+func checkIfShouldUpdate(
+	existingPLOP *storage.ProcessListeningOnPortStorage,
+	newPLOP *storage.ProcessListeningOnPortFromSensor) bool {
+
+	return existingPLOP.CloseTimestamp != newPLOP.CloseTimestamp ||
+		(existingPLOP.PodUid == "" && newPLOP.PodUid != "") ||
+		(existingPLOP.ClusterId == "" && newPLOP.ClusterId != "") ||
+		(existingPLOP.Namespace == "" && newPLOP.Namespace != "")
 }
 
 func getIndicatorIDForPlop(plop *storage.ProcessListeningOnPortFromSensor) string {
@@ -95,6 +113,7 @@ func plopStorageToNoSecretsString(plop *storage.ProcessListeningOnPortStorage) s
 
 func (ds *datastoreImpl) AddProcessListeningOnPort(
 	ctx context.Context,
+	clusterID string,
 	portProcesses ...*storage.ProcessListeningOnPortFromSensor,
 ) error {
 	defer metrics.SetDatastoreFunctionDuration(
@@ -102,13 +121,6 @@ func (ds *datastoreImpl) AddProcessListeningOnPort(
 		"ProcessListeningOnPort",
 		"AddProcessListeningOnPort",
 	)
-
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		// PLOP is a Postgres-only feature, do nothing.
-		log.Warnf("Tried to add PLOP not on Postgres, ignoring %d endpoints", len(portProcesses))
-		return nil
-	}
-
 	if ok, err := plopSAC.WriteAllowed(ctx); err != nil {
 		return err
 	} else if !ok {
@@ -138,8 +150,10 @@ func (ds *datastoreImpl) AddProcessListeningOnPort(
 		return err
 	}
 
-	plopObjects := []*storage.ProcessListeningOnPortStorage{}
+	newPlopObjects := []*storage.ProcessListeningOnPortStorage{}
+	updatePlopObjects := []*storage.ProcessListeningOnPortStorage{}
 	for _, val := range normalizedPLOPs {
+		val.ClusterId = clusterID
 		var processInfo *storage.ProcessIndicatorUniqueKey
 
 		indicatorID := getIndicatorIDForPlop(val)
@@ -162,28 +176,27 @@ func (ds *datastoreImpl) AddProcessListeningOnPort(
 		}
 
 		// There are three options:
-		// * We found an existing PLOP object with different close timestamp.
+		// * We found an existing PLOP object with different close timestamp or non-empty PodUid
 		//   It has to be updated.
 		// * We found an existing PLOP object with the same close timestamp.
 		//   Nothing has to be changed (XXX: Ideally it has to be excluded from
 		//   the upsert later on).
 		// * No existing PLOP object, create a new one with whatever close
 		//   timestamp we have received and fetched indicator ID.
-		if prevExists && existingPLOP.CloseTimestamp != val.CloseTimestamp {
+		if prevExists && checkIfShouldUpdate(existingPLOP, val) {
 			log.Debugf("Got existing PLOP: %s", plopStorageToNoSecretsString(existingPLOP))
 
+			// Update the timestamp and PodUid
 			existingPLOP.CloseTimestamp = val.CloseTimestamp
 			existingPLOP.Closed = existingPLOP.CloseTimestamp != nil
-			plopObjects = append(plopObjects, existingPLOP)
+			existingPLOP.PodUid = val.PodUid
+			existingPLOP.ClusterId = val.ClusterId
+			existingPLOP.Namespace = val.Namespace
+			updatePlopObjects = append(updatePlopObjects, existingPLOP)
 		}
 
 		if !prevExists {
-			if val.CloseTimestamp != nil {
-				// We try to close a not existing Endpoint, something is wrong
-				log.Warnf("Found no matching PLOP to close for %+v", plopToNoSecretsString(val))
-			}
-
-			plopObjects = addNewPLOP(plopObjects, indicatorID, processInfo, val)
+			newPlopObjects = addNewPLOP(newPlopObjects, indicatorID, processInfo, val)
 		}
 	}
 
@@ -194,6 +207,7 @@ func (ds *datastoreImpl) AddProcessListeningOnPort(
 	// timestamp
 	// * If no existing PLOP is present, they will create a new closed PLOP
 	for _, val := range completedInBatch {
+		val.ClusterId = clusterID
 		var processInfo *storage.ProcessIndicatorUniqueKey
 
 		indicatorID := getIndicatorIDForPlop(val)
@@ -205,7 +219,7 @@ func (ds *datastoreImpl) AddProcessListeningOnPort(
 
 		existingPLOP, prevExists := existingPLOPMap[plopKey]
 
-		// Best efforst to not duplicate data. If no process indicator with
+		// Best effort to not duplicate data. If no process indicator with
 		// such an id exists, we deal with a potentially orphaned PLOP, and
 		// need to store the process information. Otherwise processInfo is nil
 		// and will not be stored.
@@ -215,18 +229,17 @@ func (ds *datastoreImpl) AddProcessListeningOnPort(
 			processInfo = val.GetProcess()
 		}
 
-		if prevExists {
-			log.Debugf("Got existing PLOP to update timestamp: %s", plopStorageToNoSecretsString(existingPLOP))
+		if prevExists && checkIfShouldUpdate(existingPLOP, val) {
+			log.Debugf("Got existing PLOP: %s", plopStorageToNoSecretsString(existingPLOP))
 
-			if existingPLOP.CloseTimestamp != nil &&
-				existingPLOP.CloseTimestamp != val.CloseTimestamp {
-
-				// An existing closed PLOP, update timestamp
+			// Update the timestamp and PodUid
+			if existingPLOP.Closed {
 				existingPLOP.CloseTimestamp = val.CloseTimestamp
-				plopObjects = append(plopObjects, existingPLOP)
 			}
-
-			// Add nothing if the PLOP is active, i.e. CloseTimestamp == nil
+			existingPLOP.PodUid = val.PodUid
+			existingPLOP.ClusterId = val.ClusterId
+			existingPLOP.Namespace = val.Namespace
+			updatePlopObjects = append(updatePlopObjects, existingPLOP)
 		}
 
 		if !prevExists {
@@ -235,12 +248,21 @@ func (ds *datastoreImpl) AddProcessListeningOnPort(
 				log.Warnf("Found active PLOP completed in the batch %s", plopToNoSecretsString(val))
 			}
 
-			plopObjects = addNewPLOP(plopObjects, indicatorID, processInfo, val)
+			newPlopObjects = addNewPLOP(newPlopObjects, indicatorID, processInfo, val)
 		}
 	}
 
-	// Now save actual PLOP objects
-	return ds.storage.UpsertMany(ctx, plopObjects)
+	// Save new PLOP objects
+	err = ds.storage.UpsertMany(ctx, newPlopObjects)
+	if err != nil {
+		return err
+	}
+
+	ds.mutex.Lock()
+	defer ds.mutex.Unlock()
+
+	// Update existing PLOP objects while using a lock
+	return ds.storage.UpsertMany(ctx, updatePlopObjects)
 }
 
 func (ds *datastoreImpl) GetProcessListeningOnPort(
@@ -249,11 +271,6 @@ func (ds *datastoreImpl) GetProcessListeningOnPort(
 ) (
 	processesListeningOnPorts []*storage.ProcessListeningOnPort, err error,
 ) {
-	if ok, err := plopSAC.ReadAllowed(ctx); err != nil {
-		return nil, err
-	} else if !ok {
-		return nil, sac.ErrResourceAccessDenied
-	}
 
 	processesListeningOnPorts, err = ds.storage.GetProcessListeningOnPort(ctx, deploymentID)
 
@@ -263,7 +280,7 @@ func (ds *datastoreImpl) GetProcessListeningOnPort(
 	}
 
 	if processesListeningOnPorts == nil {
-		log.Warnf("In GetProcessListeningOnPort. Query for deployment %s returned nil", deploymentID)
+		log.Debugf("In GetProcessListeningOnPort. Query for deployment %s returned nil", deploymentID)
 	}
 
 	return processesListeningOnPorts, nil
@@ -467,16 +484,6 @@ func getPlopProcessUniqueKey(plop *storage.ProcessListeningOnPortFromSensor) str
 	)
 }
 
-func getProcessUniqueKey(process *storage.ProcessIndicator) string {
-	return getProcessUniqueKeyFromParts(
-		process.GetContainerName(),
-		process.GetPodId(),
-		process.GetSignal().GetName(),
-		process.GetSignal().GetArgs(),
-		process.GetSignal().GetExecFilePath(),
-	)
-}
-
 func getPlopKeyFromParts(protocol storage.L4Protocol, port uint32, indicatorID string) string {
 	return fmt.Sprintf("%d_%d_%s",
 		protocol,
@@ -491,7 +498,7 @@ func getPlopKey(plop *storage.ProcessListeningOnPortStorage) string {
 
 func sortByCloseTimestamp(values []*storage.ProcessListeningOnPortFromSensor) {
 	sort.Slice(values, func(i, j int) bool {
-		return values[i].GetCloseTimestamp().Compare(values[j].GetCloseTimestamp()) == -1
+		return protocompat.CompareTimestamps(values[i].GetCloseTimestamp(), values[j].GetCloseTimestamp()) == -1
 	})
 }
 
@@ -514,9 +521,128 @@ func addNewPLOP(plopObjects []*storage.ProcessListeningOnPortStorage,
 		ProcessIndicatorId: indicatorID,
 		Process:            processInfo,
 		DeploymentId:       value.DeploymentId,
+		PodUid:             value.PodUid,
+		ClusterId:          value.ClusterId,
+		Namespace:          value.Namespace,
 		Closed:             value.CloseTimestamp != nil,
 		CloseTimestamp:     value.CloseTimestamp,
 	}
 
 	return append(plopObjects, newPLOP)
+}
+
+func (ds *datastoreImpl) RemovePlopsByPod(ctx context.Context, id string) error {
+	if ok, err := plopSAC.WriteAllowed(ctx); err != nil {
+		return err
+	} else if !ok {
+		return sac.ErrResourceAccessDenied
+	}
+
+	ds.mutex.Lock()
+	defer ds.mutex.Unlock()
+
+	q := search.NewQueryBuilder().AddExactMatches(search.PodUID, id).ProtoQuery()
+	_, storeErr := ds.storage.DeleteByQuery(ctx, q)
+	return storeErr
+}
+
+// PruneOrphanedPLOPs prunes old closed PLOPs and those without deployments or pods
+func (ds *datastoreImpl) PruneOrphanedPLOPs(ctx context.Context, orphanWindow time.Duration) int64 {
+	ds.mutex.Lock()
+	defer ds.mutex.Unlock()
+
+	query := fmt.Sprintf(pruneOrphanedPLOPs, int(orphanWindow.Minutes()))
+	commandTag, err := ds.pool.Exec(ctx, query)
+	if err != nil {
+		log.Errorf("failed to prune PLOP: %v", err)
+	}
+
+	// Delete processes listening on ports orphaned due to missing deployments
+	if _, err := ds.pool.Exec(ctx, deleteOrphanedPLOPDeployments); err != nil {
+		log.Errorf("failed to prune process listening on ports by deployment: %v", err)
+	}
+
+	// Delete processes listening on ports orphaned due to missing pods.
+	if _, err := ds.pool.Exec(ctx, deleteOrphanedPLOPPodsWithPodUID); err != nil {
+		log.Errorf("failed to prune process listening on ports by pods: %v", err)
+	}
+
+	return commandTag.RowsAffected()
+}
+
+// PruneOrphanedPLOPsByProcessIndicators prunes PLOPs that match process indicators without pods
+func (ds *datastoreImpl) PruneOrphanedPLOPsByProcessIndicators(ctx context.Context, orphanWindow time.Duration) {
+	// TODO(ROX-22443): Once it is guaranteed that all listening endpoints have PodUIDs, remove this function
+	ds.mutex.Lock()
+	defer ds.mutex.Unlock()
+
+	// Delete processes listening on ports orphaned because process indicators are orphaned due to
+	// missing deployments
+	query := fmt.Sprintf(deleteOrphanedPLOPDeploymentsAndPI, int(orphanWindow.Minutes()))
+	if _, err := ds.pool.Exec(ctx, query); err != nil {
+		log.Errorf("failed to prune process listening on ports by deployment: %v", err)
+	}
+
+	// Delete processes listening on ports orphaned because process indicators are orphaned due to
+	// missing pods.
+	query = fmt.Sprintf(deleteOrphanedPLOPPods, int(orphanWindow.Minutes()))
+	if _, err := ds.pool.Exec(ctx, query); err != nil {
+		log.Errorf("failed to prune process listening on ports by pods: %v", err)
+	}
+}
+
+func (ds *datastoreImpl) readRowsToFindPLOPsWithNoProcessInformation(rows pgx.Rows) ([]string, error) {
+	var ids []string
+
+	for rows.Next() {
+		var serialized []byte
+
+		if err := rows.Scan(&serialized); err != nil {
+			return nil, pgutils.ErrNilIfNoRows(err)
+		}
+
+		var msg storage.ProcessListeningOnPortStorage
+		if err := msg.UnmarshalVTUnsafe(serialized); err != nil {
+			return nil, err
+		}
+
+		process := msg.GetProcess()
+
+		if process == nil {
+			ids = append(ids, msg.GetId())
+		}
+	}
+	return ids, nil
+}
+
+// First gets PLOPs with no matching process indicators and then checks the
+// serialized data to check for process information.
+func (ds *datastoreImpl) getPLOPsToDelete(ctx context.Context) ([]string, error) {
+	rows, err := ds.pool.Query(ctx, getPotentiallyOrphanedPLOPs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return ds.readRowsToFindPLOPsWithNoProcessInformation(rows)
+}
+
+// RemovePLOPsWithoutProcessIndicatorOrProcessInfo Finds PLOPs without a matching process indicator and no
+// process information and deletes them. PLOPs can have no matching process indicators, but such PLOPs need
+// to have process information.
+func (ds *datastoreImpl) RemovePLOPsWithoutProcessIndicatorOrProcessInfo(ctx context.Context) (int64, error) {
+	plopsToDelete, err := ds.getPLOPsToDelete(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	ds.mutex.Lock()
+	defer ds.mutex.Unlock()
+
+	err = ds.storage.PruneMany(ctx, plopsToDelete)
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(len(plopsToDelete)), nil
 }

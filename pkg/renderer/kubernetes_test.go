@@ -19,8 +19,9 @@ func getBaseConfig() Config {
 		ClusterType: storage.ClusterType_KUBERNETES_CLUSTER,
 		K8sConfig: &K8sConfig{
 			CommonConfig: CommonConfig{
-				MainImage:    "stackrox/main:2.2.11.0-57-g392c0f5bed-dirty",
-				ScannerImage: "stackrox.io/scanner:0.4.2",
+				MainImage:      "stackrox/main:2.2.11.0-57-g392c0f5bed-dirty",
+				ScannerImage:   "stackrox.io/scanner:0.4.2",
+				ScannerV4Image: "stackrox.io/scanner-v4:0.5.0",
 			},
 		},
 	}
@@ -42,7 +43,7 @@ func (suite *renderSuite) SetupSuite() {
 
 func (suite *renderSuite) testWithHostPath(t *testing.T, c Config) {
 	c.HostPath = &HostPathPersistence{
-		Central: &HostPathPersistenceInstance{
+		DB: &HostPathPersistenceInstance{
 			HostPath: "/var/lib/stackrox",
 		},
 	}
@@ -50,7 +51,7 @@ func (suite *renderSuite) testWithHostPath(t *testing.T, c Config) {
 	assert.NoError(t, err)
 
 	c.HostPath = &HostPathPersistence{
-		Central: &HostPathPersistenceInstance{
+		DB: &HostPathPersistenceInstance{
 			HostPath:          "/var/lib/stackrox",
 			NodeSelectorKey:   "key",
 			NodeSelectorValue: "value",
@@ -62,7 +63,7 @@ func (suite *renderSuite) testWithHostPath(t *testing.T, c Config) {
 
 func (suite *renderSuite) testWithPV(t *testing.T, c Config) {
 	c.External = &ExternalPersistence{
-		Central: &ExternalPersistenceInstance{
+		DB: &ExternalPersistenceInstance{
 			Name: "name",
 		},
 	}
@@ -70,7 +71,7 @@ func (suite *renderSuite) testWithPV(t *testing.T, c Config) {
 	assert.NoError(t, err)
 
 	c.External = &ExternalPersistence{
-		Central: &ExternalPersistenceInstance{
+		DB: &ExternalPersistenceInstance{
 			Name:         "name",
 			StorageClass: "storageClass",
 		},
@@ -118,6 +119,13 @@ func (suite *renderSuite) TestRenderMultiple() {
 func (suite *renderSuite) TestRenderWithBadImage() {
 	conf := getBaseConfig()
 	conf.K8sConfig.ScannerImage = "invalid-image#!@$"
+	_, err := Render(conf, suite.testFlavor)
+	suite.Error(err)
+}
+
+func (suite *renderSuite) TestRenderWithBadV4Image() {
+	conf := getBaseConfig()
+	conf.K8sConfig.ScannerV4Image = "invalid-image#!@$"
 	_, err := Render(conf, suite.testFlavor)
 	suite.Error(err)
 }

@@ -5,11 +5,11 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/notifier/datastore/internal/store"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/secrets"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/uuid"
@@ -47,6 +47,29 @@ func (b *datastoreImpl) UpsertNotifier(ctx context.Context, notifier *storage.No
 	}
 
 	return notifier.GetId(), b.storage.Upsert(ctx, notifier)
+}
+
+func (b *datastoreImpl) UpsertManyNotifiers(ctx context.Context, notifiers []*storage.Notifier) error {
+	if err := sac.VerifyAuthzOK(integrationSAC.WriteAllowed(ctx)); err != nil {
+		return err
+	}
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	for _, notifier := range notifiers {
+		existing, exists, err := b.GetNotifier(ctx, notifier.GetId())
+		if err != nil {
+			return err
+		}
+		if exists {
+			if err = verifyNotifierOrigin(ctx, existing); err != nil {
+				return errors.Wrap(err, "origin didn't match for existing notifier")
+			}
+		}
+		if err = verifyNotifierOrigin(ctx, notifier); err != nil {
+			return errors.Wrap(err, "origin didn't match for new notifier")
+		}
+	}
+	return b.storage.UpsertMany(ctx, notifiers)
 }
 
 func verifyNotifierOrigin(ctx context.Context, n *storage.Notifier) error {
@@ -105,6 +128,14 @@ func (b *datastoreImpl) GetNotifiers(ctx context.Context) ([]*storage.Notifier, 
 	}
 
 	return b.storage.GetAll(ctx)
+}
+
+func (b *datastoreImpl) GetManyNotifiers(ctx context.Context, notifierIDs []string) ([]*storage.Notifier, error) {
+	notifiers, _, err := b.storage.GetMany(ctx, notifierIDs)
+	if err != nil {
+		return nil, err
+	}
+	return notifiers, nil
 }
 
 func (b *datastoreImpl) GetScrubbedNotifiers(ctx context.Context) ([]*storage.Notifier, error) {

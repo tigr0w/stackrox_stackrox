@@ -22,7 +22,7 @@ import {
     WithSelectionProps,
 } from '@patternfly/react-topology';
 import DefaultIcon from '@patternfly/react-icons/dist/esm/icons/builder-image-icon';
-import { PficonNetworkRangeIcon } from '@patternfly/react-icons';
+import { PficonNetworkRangeIcon, ZoneIcon } from '@patternfly/react-icons';
 import useDetailsLevel from '@patternfly/react-topology/dist/esm/hooks/useDetailsLevel';
 import { SVGIconProps } from '@patternfly/react-icons/dist/esm/createIcon';
 
@@ -38,7 +38,7 @@ const CUSTOM_DECORATOR_PADDING = 2.5;
 
 type StyleNodeProps = {
     element: Node;
-    getCustomShape?: (node: Node) => React.FunctionComponent<ShapeProps>;
+    getCustomShape?: (node: Node) => React.FunctionComponent<React.PropsWithChildren<ShapeProps>>;
     getShapeDecoratorCenter?: (quadrant: TopologyQuadrant, node: Node) => { x: number; y: number };
     showLabel?: boolean; // Defaults to true
     labelIcon?: React.ComponentClass<SVGIconProps>;
@@ -55,7 +55,8 @@ const getTypeIcon = (type?: NodeDataType): React.ComponentClass<SVGIconProps> =>
         case 'EXTERNAL_ENTITIES':
         case 'CIDR_BLOCK':
             return PficonNetworkRangeIcon;
-
+        case 'INTERNAL_ENTITIES':
+            return ZoneIcon;
         default:
             return DefaultIcon;
     }
@@ -157,7 +158,7 @@ const renderDecorators = (
     );
 };
 
-const StyleNode: React.FunctionComponent<StyleNodeProps> = ({
+const StyleNode: React.FunctionComponent<React.PropsWithChildren<StyleNodeProps>> = ({
     element,
     onContextMenu,
     contextMenuOpen,

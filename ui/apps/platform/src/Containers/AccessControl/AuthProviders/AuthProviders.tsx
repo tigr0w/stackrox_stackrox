@@ -3,27 +3,39 @@ import React, { ReactElement, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { createStructuredSelector } from 'reselect';
 import { selectors } from 'reducers';
-import { useHistory, useLocation, useParams } from 'react-router-dom';
+import { useHistory, useLocation, useParams, Link } from 'react-router-dom';
+import ExternalLink from 'Components/PatternFly/IconText/ExternalLink';
 import {
+    Alert,
     Bullseye,
-    Dropdown,
-    DropdownItem,
-    DropdownPosition,
-    DropdownToggle,
+    Button,
+    ExpandableSection,
+    Flex,
     PageSection,
     pluralize,
     Spinner,
     Title,
 } from '@patternfly/react-core';
+import {
+    Dropdown,
+    DropdownItem,
+    DropdownPosition,
+    DropdownToggle,
+} from '@patternfly/react-core/deprecated';
 import { CaretDownIcon } from '@patternfly/react-icons';
 
-import EmptyStateTemplate from 'Components/PatternFly/EmptyStateTemplate';
+import EmptyStateTemplate from 'Components/EmptyStateTemplate';
 import NotFoundMessage from 'Components/NotFoundMessage';
+import useAnalytics, { INVITE_USERS_MODAL_OPENED } from 'hooks/useAnalytics';
 import { actions as authActions, types as authActionTypes } from 'reducers/auth';
 import { actions as groupActions } from 'reducers/groups';
+import { actions as inviteActions } from 'reducers/invite';
 import { actions as roleActions, types as roleActionTypes } from 'reducers/roles';
 import { AuthProvider } from 'services/AuthService';
-
+import usePermissions from 'hooks/usePermissions';
+import { integrationsPath } from 'routePaths';
+import { getVersionedDocs } from 'utils/versioning';
+import useMetadata from 'hooks/useMetadata';
 import { getEntityPath, getQueryObject } from '../accessControlPaths';
 import { mergeGroupsWithAuthProviders } from './authProviders.utils';
 
@@ -35,8 +47,6 @@ import AuthProvidersList from './AuthProvidersList';
 import AccessControlBreadcrumbs from '../AccessControlBreadcrumbs';
 import AccessControlHeading from '../AccessControlHeading';
 import AccessControlHeaderActionBar from '../AccessControlHeaderActionBar';
-import usePermissions from '../../../hooks/usePermissions';
-import AccessControlNoPermission from '../AccessControlNoPermission';
 
 const entityType = 'AUTH_PROVIDER';
 
@@ -63,8 +73,7 @@ function getNewAuthProviderObj(type) {
 }
 
 function AuthProviders(): ReactElement {
-    const { hasReadAccess, hasReadWriteAccess } = usePermissions();
-    const hasReadAccessForPage = hasReadAccess('Access');
+    const { hasReadWriteAccess } = usePermissions();
     const hasWriteAccessForPage = hasReadWriteAccess('Access');
     const history = useHistory();
     const { search } = useLocation();
@@ -72,8 +81,11 @@ function AuthProviders(): ReactElement {
     const { action, type } = queryObject;
     const { entityId } = useParams();
     const dispatch = useDispatch();
+    const { analyticsTrack } = useAnalytics();
+    const { version } = useMetadata();
 
     const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+    const [isInfoExpanded, setIsInfoExpanded] = useState(false);
     const {
         authProviders,
         groups,
@@ -85,24 +97,20 @@ function AuthProviders(): ReactElement {
     const authProvidersWithRules = mergeGroupsWithAuthProviders(authProviders, groups);
 
     useEffect(() => {
-        if (hasReadAccessForPage) {
-            dispatch(authActions.fetchAuthProviders.request());
-            dispatch(roleActions.fetchRoles.request());
-            dispatch(groupActions.fetchGroups.request());
-        }
-    }, [dispatch, hasReadAccessForPage]);
-
-    // Return "no access" page immediately if user doesn't have enough permissions.
-    if (!hasReadAccessForPage) {
-        return (
-            <>
-                <AccessControlNoPermission subPage="auth providers" entityType={entityType} />
-            </>
-        );
-    }
+        dispatch(authActions.fetchAuthProviders.request());
+        dispatch(roleActions.fetchRoles.request());
+        dispatch(groupActions.fetchGroups.request());
+    }, [dispatch]);
 
     function onToggleCreateMenu(isOpen) {
         setIsCreateMenuOpen(isOpen);
+    }
+
+    function onClickInviteUsers() {
+        // track request to invite
+        analyticsTrack(INVITE_USERS_MODAL_OPENED);
+
+        dispatch(inviteActions.setInviteModalVisibility(true));
     }
 
     function onClickCreate(event) {
@@ -133,6 +141,10 @@ function AuthProviders(): ReactElement {
         return (provider.label as string) ?? 'auth';
     }
 
+    const onToggle = (_isExpanded: boolean) => {
+        setIsInfoExpanded(_isExpanded);
+    };
+
     const selectedAuthProvider = authProviders.find(({ id }) => id === entityId);
     const hasAction = Boolean(action);
     const isList = typeof entityId !== 'string' && !hasAction;
@@ -161,17 +173,26 @@ function AuthProviders(): ReactElement {
                                 users
                             </AccessControlDescription>
                         }
+                        inviteComponent={
+                            hasWriteAccessForPage && (
+                                <Button variant="secondary" onClick={onClickInviteUsers}>
+                                    Invite users
+                                </Button>
+                            )
+                        }
                         actionComponent={
                             hasWriteAccessForPage && (
                                 <Dropdown
-                                    className="auth-provider-dropdown"
+                                    className="auth-provider-dropdown pf-v5-u-ml-md"
                                     onSelect={onClickCreate}
                                     position={DropdownPosition.right}
                                     toggle={
                                         <DropdownToggle
-                                            onToggle={onToggleCreateMenu}
+                                            onToggle={(_event, isOpen) =>
+                                                onToggleCreateMenu(isOpen)
+                                            }
                                             toggleIndicator={CaretDownIcon}
-                                            isPrimary
+                                            toggleVariant="primary"
                                         >
                                             Create auth provider
                                         </DropdownToggle>
@@ -182,6 +203,61 @@ function AuthProviders(): ReactElement {
                             )
                         }
                     />
+                    <PageSection variant="light">
+                        <Alert
+                            isInline
+                            variant="info"
+                            title="Consider using short-lived tokens for machine-to-machine communications
+                            such as CI/CD pipelines, scripts, and other automation."
+                            component="p"
+                        >
+                            <Flex
+                                direction={{ default: 'column' }}
+                                spaceItems={{ default: 'spaceItemsMd' }}
+                            >
+                                <Flex direction={{ default: 'row' }}>
+                                    <ExternalLink>
+                                        <a
+                                            href={getVersionedDocs(
+                                                version,
+                                                'operating/managing-user-access#configure-short-lived-access'
+                                            )}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                        >
+                                            How to configure short-lived access
+                                        </a>
+                                    </ExternalLink>
+                                    {hasWriteAccessForPage && (
+                                        <Link
+                                            to={`${integrationsPath}/authProviders/machineAccess/create`}
+                                        >
+                                            Create a machine access configuration
+                                        </Link>
+                                    )}
+                                </Flex>
+                                <ExpandableSection
+                                    toggleText="More resources"
+                                    onToggle={(_event, _isExpanded: boolean) =>
+                                        onToggle(_isExpanded)
+                                    }
+                                    isExpanded={isInfoExpanded}
+                                >
+                                    <Flex direction={{ default: 'column' }}>
+                                        <ExternalLink>
+                                            <a
+                                                href="https://github.com/stackrox/central-login"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                            >
+                                                GitHub Action for short-lived access
+                                            </a>
+                                        </ExternalLink>
+                                    </Flex>
+                                </ExpandableSection>
+                            </Flex>
+                        </Alert>
+                    </PageSection>
                 </>
             ) : (
                 <AccessControlBreadcrumbs
@@ -196,7 +272,7 @@ function AuthProviders(): ReactElement {
             <PageSection variant={isList ? 'default' : 'light'}>
                 {isFetchingAuthProviders || isFetchingRoles ? (
                     <Bullseye>
-                        <Spinner isSVG />
+                        <Spinner />
                     </Bullseye>
                 ) : isList ? (
                     <PageSection variant="light">

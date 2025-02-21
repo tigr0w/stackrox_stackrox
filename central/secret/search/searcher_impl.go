@@ -3,16 +3,10 @@ package search
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/role/resources"
-	"github.com/stackrox/rox/central/secret/internal/index"
 	"github.com/stackrox/rox/central/secret/internal/store"
-	"github.com/stackrox/rox/central/secret/mappings"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	"github.com/stackrox/rox/pkg/search/paginated"
 	"github.com/stackrox/rox/pkg/secret/convert"
 )
@@ -21,15 +15,11 @@ var (
 	defaultSortOption = &v1.QuerySortOption{
 		Field: search.CreatedTime.String(),
 	}
-
-	secretSACSearchHelper         = sac.ForResource(resources.Secret).MustCreateSearchHelper(mappings.OptionsMap)
-	secretSACPostgresSearchHelper = sac.ForResource(resources.Secret).MustCreatePgSearchHelper()
 )
 
 // searcherImpl provides an intermediary implementation layer for secrets
 type searcherImpl struct {
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 }
 
@@ -52,7 +42,7 @@ func (ds *searcherImpl) Count(ctx context.Context, q *v1.Query) (int, error) {
 	return ds.searcher.Count(ctx, q)
 }
 
-// SearchSecrets returns the secrets and relationships that match the query.
+// SearchListSecrets returns the secrets and relationships that match the query.
 func (ds *searcherImpl) SearchListSecrets(ctx context.Context, q *v1.Query) ([]*storage.ListSecret, error) {
 	results, err := ds.getSearchResults(ctx, q)
 	if err != nil {
@@ -62,7 +52,7 @@ func (ds *searcherImpl) SearchListSecrets(ctx context.Context, q *v1.Query) ([]*
 	return secrets, err
 }
 
-// SearchRawSecrets retrieves secrets from the indexer and storage
+// SearchRawSecrets retrieves secrets from the storage
 func (ds *searcherImpl) SearchRawSecrets(ctx context.Context, q *v1.Query) ([]*storage.Secret, error) {
 	return ds.searchSecrets(ctx, q)
 }
@@ -114,17 +104,9 @@ func convertOne(secret *storage.ListSecret, result *search.Result) *v1.SearchRes
 	}
 }
 
-// Format the search functionality of the indexer to be filtered (for sac) and paginated.
-func formatSearcher(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher {
-	var filteredSearcher search.Searcher
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		// Make the UnsafeSearcher safe.
-		filteredSearcher = secretSACPostgresSearchHelper.FilteredSearcher(unsafeSearcher)
-	} else {
-		filteredSearcher = secretSACSearchHelper.FilteredSearcher(unsafeSearcher) // Make the UnsafeSearcher safe.
-	}
-	paginatedSearcher := paginated.Paginated(filteredSearcher)
-	defaultSortedSearcher := paginated.WithDefaultSortOption(paginatedSearcher, defaultSortOption)
+// Format the search functionality for SAC filtering (for sac) and pagination.
+func formatSearcher(searcher search.Searcher) search.Searcher {
+	defaultSortedSearcher := paginated.WithDefaultSortOption(searcher, defaultSortOption)
 	return defaultSortedSearcher
 }
 

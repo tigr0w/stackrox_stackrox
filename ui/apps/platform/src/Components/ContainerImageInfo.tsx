@@ -2,7 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { Card, CardBody, CardTitle } from '@patternfly/react-core';
 
-import { vulnManagementPath } from 'routePaths';
+import { vulnerabilitiesWorkloadCvesPath } from 'routePaths';
 import { ContainerImage } from 'types/deployment.proto';
 
 type ContainerImageInfoProps = {
@@ -10,6 +10,8 @@ type ContainerImageInfoProps = {
 };
 
 function ContainerImageInfo({ image }: ContainerImageInfoProps) {
+    const imageDetailsPageURL = `${vulnerabilitiesWorkloadCvesPath}/images/${image.id}`;
+
     if (image.id === '' || image.notPullable) {
         const unavailableText = image.notPullable
             ? 'image not currently pullable'
@@ -28,7 +30,7 @@ function ContainerImageInfo({ image }: ContainerImageInfoProps) {
         <Card>
             <CardTitle>Image</CardTitle>
             <CardBody>
-                <Link to={`${vulnManagementPath}/image/${image.id}`}>{image.name.fullName}</Link>
+                <Link to={imageDetailsPageURL}>{image.name.fullName}</Link>
             </CardBody>
         </Card>
     );

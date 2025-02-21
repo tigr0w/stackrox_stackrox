@@ -26,17 +26,17 @@ const routeMatcherMap = {
 };
 
 export function visitPolicies(staticResponseMap) {
-    visit(policiesUrl, routeMatcherMap, staticResponseMap);
+    visit(policiesUrl, routeMatcherMap, staticResponseMap, { requestTimeout: 10000 });
 
     cy.get('h1:contains("Policy management")');
-    cy.get(`.pf-c-nav__link.pf-m-current:contains("Policies")`);
+    cy.get(`.pf-v5-c-nav__link.pf-m-current:contains("Policies")`);
 }
 
 export function visitPoliciesFromLeftNav() {
     visitFromLeftNavExpandable('Platform Configuration', 'Policy Management', routeMatcherMap);
 
     cy.get('h1:contains("Policy management")');
-    cy.get(`.pf-c-nav__link.pf-m-current:contains("Policies")`);
+    cy.get(`.pf-v5-c-nav__link.pf-m-current:contains("Policies")`);
 }
 
 export function visitPolicy(policyId, staticResponseMap) {
@@ -59,7 +59,7 @@ export function doPolicyRowAction(trSelector, titleOfActionItem) {
     cy.get(`${trSelector} ${selectors.table.actionsToggleButton}`).click();
     cy.get(`${trSelector} ${selectors.table.actionsItemButton}:contains("${titleOfActionItem}")`)
         .should('be.enabled')
-        .click();
+        .click({ animationDistanceThreshold: 20 });
 }
 
 export function changePolicyStatusInTable({ policyName, statusPrev, actionText, statusNext }) {
@@ -148,3 +148,59 @@ export function goToStep3() {
 }
 
 export function savePolicy() {}
+
+export function importPolicyFromFixture(fileName, contentsInterceptor = (c) => c) {
+    return cy.fixture(fileName).then((originalContents) => {
+        const contents = contentsInterceptor(originalContents);
+        const importedPolicyName = contents.policies[0].name;
+
+        cy.get(`${selectors.table.policyLink}:contains("${importedPolicyName}")`).should(
+            'not.exist'
+        );
+
+        cy.get(selectors.table.importButton).click();
+
+        cy.get(selectors.importUploadModal.fileInput).selectFile(
+            {
+                contents,
+                fileName,
+            },
+            { force: true } // because input element has display: none style
+        );
+        cy.get(
+            `${selectors.importUploadModal.policyNames}:nth-child(1):contains("${importedPolicyName}")`
+        );
+
+        cy.intercept('POST', api.policies.import).as('importPolicy');
+        cy.get(selectors.importUploadModal.beginButton).click();
+        cy.wait('@importPolicy');
+
+        cy.get(
+            `${selectors.importSuccessModal.policyNames}:nth-child(1):contains("${importedPolicyName}")`
+        );
+
+        // After 3 seconds, success modal closes, and then table displays imported policy.
+        cy.intercept('GET', `${api.policies.policies}?query=`).as('getPolicies');
+        cy.wait('@getPolicies');
+        cy.get(`${selectors.table.policyLink}:contains("${importedPolicyName}")`);
+        return cy.wrap({ importedPolicyName });
+    });
+}
+
+export function deletePolicyIfExists(policyName) {
+    const auth = { bearer: Cypress.env('ROX_AUTH_TOKEN') };
+
+    cy.request({
+        url: api.policies.policies,
+        auth,
+    }).as('listPolicies');
+
+    cy.get('@listPolicies').then((res) => {
+        const policy = res.body.policies.find(({ name }) => name === policyName);
+        if (policy) {
+            const { id } = policy;
+            const url = `/v1/policies/${id}`;
+            cy.request({ url, auth, method: 'DELETE' });
+        }
+    });
+}

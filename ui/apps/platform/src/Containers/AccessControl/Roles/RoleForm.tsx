@@ -3,10 +3,12 @@ import { useFormik } from 'formik';
 import * as yup from 'yup';
 import {
     Alert,
-    AlertVariant,
     Button,
     Form,
     FormGroup,
+    FormHelperText,
+    HelperText,
+    HelperTextItem,
     Label,
     TextInput,
     Title,
@@ -89,7 +91,7 @@ function RoleForm({
         handleSubmit(values)
             .catch((error) => {
                 setAlertSubmit(
-                    <Alert title="Failed to save role" variant={AlertVariant.danger} isInline>
+                    <Alert title="Failed to save role" component="p" variant="danger" isInline>
                         {error.message}
                     </Alert>
                 );
@@ -112,10 +114,10 @@ function RoleForm({
 
     return (
         <Form id="role-form">
-            <Toolbar inset={{ default: 'insetNone' }} className="pf-u-pt-0">
+            <Toolbar inset={{ default: 'insetNone' }} className="pf-v5-u-pt-0">
                 <ToolbarContent>
                     <ToolbarItem>
-                        <Title headingLevel="h2">
+                        <Title headingLevel="h1">
                             {action === 'create' ? 'Create role' : role.name}
                         </Title>
                     </ToolbarItem>
@@ -125,14 +127,14 @@ function RoleForm({
                         </ToolbarItem>
                     )}
                     {action !== 'create' && (
-                        <ToolbarGroup variant="button-group" alignment={{ default: 'alignRight' }}>
+                        <ToolbarGroup variant="button-group" align={{ default: 'alignRight' }}>
                             <ToolbarItem>
                                 {isActionable ? (
                                     <Button
                                         variant="primary"
                                         onClick={handleEdit}
                                         isDisabled={!hasWriteAccessForPage || action === 'edit'}
-                                        isSmall
+                                        size="sm"
                                     >
                                         Edit role
                                     </Button>
@@ -145,31 +147,31 @@ function RoleForm({
                 </ToolbarContent>
             </Toolbar>
             {alertSubmit}
-            <FormGroup
-                label="Name"
-                fieldId="name"
-                isRequired
-                validated={nameValidatedState}
-                helperTextInvalid={nameErrorMessage}
-                className="pf-m-horizontal"
-            >
+            <FormGroup label="Name" fieldId="name" isRequired className="pf-m-horizontal">
                 <TextInput
                     type="text"
                     id="name"
                     value={values.name}
                     validated={nameValidatedState}
-                    onChange={onChange}
+                    onChange={(event, _value) => onChange(_value, event)}
                     isDisabled={isViewing || action === 'edit'}
                     isRequired
                     className="pf-m-limit-width"
                 />
+                <FormHelperText>
+                    <HelperText>
+                        <HelperTextItem variant={nameValidatedState}>
+                            {nameErrorMessage}
+                        </HelperTextItem>
+                    </HelperText>
+                </FormHelperText>
             </FormGroup>
             <FormGroup label="Description" fieldId="description" className="pf-m-horizontal">
                 <TextInput
                     type="text"
                     id="description"
                     value={values.description}
-                    onChange={onChange}
+                    onChange={(event, _value) => onChange(_value, event)}
                     isDisabled={isViewing}
                 />
             </FormGroup>
@@ -205,13 +207,13 @@ function RoleForm({
                                     onClick={onClickSubmit}
                                     isDisabled={!dirty || !isValid || isSubmitting}
                                     isLoading={isSubmitting}
-                                    isSmall
+                                    size="sm"
                                 >
                                     Save
                                 </Button>
                             </ToolbarItem>
                             <ToolbarItem>
-                                <Button variant="tertiary" onClick={onClickCancel} isSmall>
+                                <Button variant="tertiary" onClick={onClickCancel} size="sm">
                                     Cancel
                                 </Button>
                             </ToolbarItem>

@@ -8,6 +8,7 @@ import {
 import PolicyDisabledIconText from 'Components/PatternFly/IconText/PolicyDisabledIconText';
 import PolicySeverityIconText from 'Components/PatternFly/IconText/PolicySeverityIconText';
 import PolicyStatusIconText from 'Components/PatternFly/IconText/PolicyStatusIconText';
+import TableCellLink from 'Components/TableCellLink';
 import entityTypes from 'constants/entityTypes';
 import { entityListPropTypes, entityListDefaultprops } from 'constants/entityPageProps';
 import { CLIENT_SIDE_SEARCH_OPTIONS as SEARCH_OPTIONS } from 'constants/searchOptions';
@@ -16,6 +17,7 @@ import { formatLifecycleStages } from 'Containers/Policies/policies.utils';
 import { POLICIES_QUERY } from 'queries/policy';
 import { sortSeverity } from 'sorters/sorters';
 import queryService from 'utils/queryService';
+import { getConfigMgmtPathForEntitiesAndId } from '../entities';
 import ListFrontendPaginated from './ListFrontendPaginated';
 
 import filterByPolicyStatus from './utilities/filterByPolicyStatus';
@@ -36,22 +38,19 @@ const tableColumns = [
     },
     {
         Header: `Policy`,
-        headerClassName: `w-1/8 ${defaultHeaderClassName}`,
-        className: `w-1/8 ${defaultColumnClassName}`,
+        headerClassName: `w-1/4 ${defaultHeaderClassName}`,
+        className: `w-1/4 ${defaultColumnClassName}`,
+        Cell: ({ original, pdf }) => {
+            const url = getConfigMgmtPathForEntitiesAndId('POLICY', original.id);
+            return (
+                <TableCellLink pdf={pdf} url={url}>
+                    {original.name}
+                </TableCellLink>
+            );
+        },
         accessor: 'name',
         id: policySortFields.POLICY,
         sortField: policySortFields.POLICY,
-    },
-    {
-        Header: `Enabled`,
-        headerClassName: `w-1/8 ${nonSortableHeaderClassName}`,
-        className: `w-1/8 ${defaultColumnClassName}`,
-        Cell: ({ original }) => {
-            const { disabled, pdf } = original;
-            return <PolicyDisabledIconText isDisabled={disabled} isTextOnly={pdf} />;
-        },
-        accessor: 'disabled',
-        sortable: false, // not performant as of 2020-06-11
     },
     {
         Header: `Enforced`,
@@ -98,8 +97,8 @@ const tableColumns = [
     },
     {
         Header: `Categories`,
-        headerClassName: `w-1/8 ${defaultHeaderClassName}`,
-        className: `w-1/8 ${defaultColumnClassName}`,
+        headerClassName: `w-1/4 ${defaultHeaderClassName}`,
+        className: `w-1/4 ${defaultColumnClassName}`,
         Cell: ({ original }) => {
             const { categories } = original;
             return categories.join(', ');

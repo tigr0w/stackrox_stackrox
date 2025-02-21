@@ -1,85 +1,102 @@
 import React from 'react';
 import { useQuery } from '@apollo/client';
-import { Bullseye, Spinner, Divider } from '@patternfly/react-core';
+import { Divider, ToolbarItem } from '@patternfly/react-core';
 
 import useURLSort from 'hooks/useURLSort';
 import useURLPagination from 'hooks/useURLPagination';
-import useURLSearch from 'hooks/useURLSearch';
-import { getHasSearchApplied } from 'utils/searchUtils';
-import DeploymentsTable, { Deployment, deploymentListQuery } from '../Tables/DeploymentsTable';
-import TableErrorComponent from '../components/TableErrorComponent';
-import TableEntityToolbar from '../components/TableEntityToolbar';
-import { EntityCounts } from '../components/EntityTypeToggleGroup';
-import { getCveStatusScopedQueryString, parseQuerySearchFilter } from '../searchUtils';
-import { defaultDeploymentSortFields, deploymentsDefaultSort } from '../sortUtils';
-import { DefaultFilters, VulnerabilitySeverityLabel, CveStatusTab } from '../types';
+
+import { getTableUIState } from 'utils/getTableUIState';
+import { getPaginationParams } from 'utils/searchUtils';
+import { SearchFilter } from 'types/search';
+import { useManagedColumns } from 'hooks/useManagedColumns';
+import ColumnManagementButton from 'Components/ColumnManagementButton';
+import DeploymentsTable, {
+    defaultColumns,
+    Deployment,
+    deploymentListQuery,
+    tableId,
+} from '../Tables/DeploymentOverviewTable';
+import TableEntityToolbar, { TableEntityToolbarProps } from '../../components/TableEntityToolbar';
+import { VulnerabilitySeverityLabel } from '../../types';
 
 type DeploymentsTableContainerProps = {
-    defaultFilters: DefaultFilters;
-    countsData: EntityCounts;
-    cveStatusTab?: CveStatusTab; // TODO Make this required once Observed/Deferred/FP states are re-implemented
+    searchFilter: SearchFilter;
+    onFilterChange: (searchFilter: SearchFilter) => void;
+    filterToolbar: TableEntityToolbarProps['filterToolbar'];
+    entityToggleGroup: TableEntityToolbarProps['entityToggleGroup'];
+    rowCount: number;
     pagination: ReturnType<typeof useURLPagination>;
+    sort: ReturnType<typeof useURLSort>;
+    workloadCvesScopedQueryString: string;
+    isFiltered: boolean;
+    showCveDetailFields: boolean;
 };
 
 function DeploymentsTableContainer({
-    defaultFilters,
-    countsData,
-    cveStatusTab,
+    searchFilter,
+    onFilterChange,
+    filterToolbar,
+    entityToggleGroup,
+    rowCount,
     pagination,
+    sort,
+    workloadCvesScopedQueryString,
+    isFiltered,
+    showCveDetailFields,
 }: DeploymentsTableContainerProps) {
-    const { searchFilter } = useURLSearch();
-    const querySearchFilter = parseQuerySearchFilter(searchFilter);
-    const isFiltered = getHasSearchApplied(querySearchFilter);
-    const { page, perPage, setPage } = pagination;
-    const { sortOption, getSortParams, setSortOption } = useURLSort({
-        sortFields: defaultDeploymentSortFields,
-        defaultSortOption: deploymentsDefaultSort,
-        onSort: () => setPage(1),
-    });
+    const { page, perPage } = pagination;
+    const { sortOption, getSortParams } = sort;
 
-    const { error, loading, data, previousData } = useQuery<{
+    const { error, loading, data } = useQuery<{
         deployments: Deployment[];
     }>(deploymentListQuery, {
         variables: {
-            query: getCveStatusScopedQueryString(querySearchFilter, cveStatusTab),
-            pagination: {
-                offset: (page - 1) * perPage,
-                limit: perPage,
-                sortOption,
-            },
+            query: workloadCvesScopedQueryString,
+            pagination: getPaginationParams({ page, perPage, sortOption }),
         },
     });
 
-    const tableData = data ?? previousData;
+    const tableState = getTableUIState({
+        isLoading: loading,
+        error,
+        data: data?.deployments,
+        searchFilter,
+    });
+
+    const managedColumnState = useManagedColumns(tableId, defaultColumns);
+
     return (
         <>
             <TableEntityToolbar
-                defaultFilters={defaultFilters}
-                countsData={countsData}
-                setSortOption={setSortOption}
+                filterToolbar={filterToolbar}
+                entityToggleGroup={entityToggleGroup}
                 pagination={pagination}
-                tableRowCount={countsData.deploymentCount}
+                tableRowCount={rowCount}
                 isFiltered={isFiltered}
-            />
+            >
+                <ToolbarItem align={{ default: 'alignRight' }}>
+                    <ColumnManagementButton managedColumnState={managedColumnState} />
+                </ToolbarItem>
+            </TableEntityToolbar>
             <Divider component="div" />
-            {loading && !tableData && (
-                <Bullseye>
-                    <Spinner isSVG />
-                </Bullseye>
-            )}
-            {error && (
-                <TableErrorComponent error={error} message="Adjust your filters and try again" />
-            )}
-            {!error && tableData && (
-                <div className="workload-cves-table-container">
-                    <DeploymentsTable
-                        deployments={tableData.deployments}
-                        getSortParams={getSortParams}
-                        isFiltered={isFiltered}
-                        filteredSeverities={searchFilter.Severity as VulnerabilitySeverityLabel[]}
-                    />
-                </div>
-            )}
+            <div
+                className="workload-cves-table-container"
+                aria-live="polite"
+                aria-busy={loading ? 'true' : 'false'}
+            >
+                <DeploymentsTable
+                    tableState={tableState}
+                    getSortParams={getSortParams}
+                    isFiltered={isFiltered}
+                    filteredSeverities={searchFilter.SEVERITY as VulnerabilitySeverityLabel[]}
+                    showCveDetailFields={showCveDetailFields}
+                    onClearFilters={() => {
+                        onFilterChange({});
+                        pagination.setPage(1);
+                    }}
+                    columnVisibilityState={managedColumnState.columns}
+                />
+            </div>
         </>
     );
 }

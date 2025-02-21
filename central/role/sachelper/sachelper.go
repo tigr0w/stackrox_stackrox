@@ -5,17 +5,19 @@ import (
 
 	clusterDS "github.com/stackrox/rox/central/cluster/datastore"
 	namespaceDS "github.com/stackrox/rox/central/namespace/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 )
 
 // ClusterSacHelper is an interface to query the scope of the requester for basic cluster information (ID and name).
+//
+//go:generate mockgen-wrapper
 type ClusterSacHelper interface {
 	GetClustersForPermissions(
 		ctx context.Context,
@@ -31,6 +33,8 @@ type ClusterSacHelper interface {
 }
 
 // ClusterNamespaceSacHelper is an interface to query the scope of the requester for basic cluster and namespace information (ID and name).
+//
+//go:generate mockgen-wrapper
 type ClusterNamespaceSacHelper interface {
 	GetNamespacesForClusterAndPermissions(
 		ctx context.Context,
@@ -71,9 +75,12 @@ func (h *clusterSACHelperImpl) GetClustersForPermissions(
 	pagination *v1.Pagination,
 ) ([]*v1.ScopeObject, error) {
 	resourcesWithAccess := listReadPermissions(requestedPermissions, permissions.ClusterScope)
-	clusterIDsInScope, hasFullAccess, err := listClusterIDsInScope(ctx, resourcesWithAccess)
+	clusterIDsInScope, hasFullAccess, err := ListClusterIDsInScope(ctx, resourcesWithAccess)
 	if err != nil {
 		return nil, err
+	}
+	if len(clusterIDsInScope) == 0 && !hasFullAccess {
+		return nil, nil
 	}
 
 	// Use an elevated context to fetch cluster names associated with the listed IDs.
@@ -157,6 +164,9 @@ func (h *clusterNamespaceSACHelperImpl) GetNamespacesForClusterAndPermissions(
 	namespacesInScope, hasFullAccess, err := listNamespaceNamesInScope(ctx, clusterID, resourcesWithAccess)
 	if err != nil {
 		return nil, err
+	}
+	if len(namespacesInScope) == 0 && !hasFullAccess {
+		return nil, nil
 	}
 
 	// Use an elevated context to fetch namespace IDs and names associated with the listed namespace names.

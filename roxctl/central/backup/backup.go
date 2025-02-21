@@ -13,7 +13,6 @@ import (
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/fileutils"
 	"github.com/stackrox/rox/pkg/httputil"
-	"github.com/stackrox/rox/pkg/mathutil"
 	"github.com/stackrox/rox/pkg/stringutils"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/roxctl/central/db/transfer"
@@ -42,17 +41,20 @@ You can use it to restore central service and the database.`,
 		}),
 	}
 
-	c.Flags().StringVar(&centralBackupCmd.output, "output", "", `where to write the backup.
+	c.Flags().StringVar(&centralBackupCmd.output, "output", "", `Where to write the backup.
 If the provided path is a file path, the backup will be written to the file, overwriting it if it already exists. (The directory MUST exist.)
 If the provided path is a directory, the backup will be saved in that directory with the server-provided filename.
 If this argument is omitted, the backup will be saved in the current working directory with the server-provided filename.`)
+	c.Flags().BoolVar(&centralBackupCmd.certsOnly, "certs-only", false, `Only backs up the certs.
+If using an external database this will be how a backup bundle with certs is generated.`)
 	flags.AddTimeoutWithDefault(c, 1*time.Hour)
 	return c
 }
 
 type centralBackupCommand struct {
 	// Properties that are bound to cobra flags.
-	output string
+	output    string
+	certsOnly bool
 
 	// Properties that are injected or constructed.
 	env environment.Environment
@@ -113,7 +115,9 @@ func (cmd *centralBackupCommand) backup(timeout time.Duration, full bool) error 
 	deadline := time.Now().Add(timeout)
 
 	var endpoint string
-	if full {
+	if cmd.certsOnly {
+		endpoint = "/api/extensions/certs/backup"
+	} else if full {
 		endpoint = "/api/extensions/backup"
 	} else {
 		endpoint = "/db/backup"
@@ -163,7 +167,7 @@ func (cmd *centralBackupCommand) backup(timeout time.Duration, full bool) error 
 	}
 	defer utils.IgnoreError(file.Close)
 
-	if err := transfer.Copy(reqCtx, cancel, filename, mathutil.MaxInt64(0, resp.ContentLength), resp.Body, file, deadline, idleTimeout); err != nil {
+	if err := transfer.Copy(reqCtx, cancel, filename, max(0, resp.ContentLength), resp.Body, file, deadline, idleTimeout); err != nil {
 		return err
 	}
 

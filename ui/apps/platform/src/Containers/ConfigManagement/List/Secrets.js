@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocation, useRouteMatch } from 'react-router-dom';
 import uniq from 'lodash/uniq';
 import { format } from 'date-fns';
 import pluralize from 'pluralize';
@@ -16,6 +17,7 @@ import { SECRETS_QUERY } from 'queries/secret';
 import { secretSortFields } from 'constants/sortFields';
 import queryService from 'utils/queryService';
 import URLService from 'utils/URLService';
+import { getConfigMgmtPathForEntitiesAndId } from '../entities';
 import List from './List';
 
 const secretTypeEnumMapping = {
@@ -52,6 +54,14 @@ const buildTableColumns = (match, location, entityContext) => {
             Header: `Secret`,
             headerClassName: `w-1/8 ${defaultHeaderClassName}`,
             className: `w-1/8 ${defaultColumnClassName}`,
+            Cell: ({ original, pdf }) => {
+                const url = getConfigMgmtPathForEntitiesAndId('SECRET', original.id);
+                return (
+                    <TableCellLink pdf={pdf} url={url}>
+                        {original.name}
+                    </TableCellLink>
+                );
+            },
             accessor: 'name',
             id: secretSortFields.SECRET,
             sortField: secretSortFields.SECRET,
@@ -124,7 +134,7 @@ const buildTableColumns = (match, location, entityContext) => {
                     .url();
                 const text = `${deploymentCount} ${pluralize('Deployment', deploymentCount)}`;
                 return (
-                    <TableCellLink testid="deployment" pdf={pdf} url={url}>
+                    <TableCellLink pdf={pdf} url={url}>
                         {text}
                     </TableCellLink>
                 );
@@ -140,8 +150,6 @@ const createTableRows = (data) => {
 };
 
 const Secrets = ({
-    match,
-    location,
     className,
     selectedRowId,
     onRowClick,
@@ -150,6 +158,8 @@ const Secrets = ({
     totalResults,
     entityContext,
 }) => {
+    const location = useLocation();
+    const match = useRouteMatch();
     const autoFocusSearchInput = !selectedRowId;
     const tableColumns = buildTableColumns(match, location, entityContext);
     const queryText = queryService.objectToWhereClause(query);

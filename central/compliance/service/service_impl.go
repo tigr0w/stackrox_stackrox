@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/cluster/datastore"
 	"github.com/stackrox/rox/central/compliance/aggregation"
@@ -11,7 +11,6 @@ import (
 	complianceDSTypes "github.com/stackrox/rox/central/compliance/datastore/types"
 	"github.com/stackrox/rox/central/compliance/standards"
 	"github.com/stackrox/rox/central/complianceoperator/manager"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
@@ -19,24 +18,22 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
-	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"google.golang.org/grpc"
 )
 
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
 		user.With(permissions.View(resources.Compliance)): {
-			"/v1.ComplianceService/GetStandards",
-			"/v1.ComplianceService/GetStandard",
-			"/v1.ComplianceService/GetComplianceStatistics",
-			"/v1.ComplianceService/GetRunResults",
-			"/v1.ComplianceService/GetAggregatedResults",
+			v1.ComplianceService_GetStandards_FullMethodName,
+			v1.ComplianceService_GetStandard_FullMethodName,
+			v1.ComplianceService_GetRunResults_FullMethodName,
+			v1.ComplianceService_GetAggregatedResults_FullMethodName,
 		},
 		user.With(permissions.Modify(resources.Compliance)): {
-			"/v1.ComplianceService/UpdateComplianceStandardConfig",
+			v1.ComplianceService_UpdateComplianceStandardConfig_FullMethodName,
 		},
 	})
-	log = logging.LoggerForModule()
 )
 
 // New returns a service object for registering with grpc.
@@ -127,9 +124,21 @@ func (s *serviceImpl) GetAggregatedResults(ctx context.Context, request *v1.Comp
 		return nil, err
 	}
 
+	filteredSources := sources[:0]
+	for _, source := range sources {
+		config, exists, err := s.complianceDataStore.GetConfig(ctx, source.GetStandardId())
+		if err != nil {
+			return nil, err
+		}
+		// Not exists implies standards is not hidden
+		if exists && config.GetHideScanResults() {
+			continue
+		}
+		filteredSources = append(filteredSources, source)
+	}
 	return &storage.ComplianceAggregation_Response{
 		Results: validResults,
-		Sources: sources,
+		Sources: filteredSources,
 	}, nil
 }
 

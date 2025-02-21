@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *NodeCvesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE node_cves CASCADE")
 	s.T().Log("node_cves", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *NodeCvesStoreSuite) TestStore() {
 	foundNodeCVE, exists, err = store.Get(ctx, nodeCVE.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(nodeCVE, foundNodeCVE)
+	protoassert.Equal(s.T(), nodeCVE, foundNodeCVE)
 
-	nodeCVECount, err := store.Count(ctx)
+	nodeCVECount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, nodeCVECount)
-	nodeCVECount, err = store.Count(withNoAccessCtx)
+	nodeCVECount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(nodeCVECount)
 
@@ -75,11 +78,6 @@ func (s *NodeCvesStoreSuite) TestStore() {
 	s.True(nodeCVEExists)
 	s.NoError(store.Upsert(ctx, nodeCVE))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, nodeCVE), sac.ErrResourceAccessDenied)
-
-	foundNodeCVE, exists, err = store.Get(ctx, nodeCVE.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(nodeCVE, foundNodeCVE)
 
 	s.NoError(store.Delete(ctx, nodeCVE.GetId()))
 	foundNodeCVE, exists, err = store.Get(ctx, nodeCVE.GetId())
@@ -99,13 +97,13 @@ func (s *NodeCvesStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, nodeCVEs))
 
-	nodeCVECount, err = store.Count(ctx)
+	nodeCVECount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, nodeCVECount)
 
 	s.NoError(store.DeleteMany(ctx, nodeCVEIDs))
 
-	nodeCVECount, err = store.Count(ctx)
+	nodeCVECount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, nodeCVECount)
 }

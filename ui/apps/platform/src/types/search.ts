@@ -20,7 +20,7 @@ export type SearchEntry = {
     label: string; // an option ends with a colon
 };
 
-export type ApiSortOption = {
+export type ApiSortOptionSingle = {
     field: string;
     aggregateBy?: {
         aggregateFunc: AggregateFunc;
@@ -29,7 +29,16 @@ export type ApiSortOption = {
     reversed: boolean;
 };
 
+export type ApiSortOption = ApiSortOptionSingle | ApiSortOptionSingle[];
+
 export type GraphQLSortOption = {
     id: string;
     desc: boolean;
+};
+
+export type SearchQueryOptions = {
+    searchFilter?: SearchFilter;
+    sortOption?: ApiSortOption;
+    page: number;
+    perPage: number;
 };

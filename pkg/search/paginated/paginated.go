@@ -13,7 +13,7 @@ func WithDefaultSortOption(searcher search.Searcher, defaultSortOption *v1.Query
 	return search.FuncSearcher{
 		SearchFunc: func(ctx context.Context, q *v1.Query) ([]search.Result, error) {
 			// Add pagination sort order if needed.
-			local := FillDefaultSortOption(q, defaultSortOption)
+			local := FillDefaultSortOption(q, defaultSortOption.CloneVT())
 			return searcher.Search(ctx, local)
 		},
 		CountFunc: func(ctx context.Context, q *v1.Query) (int, error) {
@@ -32,7 +32,7 @@ func Paginated(searcher search.Searcher) search.Searcher {
 			}
 
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 
 			// Record used settings.
 			offset := int(local.GetPagination().GetOffset())
@@ -50,7 +50,7 @@ func Paginated(searcher search.Searcher) search.Searcher {
 	}
 }
 
-func paginate(offset, limit int, results []search.Result, err error) ([]search.Result, error) {
+func paginate[T any](offset, limit int, results []T, err error) ([]T, error) {
 	if err != nil {
 		return results, err
 	}
@@ -116,7 +116,7 @@ func FillDefaultSortOption(q *v1.Query, defaultSortOption *v1.QuerySortOption) *
 		q = search.EmptyQuery()
 	}
 	// Add pagination sort order if needed.
-	local := q.Clone()
+	local := q.CloneVT()
 	if local.GetPagination() == nil {
 		local.Pagination = new(v1.QueryPagination)
 	}
@@ -183,4 +183,10 @@ func convertV2AggregateByToV1(aggregateBy *v2.AggregateBy) *v1.AggregateBy {
 		AggrFunc: v1.Aggregation(aggregateBy.GetAggrFunc()),
 		Distinct: aggregateBy.GetDistinct(),
 	}
+}
+
+func PaginateSlice[T any](offset, limit int, slice []T) []T {
+	// if we pass nil, then there can be no error
+	result, _ := paginate(offset, limit, slice, nil)
+	return result
 }

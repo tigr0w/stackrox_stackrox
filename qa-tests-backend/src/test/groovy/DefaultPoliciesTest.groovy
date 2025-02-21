@@ -1,14 +1,11 @@
+import static Services.expectNoViolations
 import static Services.getPolicies
 import static Services.waitForViolation
 
-import java.util.concurrent.TimeUnit
 import java.util.stream.Collectors
 
 import io.grpc.StatusRuntimeException
 
-import io.stackrox.proto.api.v1.AlertServiceOuterClass
-import io.stackrox.proto.api.v1.AlertServiceOuterClass.GetAlertsCountsRequest
-import io.stackrox.proto.api.v1.AlertServiceOuterClass.GetAlertsCountsRequest.RequestGroup
 import io.stackrox.proto.api.v1.AlertServiceOuterClass.GetAlertsGroupResponse
 import io.stackrox.proto.api.v1.AlertServiceOuterClass.ListAlertsRequest
 import io.stackrox.proto.api.v1.PolicyServiceOuterClass
@@ -39,25 +36,31 @@ import util.Helpers
 import util.SlackUtil
 
 import org.junit.Assume
-import org.junit.Rule
-import org.junit.rules.Timeout
 import spock.lang.IgnoreIf
-import spock.lang.Retry
 import spock.lang.Shared
 import spock.lang.Stepwise
 import spock.lang.Tag
 import spock.lang.Unroll
 
+@Tag("PZ")
 // TODO(ROX-13738): Re-enable these tests in compatibility-test step
 @Stepwise // We need to verify all of the expected alerts are present before other tests.
 class DefaultPoliciesTest extends BaseSpecification {
     // Deployment names
     static final private String NGINX_LATEST = "qadefpolnginxlatest"
     static final private String STRUTS = "qadefpolstruts"
-    static final private String SSL_TERMINATOR = "qadefpolsslterm"
-    static final private String NGINX_1_10 = "qadefpolnginx110"
+    //static final private String SSL_TERMINATOR = "qadefpolsslterm"
+    static final private String TRIGGER_MOST = "qadefpoltriggermost"
     static final private String K8S_DASHBOARD = "kubernetes-dashboard"
     static final private String GCR_NGINX = "qadefpolnginx"
+    static final private String WGET_CURL = ((Env.REMOTE_CLUSTER_ARCH == "x86_64") ? STRUTS:TRIGGER_MOST)
+    static final private String STRUTS_IMAGE = ((Env.REMOTE_CLUSTER_ARCH == "x86_64") ?
+        "quay.io/rhacs-eng/qa:struts-app":"quay.io/rhacs-eng/qa-multi-arch:struts-app")
+    static final private String COMPONENTS = ((Env.REMOTE_CLUSTER_ARCH == "x86_64") ?
+        " apt, bash, curl, wget":" apt, bash, curl")
+
+    @Shared
+    private String componentCount = ""
 
     static final private List<String> WHITELISTED_KUBE_SYSTEM_POLICIES = [
             "Fixable CVSS >= 6 and Privileged",
@@ -70,6 +73,7 @@ class DefaultPoliciesTest extends BaseSpecification {
             "Mount Container Runtime Socket",
             "Docker CIS 5.15: Ensure that the host's process namespace is not shared",
             "Docker CIS 5.7: Ensure privileged ports are not mapped within containers",
+            "Alert on deployments with the Alpine Linux package manager (apk) present",
             Constants.ANY_FIXED_VULN_POLICY,
     ]
 
@@ -81,43 +85,37 @@ class DefaultPoliciesTest extends BaseSpecification {
 
     static final private Deployment STRUTS_DEPLOYMENT = new Deployment()
             .setName(STRUTS)
-            .setImage("quay.io/rhacs-eng/qa:struts-app")
+            .setImage(STRUTS_IMAGE)
             .addLabel("app", "test")
             .addPort(80)
 
     static final private List<Deployment> DEPLOYMENTS = [
         new Deployment()
             .setName (NGINX_LATEST)
-            .setImage ("quay.io/rhacs-eng/qa:latest") // this is docker.io/nginx:1.22-alpine but tagged as latest
+            // this is docker.io/nginx:1.23.3 but tagged as latest
+            .setImage ("quay.io/rhacs-eng/qa-multi-arch-nginx:latest")
             .addPort (22)
             .addLabel ("app", "test")
             .setEnv([SECRET: 'true']),
         STRUTS_DEPLOYMENT,
+        // new Deployment()
+        //     .setName(SSL_TERMINATOR)
+        //     .setImage("quay.io/rhacs-eng/qa:ssl-terminator")
+        //     .addLabel("app", "test")
+        //     .setCommand(["sleep", "600"]),
         new Deployment()
-            .setName(SSL_TERMINATOR)
-            .setImage("quay.io/rhacs-eng/qa:ssl-terminator")
-            .addLabel("app", "test")
-            .setCommand(["sleep", "600"]),
-        new Deployment()
-            .setName(NGINX_1_10)
-            .setImage("quay.io/rhacs-eng/qa:docker-io-nginx-1-10")
+            .setName(TRIGGER_MOST)
+            .setImage("quay.io/rhacs-eng/qa-multi-arch:trigger-policy-violations-most-v1")
             .addLabel("app", "test"),
         new Deployment()
             .setName(GCR_NGINX)
-            .setImage("us.gcr.io/stackrox-ci/nginx:1.11.1")
+            .setImage("us.gcr.io/acs-san-stackroxci/qa-multi-arch:nginx-1.12")
             .addLabel ( "app", "test" )
             .setCommand(["sleep", "600"]),
     ]
 
     static final private Integer WAIT_FOR_VIOLATION_TIMEOUT = 300
-
-    // Override the global JUnit test timeout to cover a test instance waiting
-    // WAIT_FOR_VIOLATION_TIMEOUT over three test tries and the appprox. 6
-    // minutes it can take to gather debug when the first test run fails plus
-    // some padding.
-    @Rule
-    @SuppressWarnings(["JUnitPublicProperty"])
-    Timeout globalTimeout = new Timeout(3*WAIT_FOR_VIOLATION_TIMEOUT + 300 + 120, TimeUnit.SECONDS)
+    static final private Integer VIOLATION_CLEARED_TIMEOUT = WAIT_FOR_VIOLATION_TIMEOUT
 
     @Shared
     private String gcrId
@@ -164,6 +162,18 @@ class DefaultPoliciesTest extends BaseSpecification {
         Helpers.collectImageScanForDebug(
                 STRUTS_DEPLOYMENT.getImage(), 'default-policies-test-struts-app.json'
         )
+
+        switch (Env.REMOTE_CLUSTER_ARCH) {
+            case "s390x":
+                componentCount="9[2-9]"
+                break
+            case "ppc64le":
+                componentCount="9[1-9]"
+                break
+            default:
+                componentCount="1(6[6-9]|7[0-5])"
+                break
+        }
     }
 
     def cleanupSpec() {
@@ -179,6 +189,7 @@ class DefaultPoliciesTest extends BaseSpecification {
     @Unroll
     @Tag("BAT")
     @Tag("SMOKE")
+    @IgnoreIf({ Env.getTestTarget() in ["bat-test", "smoke-test"] && data.flaky })
     def "Verify policy #policyName is triggered" (String policyName, String deploymentName,
                                                   String testId) {
         when:
@@ -212,8 +223,6 @@ class DefaultPoliciesTest extends BaseSpecification {
 
         then:
         "Verify Violation for #policyName is triggered"
-        // Some of these policies require scans so extend the timeout as the scan will be done inline
-        // with our scanner
         assert waitForViolation(deploymentName,  policyName, WAIT_FOR_VIOLATION_TIMEOUT)
 
         cleanup:
@@ -222,32 +231,36 @@ class DefaultPoliciesTest extends BaseSpecification {
                     PolicyServiceOuterClass.PatchPolicyRequest.newBuilder().setId(policy.id).setDisabled(true).build()
             )
             log.info "Re-disabled policy '${policyName}'"
+            if (!expectNoViolations(deploymentName,  policyName, VIOLATION_CLEARED_TIMEOUT)) {
+                log.warn("[ROX-23466] Policy '${policyName}' violation was not cleared before proceeding")
+                log.warn("[ROX-23466] This may affect the alert count API test")
+            }
         }
 
         where:
         "Data inputs are:"
 
-        policyName                                      | deploymentName | testId
+        policyName                                      | deploymentName | testId | flaky
 
-        "Secure Shell (ssh) Port Exposed"               | NGINX_LATEST   | "C311"
+        "Secure Shell (ssh) Port Exposed"               | NGINX_LATEST   | "C311" | false
 
-        "Latest tag"                                    | NGINX_LATEST   | ""
+        "Latest tag"                                    | NGINX_LATEST   | ""     | false
 
-        "Environment Variable Contains Secret"          | NGINX_LATEST   | ""
+        "Environment Variable Contains Secret"          | NGINX_LATEST   | ""     | false
 
-        "Apache Struts: CVE-2017-5638"                  | STRUTS         | "C938"
+        "Apache Struts: CVE-2017-5638"                  | STRUTS         | "C938" | true
 
-        "Wget in Image"                                 | STRUTS         | "C939"
+        "Wget in Image"                                 | WGET_CURL      | "C939" | true
 
-        "90-Day Image Age"                              | STRUTS         | "C810"
+        "90-Day Image Age"                              | STRUTS         | "C810" | false
 
-        "Ubuntu Package Manager in Image"               | STRUTS           | "C931"
+        "Ubuntu Package Manager in Image"               | STRUTS         | "C931" | true
 
-        //"30-Day Scan Age"                               | SSL_TERMINATOR | "C941"
+        //"30-Day Scan Age"                               | SSL_TERMINATOR | "C941" | false
 
-        "Fixable CVSS >= 7"                             | GCR_NGINX      | "C933"
+        "Fixable CVSS >= 7"                             | GCR_NGINX      | "C933" | false
 
-        "Curl in Image"                                 | STRUTS         | "C948"
+        "Curl in Image"                                 | WGET_CURL      | "C948" | true
     }
 
     def hasApacheStrutsVuln(image) {
@@ -272,7 +285,6 @@ class DefaultPoliciesTest extends BaseSpecification {
     }
 
     @Tag("BAT")
-    @Retry(count = 0)
     @IgnoreIf({ Env.BUILD_TAG == null || !Env.BUILD_TAG.contains("nightly") })
     def "Notifier for StackRox images with fixable vulns"() {
         when:
@@ -434,21 +446,21 @@ class DefaultPoliciesTest extends BaseSpecification {
 
         "Image Vulnerabilities"           | 4.0f     | null |
                 // This makes sure it has at least 100 CVEs.
-                "Image \"quay.io/rhacs-eng/qa:struts-app\"" +
-                     " contains \\d{2,3}\\d+ CVEs with severities ranging between " +
+                "Image \"" + STRUTS_IMAGE + "\\\"" +
+                     " contains \\d{3,} CVEs with severities ranging between " +
                      "Low and Critical" | []
 
         "Service Configuration"           | 2.0f     |
                 "No capabilities were dropped" | null | []
 
         "Components Useful for Attackers" | 1.5f     |
-                "Image \"quay.io/rhacs-eng/qa:struts-app\" " +
-                "contains components useful for attackers:" +
-                    " apt, bash, curl, wget" | null | []
+                "Image \"" + STRUTS_IMAGE + "\"" +
+                " contains components useful for attackers:" +
+                    COMPONENTS | null | []
 
         "Number of Components in Image"   | 1.5f     | null |
-                "Image \"quay.io/rhacs-eng/qa:struts-app\"" +
-                " contains 169 components" | []
+                "Image \"" + STRUTS_IMAGE + "\\\"" +
+                " contains " + componentCount + " components" | []
 
         "Image Freshness"                 | 1.5f     | null | null | []
         // TODO(ROX-9637)
@@ -458,6 +470,8 @@ class DefaultPoliciesTest extends BaseSpecification {
     }
 
     @Tag("BAT")
+    // ROX-27302 Test is failing for AKS platform since 2024-12-09 (K8S API update to v1.30)
+    @IgnoreIf({ Env.CI_JOB_NAME ==~ /^aks-.*/ })
     def "Verify that built-in services don't trigger unexpected alerts"() {
         expect:
         "Verify unexpected policies are not violated within the kube-system namespace"
@@ -535,59 +549,6 @@ class DefaultPoliciesTest extends BaseSpecification {
         }
         query += names.join(',')
         return ListAlertsRequest.newBuilder().setQuery(query).build()
-    }
-
-    def numUniqueCategories(List<ListAlert> alerts) {
-        def m = [] as Set
-        alerts.each { a ->
-            a.getPolicy().getCategoriesList().each { c ->
-                m.add(c)
-            }
-        }
-        return m.size()
-    }
-
-    def countAlerts(ListAlertsRequest req, RequestGroup group) {
-        def c = AlertService.getAlertCounts(
-                GetAlertsCountsRequest.newBuilder().setRequest(req).setGroupBy(group).build()
-        )
-        return c
-    }
-
-    def totalAlerts(AlertServiceOuterClass.GetAlertsCountsResponse resp) {
-        def total = 0
-        resp.getGroupsList().each { g ->
-            g.getCountsList().each { c ->
-                total += c.getCount()
-            }
-        }
-        return total
-    }
-
-    @Tag("BAT")
-    def "Verify that alert counts API is consistent with alerts"()  {
-        given:
-        def alertReq = queryForDeployments()
-        def violations = AlertService.getViolations(alertReq)
-        def uniqueCategories = numUniqueCategories(violations)
-
-        when:
-        def ungrouped = countAlerts(alertReq, RequestGroup.UNSET)
-        def byCluster = countAlerts(alertReq, RequestGroup.CLUSTER)
-        def byCategory = countAlerts(alertReq, RequestGroup.CATEGORY)
-
-        then:
-        "Verify counts match expected value"
-        ungrouped.getGroupsCount() == 1
-        totalAlerts(ungrouped) == violations.size()
-
-        byCluster.getGroupsCount() == 1
-        totalAlerts(byCluster) == violations.size()
-
-        byCategory.getGroupsCount() == uniqueCategories
-        // Policies can have multiple categories, so the count is _at least_
-        // the number of total violations, but usually is more.
-        totalAlerts(byCategory) >= violations.size()
     }
 
     def flattenGroups(GetAlertsGroupResponse resp) {

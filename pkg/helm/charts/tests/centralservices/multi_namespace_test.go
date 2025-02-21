@@ -22,8 +22,6 @@ imagePullSecrets:
   username: myuser
   password: mypass
 central:
-  persistence:
-    none: true
   exposure:
     loadBalancer:
       enabled: true
@@ -33,6 +31,7 @@ central:
 var (
 	allowedGlobalResources = []string{
 		"/StorageClass/stackrox-gke-ssd",
+		"/CustomResourceDefinition/securitypolicies.config.stackrox.io",
 	}
 )
 

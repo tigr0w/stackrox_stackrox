@@ -2,9 +2,10 @@ package signal
 
 import (
 	"context"
+	"io"
 	"strings"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	sensorAPI "github.com/stackrox/rox/generated/internalapi/sensor"
@@ -15,6 +16,7 @@ import (
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/stringutils"
 	"github.com/stackrox/rox/sensor/common"
+	"github.com/stackrox/rox/sensor/common/message"
 	"google.golang.org/grpc"
 )
 
@@ -23,6 +25,23 @@ const maxBufferSize = 10000
 var (
 	log = logging.LoggerForModule()
 )
+
+// Option function for the signal service.
+type Option func(*serviceImpl)
+
+// WithAuthFuncOverride sets the AuthFuncOverride.
+func WithAuthFuncOverride(overrideFn func(context.Context, string) (context.Context, error)) Option {
+	return func(srv *serviceImpl) {
+		srv.authFuncOverride = overrideFn
+	}
+}
+
+// WithTraceWriter sets a trace writer that will write the messages received from collector.
+func WithTraceWriter(writer io.Writer) Option {
+	return func(srv *serviceImpl) {
+		srv.writer = writer
+	}
+}
 
 // Service is the interface that manages the SignalEvent API from the server side
 type Service interface {
@@ -36,18 +55,29 @@ type serviceImpl struct {
 	sensorAPI.UnimplementedSignalServiceServer
 
 	queue      chan *v1.Signal
-	indicators chan *central.MsgFromSensor
+	indicators chan *message.ExpiringMessage
 
-	processPipeline Pipeline
+	processPipeline  Pipeline
+	writer           io.Writer
+	authFuncOverride func(context.Context, string) (context.Context, error)
+}
+
+func authFuncOverride(ctx context.Context, fullMethodName string) (context.Context, error) {
+	return ctx, idcheck.CollectorOnly().Authorized(ctx, fullMethodName)
 }
 
 func (s *serviceImpl) Start() error {
 	return nil
 }
 
-func (s *serviceImpl) Stop(_ error) {}
+func (s *serviceImpl) Stop(_ error) {
+	s.processPipeline.Shutdown()
+}
 
-func (s *serviceImpl) Notify(common.SensorComponentEvent) {}
+func (s *serviceImpl) Notify(e common.SensorComponentEvent) {
+	log.Info(common.LogSensorComponentEvent(e))
+	s.processPipeline.Notify(e)
+}
 
 func (s *serviceImpl) Capabilities() []centralsensor.SensorCapability {
 	return nil
@@ -57,7 +87,7 @@ func (s *serviceImpl) ProcessMessage(_ *central.MsgToSensor) error {
 	return nil
 }
 
-func (s *serviceImpl) ResponsesC() <-chan *central.MsgFromSensor {
+func (s *serviceImpl) ResponsesC() <-chan *message.ExpiringMessage {
 	return s.indicators
 }
 
@@ -66,7 +96,7 @@ func (s *serviceImpl) RegisterServiceServer(grpcServer *grpc.Server) {
 	sensorAPI.RegisterSignalServiceServer(grpcServer, s)
 }
 
-// RegisterServiceHandlerFromEndpoint registers this service with the given gRPC Gateway endpoint.
+// RegisterServiceHandler registers this service with the given gRPC Gateway endpoint.
 func (s *serviceImpl) RegisterServiceHandler(_ context.Context, _ *runtime.ServeMux, _ *grpc.ClientConn) error {
 	// There is no grpc gateway handler for signal service
 	return nil
@@ -74,7 +104,7 @@ func (s *serviceImpl) RegisterServiceHandler(_ context.Context, _ *runtime.Serve
 
 // AuthFuncOverride specifies the auth criteria for this API.
 func (s *serviceImpl) AuthFuncOverride(ctx context.Context, fullMethodName string) (context.Context, error) {
-	return ctx, idcheck.CollectorOnly().Authorized(ctx, fullMethodName)
+	return s.authFuncOverride(ctx, fullMethodName)
 }
 
 // PushSignals handles the bidirectional gRPC stream with the collector
@@ -102,7 +132,6 @@ func isProcessSignalValid(signal *storage.ProcessSignal) bool {
 }
 
 func (s *serviceImpl) receiveMessages(stream sensorAPI.SignalService_PushSignalsServer) error {
-	log.Info("starting receiveMessages")
 	for {
 		signalStreamMsg, err := stream.Recv()
 		if err != nil {
@@ -129,6 +158,15 @@ func (s *serviceImpl) receiveMessages(stream sensorAPI.SignalService_PushSignals
 			if !isProcessSignalValid(processSignal) {
 				log.Debugf("Invalid process signal: %+v", processSignal)
 				continue
+			}
+			if s.writer != nil {
+				if data, err := signalStreamMsg.MarshalVT(); err == nil {
+					if _, err := s.writer.Write(data); err != nil {
+						log.Warnf("Error writing msg: %v", err)
+					}
+				} else {
+					log.Warnf("Error marshalling  msg: %v", err)
+				}
 			}
 
 			s.processPipeline.Process(processSignal)

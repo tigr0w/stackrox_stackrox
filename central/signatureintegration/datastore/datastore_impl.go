@@ -6,12 +6,13 @@ import (
 
 	"github.com/pkg/errors"
 	policyDatastore "github.com/stackrox/rox/central/policy/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/signatureintegration/store"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protoutils"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
@@ -56,7 +57,7 @@ func (d *datastoreImpl) GetAllSignatureIntegrations(ctx context.Context) ([]*sto
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 	return integrations, nil
@@ -67,7 +68,7 @@ func (d *datastoreImpl) CountSignatureIntegrations(ctx context.Context) (int, er
 		return 0, err
 	}
 
-	return d.storage.Count(ctx)
+	return d.storage.Count(ctx, search.EmptyQuery())
 }
 
 func (d *datastoreImpl) AddSignatureIntegration(ctx context.Context, integration *storage.SignatureIntegration) (*storage.SignatureIntegration, error) {
@@ -165,7 +166,11 @@ func (d *datastoreImpl) verifyIntegrationIDAndUpdates(ctx context.Context,
 	if err != nil {
 		return false, err
 	}
-	return !getPublicKeyPEMSet(existingIntegration).Equal(getPublicKeyPEMSet(updatedIntegration)), nil
+
+	hasUpdates := !getPublicKeyPEMSet(existingIntegration).Equal(getPublicKeyPEMSet(updatedIntegration)) ||
+		!protoutils.SlicesEqual(existingIntegration.GetCosignCertificates(), updatedIntegration.GetCosignCertificates())
+
+	return hasUpdates, nil
 }
 
 func (d *datastoreImpl) verifyIntegrationIDDoesNotExist(ctx context.Context, id string) error {
@@ -179,12 +184,11 @@ func (d *datastoreImpl) verifyIntegrationIDDoesNotExist(ctx context.Context, id 
 }
 
 func (d *datastoreImpl) verifyIntegrationIDIsNotInPolicy(ctx context.Context, id string) error {
-	policyCtx := sac.WithGlobalAccessScopeChecker(context.Background(),
+	workflowAdministrationCtx := sac.WithGlobalAccessScopeChecker(context.Background(),
 		sac.AllowFixedScopes(sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
-			// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-			sac.ResourceScopeKeys(resources.Policy)))
+			sac.ResourceScopeKeys(resources.WorkflowAdministration)))
 
-	policies, err := d.policyStore.GetAllPolicies(policyCtx)
+	policies, err := d.policyStore.GetAllPolicies(workflowAdministrationCtx)
 	if err != nil {
 		return errors.Wrap(err, "retrieving all policies")
 	}

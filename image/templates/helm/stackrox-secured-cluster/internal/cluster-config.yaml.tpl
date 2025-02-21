@@ -2,7 +2,6 @@
 clusterName: {{ ._rox.clusterName }}
 {{- end }}
 managedBy: {{ ._rox.managedBy }}
-notHelmManaged: {{ eq ._rox.managedBy "MANAGER_TYPE_MANUAL" }}
 clusterConfig:
   staticConfig:
     {{- if not ._rox.env.openshift }}
@@ -19,7 +18,7 @@ clusterConfig:
     admissionControllerEvents: {{ ._rox.admissionControl.listenOnEvents }}
     tolerationsConfig:
       disabled: {{ ._rox.collector.disableTaintTolerations }}
-    slimCollector: {{ ._rox.collector.slimMode }}
+    slimCollector: false
   dynamicConfig:
     disableAuditLogs: {{ ._rox.auditLogs.disableCollection | not | not }}
     admissionControllerConfig:

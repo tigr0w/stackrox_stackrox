@@ -3,15 +3,16 @@ package listener
 import (
 	"context"
 	"io"
-	"time"
 
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/sensor/common/awscredentials"
 	"github.com/stackrox/rox/sensor/common/config"
+	"github.com/stackrox/rox/sensor/common/internalmessage"
 	"github.com/stackrox/rox/sensor/kubernetes/client"
 	"github.com/stackrox/rox/sensor/kubernetes/eventpipeline/component"
 	"github.com/stackrox/rox/sensor/kubernetes/listener/resources"
+	"github.com/stackrox/rox/sensor/kubernetes/listener/watcher"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -20,17 +21,20 @@ var (
 )
 
 // New returns a new kubernetes listener.
-func New(client client.Interface, configHandler config.Handler, nodeName string, resyncPeriod time.Duration, traceWriter io.Writer, queue component.Resolver, storeProvider *resources.InMemoryStoreProvider) component.PipelineComponent {
+func New(client client.Interface, configHandler config.Handler, nodeName string, traceWriter io.Writer, queue component.Resolver, storeProvider *resources.StoreProvider, pubSub *internalmessage.MessageSubscriber) component.ContextListener {
 	k := &listenerImpl{
 		client:             client,
 		stopSig:            concurrency.NewSignal(),
 		configHandler:      configHandler,
 		credentialsManager: createCredentialsManager(client, nodeName),
-		resyncPeriod:       resyncPeriod,
 		traceWriter:        traceWriter,
 		outputQueue:        queue,
 		storeProvider:      storeProvider,
+		mayCreateHandlers:  concurrency.NewSignal(),
+		crdWatcherStatusC:  make(chan *watcher.Status),
+		pubSub:             pubSub,
 	}
+	k.mayCreateHandlers.Signal()
 	return k
 }
 

@@ -5,12 +5,14 @@ package postgres
 import (
 	"context"
 	"testing"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/fixtures/fixtureconsts"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stackrox/rox/pkg/timestamp"
 	"github.com/stretchr/testify/suite"
@@ -67,12 +69,6 @@ func (s *NetworkflowStoreSuite) TearDownSuite() {
 	}
 }
 
-func getTimestamp(seconds int64) *types.Timestamp {
-	return &types.Timestamp{
-		Seconds: seconds,
-	}
-}
-
 func (s *NetworkflowStoreSuite) TestStore() {
 	secondCluster := fixtureconsts.Cluster2
 	store2 := New(s.pool, secondCluster)
@@ -84,7 +80,7 @@ func (s *NetworkflowStoreSuite) TestStore() {
 			DstPort:    1,
 			L4Protocol: storage.L4Protocol_L4_PROTOCOL_TCP,
 		},
-		LastSeenTimestamp: getTimestamp(1),
+		LastSeenTimestamp: protocompat.GetProtoTimestampFromSeconds(1),
 		ClusterId:         clusterID,
 	}
 	zeroTs := timestamp.MicroTS(0)
@@ -95,15 +91,16 @@ func (s *NetworkflowStoreSuite) TestStore() {
 
 	// Adding the same thing twice to ensure that we only retrieve 1 based on serial Flow_Id implementation
 	s.NoError(s.store.UpsertFlows(s.ctx, []*storage.NetworkFlow{networkFlow}, zeroTs))
-	networkFlow.LastSeenTimestamp = getTimestamp(2)
+	networkFlow.LastSeenTimestamp = protocompat.GetProtoTimestampFromSeconds(2)
 	s.NoError(s.store.UpsertFlows(s.ctx, []*storage.NetworkFlow{networkFlow}, zeroTs))
 	foundNetworkFlows, _, err = s.store.GetAllFlows(s.ctx, nil)
 	s.NoError(err)
 	s.Len(foundNetworkFlows, 1)
-	s.Equal(networkFlow, foundNetworkFlows[0])
+	protoassert.Equal(s.T(), networkFlow, foundNetworkFlows[0])
 
 	// Check the get all flows by since time
-	foundNetworkFlows, _, err = s.store.GetAllFlows(s.ctx, getTimestamp(3))
+	time3 := time.Unix(3, 0)
+	foundNetworkFlows, _, err = s.store.GetAllFlows(s.ctx, &time3)
 	s.NoError(err)
 	s.Len(foundNetworkFlows, 0)
 
@@ -191,7 +188,7 @@ func (s *NetworkflowStoreSuite) TestPruneStaleNetworkFlows() {
 				},
 			},
 			ClusterId:         clusterID,
-			LastSeenTimestamp: types.TimestampNow(),
+			LastSeenTimestamp: protocompat.TimestampNow(),
 		},
 		{
 			Props: &storage.NetworkFlowProperties{
@@ -206,7 +203,7 @@ func (s *NetworkflowStoreSuite) TestPruneStaleNetworkFlows() {
 				},
 			},
 			ClusterId:         clusterID,
-			LastSeenTimestamp: types.TimestampNow(),
+			LastSeenTimestamp: protocompat.TimestampNow(),
 		},
 		{
 			Props: &storage.NetworkFlowProperties{
@@ -221,7 +218,7 @@ func (s *NetworkflowStoreSuite) TestPruneStaleNetworkFlows() {
 				},
 			},
 			ClusterId:         clusterID,
-			LastSeenTimestamp: types.TimestampNow(),
+			LastSeenTimestamp: protocompat.TimestampNow(),
 		},
 		{
 			Props: &storage.NetworkFlowProperties{
@@ -236,7 +233,7 @@ func (s *NetworkflowStoreSuite) TestPruneStaleNetworkFlows() {
 				},
 			},
 			ClusterId:         clusterID,
-			LastSeenTimestamp: types.TimestampNow(),
+			LastSeenTimestamp: protocompat.TimestampNow(),
 		},
 		{
 			Props: &storage.NetworkFlowProperties{
@@ -271,4 +268,190 @@ func (s *NetworkflowStoreSuite) TestPruneStaleNetworkFlows() {
 	err = row.Scan(&count)
 	s.Nil(err)
 	s.Equal(count, 2)
+}
+
+func deploymentIngressFlowsPredicate(props *storage.NetworkFlowProperties) bool {
+	return props.GetDstEntity().GetType() == storage.NetworkEntityInfo_DEPLOYMENT
+}
+
+func (s *NetworkflowStoreSuite) TestGetMatching() {
+	now, err := protocompat.ConvertTimeToTimestampOrError(time.Now().Truncate(time.Microsecond))
+	s.Require().NoError(err)
+
+	flows := []*storage.NetworkFlow{
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_INTERNET,
+					Id:   "TestInternetDst1",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentSrc1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: nil,
+		},
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentDst1",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_INTERNET,
+					Id:   "TestInternetSrc1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: now,
+		},
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentDst2",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentSrc1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: now,
+		},
+	}
+
+	err = s.store.UpsertFlows(s.ctx, flows, timestamp.Now())
+	s.Nil(err)
+
+	// Normalize flow timestamps
+
+	filteredFlows, _, err := s.store.GetMatchingFlows(s.ctx, deploymentIngressFlowsPredicate, nil)
+	s.Nil(err)
+	protoassert.ElementsMatch(s.T(), []*storage.NetworkFlow{flows[1], flows[2]}, filteredFlows)
+}
+
+func (s *NetworkflowStoreSuite) TestGetFlowsForDeployment() {
+	now, err := protocompat.ConvertTimeToTimestampOrError(time.Now().Truncate(time.Microsecond))
+	s.Require().NoError(err)
+
+	flows := []*storage.NetworkFlow{
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_INTERNET,
+					Id:   "TestInternetDst1",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentSrc1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: nil,
+		},
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentDst1",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_INTERNET,
+					Id:   "TestInternetSrc1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: now,
+		},
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentDst2",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentSrc1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: now,
+		},
+	}
+
+	err = s.store.UpsertFlows(s.ctx, flows, timestamp.Now())
+	s.Nil(err)
+
+	deploymentFlows, err := s.store.GetFlowsForDeployment(s.ctx, "TestDeploymentSrc1")
+	s.Nil(err)
+	protoassert.ElementsMatch(s.T(), []*storage.NetworkFlow{flows[0], flows[2]}, deploymentFlows)
+}
+
+func (s *NetworkflowStoreSuite) TestGetExternalFlowsForDeployment() {
+	now, err := protocompat.ConvertTimeToTimestampOrError(time.Now().Truncate(time.Microsecond))
+	s.Require().NoError(err)
+
+	flows := []*storage.NetworkFlow{
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_EXTERNAL_SOURCE,
+					Id:   "TestExternalDst1",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeployment1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: nil,
+		},
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeployment1",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_EXTERNAL_SOURCE,
+					Id:   "TestExternalSrc1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: now,
+		},
+		{
+			Props: &storage.NetworkFlowProperties{
+				DstPort: 22,
+				DstEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeploymentDst2",
+				},
+				SrcEntity: &storage.NetworkEntityInfo{
+					Type: storage.NetworkEntityInfo_DEPLOYMENT,
+					Id:   "TestDeployment1",
+				},
+			},
+			ClusterId:         clusterID,
+			LastSeenTimestamp: now,
+		},
+	}
+
+	err = s.store.UpsertFlows(s.ctx, flows, timestamp.Now())
+	s.Nil(err)
+
+	deploymentFlows, err := s.store.GetExternalFlowsForDeployment(s.ctx, "TestDeployment1")
+	s.Nil(err)
+	protoassert.ElementsMatch(s.T(), []*storage.NetworkFlow{flows[0], flows[1]}, deploymentFlows)
 }

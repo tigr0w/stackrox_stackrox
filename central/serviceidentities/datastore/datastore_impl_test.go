@@ -4,12 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
-	"github.com/stackrox/rox/central/role/resources"
 	storeMocks "github.com/stackrox/rox/central/serviceidentities/internal/store/mocks"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestServiceIdentityDataStore(t *testing.T) {
@@ -62,7 +63,7 @@ func (s *serviceIdentityDataStoreTestSuite) TestAddSrvId() {
 	s.NoError(err)
 
 	result, err := s.dataStore.GetServiceIdentities(s.hasReadCtx)
-	s.Equal(allSrvIDs, result)
+	protoassert.SlicesEqual(s.T(), allSrvIDs, result)
 	s.NoError(err)
 }
 

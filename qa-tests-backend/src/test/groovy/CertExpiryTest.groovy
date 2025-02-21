@@ -1,3 +1,5 @@
+import static util.Helpers.shellCmdExitValue
+
 import services.CredentialExpiryService
 import util.Cert
 
@@ -7,11 +9,11 @@ import util.Env
 
 @Tag("BAT")
 @Tag("COMPATIBILITY")
+@Tag("PZ")
 // skip if executed in a test environment with just secured-cluster deployed in the test cluster
 // i.e. central is deployed elsewhere
 @IgnoreIf({ Env.ONLY_SECURED_CLUSTER == "true" })
 class CertExpiryTest extends BaseSpecification {
-
     def "Test Central cert expiry"() {
         when:
         "Fetch the current central-tls secret, and the central cert expiry as returned by Central"
@@ -28,6 +30,7 @@ class CertExpiryTest extends BaseSpecification {
     def "Test Scanner cert expiry"() {
         when:
         "Fetch the current scanner-tls secret, and the scanner cert expiry as returned by Central"
+        assert shellCmdExitValue("./scripts/ci/is-scanner-v2-available.sh stackrox") == 0
         def scannerTLSSecret = orchestrator.getSecret("scanner-tls", "stackrox")
         assert scannerTLSSecret
         def scannerCertExpiryFromCentral = new Date(CredentialExpiryService.getScannerCertExpiry().getSeconds() * 1000)

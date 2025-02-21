@@ -1,17 +1,15 @@
 import React, { useState, ReactElement } from 'react';
-import { Button, ButtonVariant, Flex, Popover, PopoverPosition } from '@patternfly/react-core';
-import {
-    AngleDownIcon,
-    AngleUpIcon,
-    DownloadIcon,
-    ExternalLinkAltIcon,
-} from '@patternfly/react-icons';
+import { Button, Flex, Popover, PopoverPosition } from '@patternfly/react-core';
+import { AngleDownIcon, AngleUpIcon, DownloadIcon } from '@patternfly/react-icons';
 import { useFormik } from 'formik';
 import { parse } from 'date-fns';
 
-import downloadDiagnostics, { DiagnosticBundleRequest } from 'services/DebugService';
+import ExternalLink from 'Components/PatternFly/IconText/ExternalLink';
+import PopoverBodyContent from 'Components/PopoverBodyContent';
 import useMetadata from 'hooks/useMetadata';
+import downloadDiagnostics, { DiagnosticBundleRequest } from 'services/DebugService';
 import { getVersionedDocs } from 'utils/versioning';
+
 import DiagnosticBundleForm from './DiagnosticBundleForm';
 import { getQueryString, startingTimeRegExp } from './diagnosticBundleUtils';
 
@@ -67,15 +65,19 @@ function GenerateDiagnosticBundle(): ReactElement {
             startingTimeObject,
             isStartingTimeValid,
         });
-        downloadDiagnostics(queryString).finally(() => {
-            setSubmitting(false);
-        });
+        downloadDiagnostics(queryString)
+            .catch(() => {
+                // TODO render error in DiagnosticBundleForm
+            })
+            .finally(() => {
+                setSubmitting(false);
+            });
     }
 
     const footerContent = (
         <Flex spaceItems={{ default: 'spaceItemsLg' }}>
             <Button
-                variant={ButtonVariant.primary}
+                variant="primary"
                 onClick={submitForm}
                 icon={isSubmitting ? null : <DownloadIcon />}
                 spinnerAriaValueText={isSubmitting ? 'Downloading' : undefined}
@@ -84,25 +86,15 @@ function GenerateDiagnosticBundle(): ReactElement {
                 Download diagnostic bundle
             </Button>
             {version && (
-                <Button
-                    variant="link"
-                    isInline
-                    component="a"
-                    href={getVersionedDocs(
-                        version,
-                        'configuration/generate-diagnostic-bundle.html'
-                    )}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                >
-                    <Flex
-                        alignItems={{ default: 'alignItemsCenter' }}
-                        spaceItems={{ default: 'spaceItemsSm' }}
+                <ExternalLink>
+                    <a
+                        href={getVersionedDocs(version, 'configuring/generate-diagnostic-bundle')}
+                        target="_blank"
+                        rel="noopener noreferrer"
                     >
-                        <span>Generate a diagnostic bundle</span>
-                        <ExternalLinkAltIcon color="var(--pf-global--link--Color)" />
-                    </Flex>
-                </Button>
+                        Generate a diagnostic bundle
+                    </a>
+                </ExternalLink>
             )}
         </Flex>
     );
@@ -110,19 +102,23 @@ function GenerateDiagnosticBundle(): ReactElement {
     return (
         <Popover
             aria-label="Choose options to generate a diagnostic bundle"
-            headerContent={<h2>Diagnostic bundle</h2>}
             bodyContent={
-                <DiagnosticBundleForm
-                    values={values}
-                    setFieldValue={setFieldValue}
-                    handleBlur={handleBlur}
-                    currentTimeObject={currentTimeObject}
-                    startingTimeObject={startingTimeObject}
-                    isStartingTimeValid={isStartingTimeValid}
-                    onChangeStartingTime={onChangeStartingTime}
+                <PopoverBodyContent
+                    headerContent="Diagnostic bundle"
+                    bodyContent={
+                        <DiagnosticBundleForm
+                            values={values}
+                            setFieldValue={setFieldValue}
+                            handleBlur={handleBlur}
+                            currentTimeObject={currentTimeObject}
+                            startingTimeObject={startingTimeObject}
+                            isStartingTimeValid={isStartingTimeValid}
+                            onChangeStartingTime={onChangeStartingTime}
+                        />
+                    }
+                    footerContent={footerContent}
                 />
             }
-            footerContent={footerContent}
             maxWidth="100%"
             position={PopoverPosition.bottomEnd}
             shouldOpen={() => setIsOpen(true)}
@@ -130,7 +126,7 @@ function GenerateDiagnosticBundle(): ReactElement {
             showClose={false}
             isVisible={isOpen}
         >
-            <Button variant={ButtonVariant.secondary}>
+            <Button variant="secondary">
                 <Flex
                     alignItems={{ default: 'alignItemsCenter' }}
                     spaceItems={{ default: 'spaceItemsXs' }}

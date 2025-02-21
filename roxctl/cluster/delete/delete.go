@@ -35,7 +35,7 @@ func Command(cliEnvironment environment.Environment) *cobra.Command {
 			return clusterDeleteCmd.Delete()
 		},
 	}
-	cbr.PersistentFlags().StringVar(&clusterDeleteCmd.name, "name", "", "cluster name to delete")
+	cbr.PersistentFlags().StringVar(&clusterDeleteCmd.name, "name", "", "Cluster name to delete")
 	return cbr
 }
 
@@ -44,12 +44,14 @@ type clusterDeleteCommand struct {
 	name string
 
 	// Properties that are injected or constructed.
-	env     environment.Environment
-	timeout time.Duration
+	env          environment.Environment
+	timeout      time.Duration
+	retryTimeout time.Duration
 }
 
 func (cmd *clusterDeleteCommand) Construct(_ []string, cbr *cobra.Command) error {
 	cmd.timeout = flags.Timeout(cbr)
+	cmd.retryTimeout = flags.RetryTimeout(cbr)
 	return nil
 }
 
@@ -61,7 +63,7 @@ func (cmd *clusterDeleteCommand) Validate() error {
 }
 
 func (cmd *clusterDeleteCommand) Delete() error {
-	conn, err := cmd.env.GRPCConnection()
+	conn, err := cmd.env.GRPCConnection(common.WithRetryTimeout(cmd.retryTimeout))
 	if err != nil {
 		return errors.Wrap(err, "could not establish gRPC connection to central")
 	}

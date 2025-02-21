@@ -7,7 +7,6 @@ import {
     DescriptionListTerm,
     Divider,
     EmptyState,
-    EmptyStateVariant,
     ExpandableSection,
     Flex,
     FlexItem,
@@ -15,10 +14,9 @@ import {
     LabelGroup,
     Stack,
     StackItem,
-    Text,
     TextContent,
-    TextVariants,
     Title,
+    EmptyStateHeader,
 } from '@patternfly/react-core';
 import { ExclamationCircleIcon, ExclamationTriangleIcon } from '@patternfly/react-icons';
 import pluralize from 'pluralize';
@@ -55,19 +53,18 @@ function DetailSection({ title, children }) {
         setIsExpanded(_isExpanded);
     };
 
+    // TextContent so heading has black instead of blue color.
     return (
         <ExpandableSection
             isExpanded={isExpanded}
-            onToggle={onToggle}
+            onToggle={(_event, _isExpanded: boolean) => onToggle(_isExpanded)}
             toggleContent={
                 <TextContent>
-                    <Text component={TextVariants.h1} className="pf-u-font-size-lg">
-                        {title}
-                    </Text>
+                    <Title headingLevel="h2">{title}</Title>
                 </TextContent>
             }
         >
-            <div className="pf-u-px-sm pf-u-pb-md">{children}</div>
+            <div className="pf-v5-u-px-sm pf-v5-u-pb-md">{children}</div>
         </ExpandableSection>
     );
 }
@@ -83,12 +80,16 @@ function DeploymentDetails({
     const labelKeys = Object.keys(deployment.labels);
     const annotationKeys = Object.keys(deployment.annotations);
 
+    const onNetworkFlowsTabSelect = () => {
+        onDeploymentTabsSelect(deploymentTabs.FLOWS);
+    };
+
     const onNetworkPoliciesTabSelect = () => {
         onDeploymentTabsSelect(deploymentTabs.NETWORK_POLICIES);
     };
 
     return (
-        <div className="pf-u-h-100 pf-u-p-md">
+        <div className="pf-v5-u-h-100 pf-v5-u-p-md">
             <ul>
                 <li>
                     <DetailSection title="Network security">
@@ -105,26 +106,44 @@ function DeploymentDetails({
                                             'None'}
                                         {numAnomalousExternalFlows !== 0 && (
                                             <FlexItem>
-                                                <Label
-                                                    variant="outline"
-                                                    color="red"
-                                                    icon={<ExclamationCircleIcon />}
+                                                <Button
+                                                    variant="link"
+                                                    isInline
+                                                    onClick={onNetworkFlowsTabSelect}
                                                 >
-                                                    {numAnomalousExternalFlows} external{' '}
-                                                    {pluralize('flow', numAnomalousExternalFlows)}
-                                                </Label>
+                                                    <Label
+                                                        variant="outline"
+                                                        color="red"
+                                                        icon={<ExclamationCircleIcon />}
+                                                    >
+                                                        {numAnomalousExternalFlows} external{' '}
+                                                        {pluralize(
+                                                            'flow',
+                                                            numAnomalousExternalFlows
+                                                        )}
+                                                    </Label>
+                                                </Button>
                                             </FlexItem>
                                         )}
                                         {numAnomalousInternalFlows !== 0 && (
                                             <FlexItem>
-                                                <Label
-                                                    variant="outline"
-                                                    color="gold"
-                                                    icon={<ExclamationTriangleIcon />}
+                                                <Button
+                                                    variant="link"
+                                                    isInline
+                                                    onClick={onNetworkFlowsTabSelect}
                                                 >
-                                                    {numAnomalousInternalFlows} internal{' '}
-                                                    {pluralize('flow', numAnomalousInternalFlows)}
-                                                </Label>
+                                                    <Label
+                                                        variant="outline"
+                                                        color="gold"
+                                                        icon={<ExclamationTriangleIcon />}
+                                                    >
+                                                        {numAnomalousInternalFlows} internal{' '}
+                                                        {pluralize(
+                                                            'flow',
+                                                            numAnomalousInternalFlows
+                                                        )}
+                                                    </Label>
+                                                </Button>
                                             </FlexItem>
                                         )}
                                     </Flex>
@@ -262,8 +281,8 @@ function DeploymentDetails({
                         </DescriptionList>
                     </DetailSection>
                 </li>
-                <Divider component="li" className="pf-u-mb-sm" />
                 <li>
+                    <Divider className="pf-v5-u-mb-sm" />
                     <DetailSection title="Deployment overview">
                         <Stack hasGutter>
                             <StackItem>
@@ -355,8 +374,8 @@ function DeploymentDetails({
                         </Stack>
                     </DetailSection>
                 </li>
-                <Divider component="li" className="pf-u-mb-sm" />
                 <li>
+                    <Divider className="pf-v5-u-mb-sm" />
                     <DetailSection title="Port configurations">
                         {deployment.ports.length ? (
                             <Stack hasGutter>
@@ -369,16 +388,17 @@ function DeploymentDetails({
                                 })}
                             </Stack>
                         ) : (
-                            <EmptyState variant={EmptyStateVariant.xs}>
-                                <Title headingLevel="h4" size="md">
-                                    No ports available
-                                </Title>
+                            <EmptyState variant="xs">
+                                <EmptyStateHeader
+                                    titleText="No ports available"
+                                    headingLevel="h4"
+                                />
                             </EmptyState>
                         )}
                     </DetailSection>
                 </li>
-                <Divider component="li" className="pf-u-mb-sm" />
                 <li>
+                    <Divider className="pf-v5-u-mb-sm" />
                     <DetailSection title="Container configurations">
                         {deployment.containers.length ? (
                             <Stack hasGutter>
@@ -391,10 +411,11 @@ function DeploymentDetails({
                                 })}
                             </Stack>
                         ) : (
-                            <EmptyState variant={EmptyStateVariant.xs}>
-                                <Title headingLevel="h4" size="md">
-                                    No containers available
-                                </Title>
+                            <EmptyState variant="xs">
+                                <EmptyStateHeader
+                                    titleText="No containers available"
+                                    headingLevel="h4"
+                                />
                             </EmptyState>
                         )}
                     </DetailSection>

@@ -89,6 +89,30 @@ function setup() {
     assert_output 2
 }
 
+@test "creates a skipped junit" {
+    run save_junit_skipped "UNITTest" "A unit test"
+    assert_success
+    run cat "${junit_dir}/junit-UNITTest.xml"
+    assert_output --partial 'tests="1"'
+    assert_output --partial 'skipped="1"'
+    assert_output --partial 'failures="0"'
+    assert_output --partial '<skipped/>'
+}
+
+@test "handles success, skipped and failure" {
+    run save_junit_success "UNITTest" "A unit test"
+    run save_junit_skipped "UNITTest" "A unit test"
+    run save_junit_failure "UNITTest" "A unit test" "more failure details"
+    run save_junit_skipped "UNITTest" "A unit test"
+    run save_junit_success "UNITTest" "A unit test"
+    run cat "${junit_dir}/junit-UNITTest.xml"
+    assert_output --partial 'tests="5"'
+    assert_output --partial 'failures="1"'
+    assert_output --partial 'skipped="2"'
+    run grep -c 'more failure details' "${junit_dir}/junit-UNITTest.xml"
+    assert_output 1
+}
+
 @test "handles multiline failure details" {
     read -r -d '' details << _EO_DETAILS_ || true
 more failure details
@@ -102,4 +126,22 @@ _EO_DETAILS_
     assert_output --partial 'failures="1"'
     run grep -c 'more failure details' "${junit_dir}/junit-UNITTest.xml"
     assert_output 3
+}
+
+@test "escapes XML in name - double quote" {
+    run save_junit_failure 'UNITTest' '"A unit test"' "nada"
+    run cat "${junit_dir}/junit-UNITTest.xml"
+    assert_output --partial 'name="&quot;A unit test&quot;"'
+}
+
+@test "escapes XML in name - single quote" {
+    run save_junit_failure 'UNITTest' "'A unit test'" "nada"
+    run cat "${junit_dir}/junit-UNITTest.xml"
+    assert_output --partial 'name="&#39;A unit test&#39;"'
+}
+
+@test "escapes XML in name - <>&" {
+    run save_junit_failure 'UNITTest' "A <unit> &test" "nada"
+    run cat "${junit_dir}/junit-UNITTest.xml"
+    assert_output --partial 'name="A &lt;unit&gt; &amp;test"'
 }

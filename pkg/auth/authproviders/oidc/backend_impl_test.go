@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/auth/authproviders"
 	"github.com/stackrox/rox/pkg/auth/authproviders/oidc/internal/endpoint"
@@ -242,8 +243,10 @@ func TestBackend(t *testing.T) {
 				ModeConfigKey:         "post",
 			},
 			oidcProvider: &mockOIDCProvider{
-				responseTypesSupported: allResponseTypes,
-				responseModesSupported: allResponseModes,
+				responseTypesSupported:     allResponseTypes,
+				responseModesSupported:     allResponseModes,
+				userInfoAssertAccessToken:  mockAccessToken,
+				claimsFromUserInfoEndpoint: suppliedClaims,
 			},
 			assertInsecureClient: true,
 			wantBackend: &wantBackend{
@@ -270,8 +273,10 @@ func TestBackend(t *testing.T) {
 				ModeConfigKey:         "post",
 			},
 			oidcProvider: &mockOIDCProvider{
-				responseTypesSupported: allResponseTypes,
-				responseModesSupported: allResponseModes,
+				responseTypesSupported:     allResponseTypes,
+				responseModesSupported:     allResponseModes,
+				userInfoAssertAccessToken:  mockAccessToken,
+				claimsFromUserInfoEndpoint: suppliedClaims,
 			},
 			wantBackend: &wantBackend{
 				responseMode:  "form_post",
@@ -342,7 +347,7 @@ func TestBackend(t *testing.T) {
 				"code": literalValue{mockAuthorizationCode},
 			},
 			exchangedTokenClaims:        &suppliedClaims,
-			wantProcessIDPResponseError: "1 error occurred:\n\t* ID token verification failed: invalid token\n\n",
+			wantProcessIDPResponseError: "1 error occurred:\n\t* failed to authenticate with ID token: verifying ID token: nonce verification failed for ID token\n\n",
 		},
 		"mode query": {
 			config: map[string]string{
@@ -352,8 +357,10 @@ func TestBackend(t *testing.T) {
 				ModeConfigKey:         "query",
 			},
 			oidcProvider: &mockOIDCProvider{
-				responseTypesSupported: allResponseTypes,
-				responseModesSupported: allResponseModes,
+				responseTypesSupported:     allResponseTypes,
+				responseModesSupported:     allResponseModes,
+				userInfoAssertAccessToken:  mockAccessToken,
+				claimsFromUserInfoEndpoint: suppliedClaims,
 			},
 			wantBackend: &wantBackend{
 				responseMode:  "query",
@@ -425,7 +432,7 @@ func TestBackend(t *testing.T) {
 			idpResponseTemplate: map[string]responseValueProvider{
 				"access_token": literalValue{mockAccessToken},
 			},
-			wantProcessIDPResponseError: "2 errors occurred:\n\t* fetching user info with access token: fetching updated userinfo: simulated UserInfo endpoint failure\n\t* no id_token field found in response\n\n",
+			wantProcessIDPResponseError: "2 errors occurred:\n\t* failed to authenticate with access token: fetching userinfo claims: fetching userinfo claims: simulated UserInfo endpoint failure\n\t* no id_token field found in response\n\n",
 		},
 		"mode fragment with id_token only": {
 			config: map[string]string{
@@ -466,7 +473,7 @@ func TestBackend(t *testing.T) {
 			idpResponseTemplate: map[string]responseValueProvider{
 				"id_token": suppliedClaims,
 			},
-			wantProcessIDPResponseError: "2 errors occurred:\n\t* no access_token field found in response\n\t* id token verification failed: invalid token\n\n",
+			wantProcessIDPResponseError: "invalid arguments: failed to authenticate with ID token: verifying ID token: nonce verification failed for ID token",
 		},
 		"mode fragment with both token and id_token": {
 			config: map[string]string{
@@ -563,6 +570,46 @@ func TestBackend(t *testing.T) {
 				"expires_in":   literalValue{"20"},
 			},
 		},
+		"extra scopes requested": {
+			config: map[string]string{
+				ClientIDConfigKey:     "testclientid",
+				ClientSecretConfigKey: "testsecret",
+				IssuerConfigKey:       "https://test-issuer",
+				ModeConfigKey:         "post",
+				ExtraScopesConfigKey:  "groups roles",
+			},
+			oidcProvider: &mockOIDCProvider{
+				responseTypesSupported:     allResponseTypes,
+				responseModesSupported:     allResponseModes,
+				userInfoAssertAccessToken:  mockAccessToken,
+				claimsFromUserInfoEndpoint: suppliedClaims,
+			},
+			wantBackend: &wantBackend{
+				responseMode:  "form_post",
+				responseTypes: []string{"code"},
+				config: map[string]string{
+					ClientIDConfigKey:     "testclientid",
+					ClientSecretConfigKey: "testsecret",
+					IssuerConfigKey:       "https://test-issuer",
+					ModeConfigKey:         "post",
+					ExtraScopesConfigKey:  "groups roles",
+				},
+				baseOauthConfig: &oauth2.Config{
+					ClientID:     "testclientid",
+					ClientSecret: "testsecret",
+					Endpoint: oauth2.Endpoint{
+						AuthURL:  "fake-auth-url",
+						TokenURL: "fake-token-url",
+					},
+					Scopes: []string{"openid", "profile", "email", "offline_access", "groups", "roles"},
+				},
+			},
+			issueNonce: true,
+			idpResponseTemplate: map[string]responseValueProvider{
+				"code": literalValue{mockAuthorizationCode},
+			},
+			exchangedTokenClaims: &suppliedClaims,
+		},
 		"mode fragment with both token and id_token, and userinfo endpoint failure": {
 			config: map[string]string{
 				ClientIDConfigKey:     "testclientid",
@@ -586,6 +633,7 @@ func TestBackend(t *testing.T) {
 				"id_token":     suppliedClaims,
 				"access_token": literalValue{mockAccessToken},
 			},
+			wantProcessIDPResponseError: "2 errors occurred:\n\t* failed to authenticate with access token: fetching userinfo claims: fetching userinfo claims: simulated UserInfo endpoint failure\n\t* failed to authenticate with ID token: fetching userinfo claims: fetching userinfo claims: simulated UserInfo endpoint failure\n\n",
 		},
 		"legacy no mode setting, equal to fragment, with access token only": {
 			config: map[string]string{
@@ -635,8 +683,10 @@ func TestBackend(t *testing.T) {
 				ModeConfigKey:         "auto",
 			},
 			oidcProvider: &mockOIDCProvider{
-				responseTypesSupported: allResponseTypes,
-				responseModesSupported: allResponseModes,
+				responseTypesSupported:     allResponseTypes,
+				responseModesSupported:     allResponseModes,
+				userInfoAssertAccessToken:  mockAccessToken,
+				claimsFromUserInfoEndpoint: suppliedClaims,
 			},
 			wantBackend: &wantBackend{
 				responseMode:  "form_post",
@@ -841,6 +891,30 @@ func TestBackend(t *testing.T) {
 			},
 			wantProcessIDPResponseError: "Identity provider returned a \"code2\" error. Additional information from the provider follows. Blah blah blah.",
 		},
+		"nonce verification failed for ID token": {
+			config: map[string]string{
+				ClientIDConfigKey:     "testclientid",
+				ClientSecretConfigKey: "testsecret",
+				IssuerConfigKey:       "test-issuer",
+				ModeConfigKey:         "fragment",
+			},
+			oidcProvider: &mockOIDCProvider{
+				responseTypesSupported:     allResponseTypes,
+				responseModesSupported:     allResponseModes,
+				claimsFromUserInfoEndpoint: suppliedClaims,
+				userInfoAssertAccessToken:  mockAccessToken,
+			},
+			wantBackend: &wantBackend{
+				responseMode:  "fragment",
+				responseTypes: []string{"token", "id_token"},
+			},
+			issueNonce: false,
+			idpResponseTemplate: map[string]responseValueProvider{
+				"id_token":     alternativeSuppliedClaims,
+				"access_token": literalValue{mockAccessToken},
+			},
+			wantProcessIDPResponseError: "invalid arguments: failed to authenticate with ID token: verifying ID token: nonce verification failed for ID token",
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -852,8 +926,17 @@ func TestBackend(t *testing.T) {
 					client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client)
 					assert.True(t, ok, "context passed to provider creation must contain an HTTP client")
 					if client.Transport != nil || tt.assertInsecureClient {
-						transport, ok := client.Transport.(*http.Transport)
-						assert.Truef(t, ok, "cannot check client transport of %T", client.Transport)
+						var transport *http.Transport
+						switch c := client.Transport.(type) {
+						case *http.Transport:
+							transport = c
+						case *retryablehttp.RoundTripper:
+							if c.Client.HTTPClient.Transport != nil {
+								transport = c.Client.HTTPClient.Transport.(*http.Transport)
+							} else {
+								transport = http.DefaultTransport.(*http.Transport)
+							}
+						}
 						assert.Equal(t, tt.assertInsecureClient, transport.TLSClientConfig.InsecureSkipVerify)
 					}
 					return tt.oidcProvider, nil

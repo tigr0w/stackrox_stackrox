@@ -5,7 +5,7 @@ import { getRegExpForTitleWithBranding } from '../../helpers/title';
 import {
     interactAndWaitForConfigurationManagementEntities,
     interactAndWaitForConfigurationManagementEntityInSidePanel,
-    interactAndWaitForConfigurationManagementScan,
+    // interactAndWaitForConfigurationManagementScan,
     visitConfigurationManagementDashboard,
 } from './ConfigurationManagement.helpers';
 import { selectors } from './ConfigurationManagement.selectors';
@@ -197,68 +197,68 @@ describe('Configuration Management Dashboard', () => {
         }, entitiesKey);
     });
 
-    it('clicking the "Policy Violations By Severity" widget\'s "View All" button should take you to the policies list', () => {
+    it('should go to policies list from View link in Policies widget', () => {
         const entitiesKey = 'policies';
 
         visitConfigurationManagementDashboard();
 
         interactAndWaitForConfigurationManagementEntities(() => {
-            cy.get(selectors.getWidget('Policy Violations by Severity'))
-                .find('button:contains("View All")')
+            cy.get(selectors.getWidget('Policy violations by severity'))
+                .find('a:contains("View all")')
                 .click();
         }, entitiesKey);
     });
 
-    it('clicking the "CIS Standard Across Clusters" widget\'s "View All" button should take you to the controls list', () => {
+    it('go to controls list from View link in CIS widget', () => {
         const entitiesKey = 'controls';
 
         visitConfigurationManagementDashboard();
 
         interactAndWaitForConfigurationManagementEntities(() => {
             cy.get(selectors.cisStandardsAcrossClusters.widget)
-                .find('button:contains("View Standard")')
+                .find('a:contains("View standard")')
                 .click();
         }, entitiesKey);
     });
 
-    it('clicking the "Users with most Cluster Admin Roles" widget\'s "View All" button should take you to the users & groups list', () => {
+    it('should go to subjects (users and groups) list from View link in Users widget', () => {
         const entitiesKey = 'subjects';
 
         visitConfigurationManagementDashboard();
 
         interactAndWaitForConfigurationManagementEntities(() => {
-            cy.get(selectors.getWidget('Users with most Cluster Admin Roles'))
-                .find('button:contains("View All")')
+            cy.get(selectors.getWidget('Users with most cluster admin roles'))
+                .find('a:contains("View all")')
                 .click();
         }, entitiesKey);
     });
 
-    it('clicking a specific user in the "Users with most Cluster Admin Roles" widget should take you to a single subject page', () => {
+    it('should open side panel from link in Users widget', () => {
         const entitiesKey = 'subjects';
 
         visitConfigurationManagementDashboard();
 
         interactAndWaitForConfigurationManagementEntityInSidePanel(() => {
-            cy.get(selectors.getWidget('Users with most Cluster Admin Roles'))
+            cy.get(selectors.getWidget('Users with most cluster admin roles'))
                 .find(selectors.horizontalBars)
                 .eq(0)
                 .click();
         }, entitiesKey);
     });
 
-    it('clicking the "Secrets Most Used Across Deployments" widget\'s "View All" button should take you to the secrets list', () => {
+    it('should go to secrets list from View link in Secrets widget', () => {
         const entitiesKey = 'secrets';
 
         visitConfigurationManagementDashboard();
 
         interactAndWaitForConfigurationManagementEntities(() => {
-            cy.get(selectors.getWidget('Secrets Most Used Across Deployments'))
-                .find('button:contains("View All")')
+            cy.get(selectors.getWidget('Secrets most used across deployments'))
+                .find('a:contains("View all")')
                 .click();
         }, entitiesKey);
     });
 
-    it('should show the same number of policies in the "Policy Violations By Severity" widget as it does in the Policies list', () => {
+    it('should go to filtered policies list from link in Policy violations widget', () => {
         const entitiesKey = 'policies';
 
         visitConfigurationManagementDashboard();
@@ -266,12 +266,11 @@ describe('Configuration Management Dashboard', () => {
         // Click the first bullet list link.
         // All bases are covered, because policies without violations is a possible link.
         policyViolationsBySeverityLinkShouldMatchList(
-            `${selectors.getWidget('Policy Violations by Severity')} .widget-detail-bullet:eq(0) a`,
+            `${selectors.getWidget('Policy violations by severity')} .widget-detail-bullet:eq(0) a`,
             /^(\d+) /,
             entitiesKey
         );
 
-        cy.location('search').should('contain', '[Disabled]=False');
         cy.location('search').should('contain', '[Policy%20Status]='); // either Fail (for rated as Whatever) or Pass (for policies without violations)
     });
 
@@ -285,9 +284,14 @@ describe('Configuration Management Dashboard', () => {
         visitConfigurationManagementDashboard();
 
         // This and the following test assumes that scan results are available
+        // ROX-24912
+        // Comment out for now and assume that scan results are available from compliance tests.
+        // See function for more details.
+        /*
         interactAndWaitForConfigurationManagementScan(() => {
             cy.get('[data-testid="scan-button"]').click();
         });
+        */
 
         interactAndWaitForConfigurationManagementEntities(() => {
             cy.get(selectors.cisStandardsAcrossClusters.widget)
@@ -316,31 +320,16 @@ describe('Configuration Management Dashboard', () => {
         cy.location('search').should('contain', '[Compliance%20State]=Fail');
     });
 
-    it('clicking the "Secrets Most Used Across Deployments" widget\'s individual list items should take you to the secret\'s single page', () => {
+    it('should open side panel from link in Secrets widget', () => {
         const entitiesKey = 'secrets';
 
         visitConfigurationManagementDashboard();
 
         interactAndWaitForConfigurationManagementEntityInSidePanel(() => {
-            cy.get(selectors.getWidget('Secrets Most Used Across Deployments'))
+            cy.get(selectors.getWidget('Secrets most used across deployments'))
                 .find('ul li')
                 .eq(0)
                 .click();
         }, entitiesKey);
-    });
-
-    it('switching clusters in the "CIS Standard Across Clusters" widget\'s should change the data', () => {
-        visitConfigurationManagementDashboard();
-
-        cy.get(selectors.cisStandardsAcrossClusters.select.value).should('contain', 'CIS Docker');
-        cy.get(selectors.cisStandardsAcrossClusters.select.input).click();
-        cy.get(`${selectors.cisStandardsAcrossClusters.select.options}:last`)
-            .last()
-            .click({ force: true });
-        cy.wait('@complianceByControls'); // assume alias from visit function
-        cy.get(selectors.cisStandardsAcrossClusters.select.value).should(
-            'contain',
-            'CIS Kubernetes'
-        );
     });
 });

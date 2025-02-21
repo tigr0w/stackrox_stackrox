@@ -2,8 +2,6 @@ import React from 'react';
 import { Sunburst, DiscreteColorLegend, LabelSeries } from 'react-vis';
 import PropTypes from 'prop-types';
 import merge from 'deepmerge';
-import ReactRouterPropTypes from 'react-router-prop-types';
-import { withRouter } from 'react-router-dom';
 
 import SunburstDetailSection from 'Components/visuals/SunburstDetailSection';
 
@@ -22,12 +20,11 @@ function highlightPathData(data, highlightedNames) {
     if (data.children) {
         data.children.map((child) => highlightPathData(child, highlightedNames));
     }
-    /* eslint-disable */
+    // eslint-disable-next-line no-param-reassign
     data.style = {
         ...data.style,
-        fillOpacity: highlightedNames && !highlightedNames.includes(data.name) ? 0.3 : 1
+        fillOpacity: highlightedNames && !highlightedNames.includes(data.name) ? 0.3 : 1,
     };
-    /* eslint-enable */
     return data;
 }
 
@@ -71,7 +68,6 @@ class BasicSunburst extends React.Component {
         onValueSelect: PropTypes.func,
         onValueDeselect: PropTypes.func,
         staticDetails: PropTypes.bool,
-        history: ReactRouterPropTypes.history.isRequired,
         units: PropTypes.string,
         small: PropTypes.bool,
     };
@@ -235,4 +231,4 @@ class BasicSunburst extends React.Component {
     }
 }
 
-export default withRouter(BasicSunburst);
+export default BasicSunburst;

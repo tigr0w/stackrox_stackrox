@@ -13,6 +13,7 @@ import (
 	"github.com/stackrox/rox/pkg/images/utils"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/sensor/common"
+	"github.com/stackrox/rox/sensor/common/message"
 	"github.com/stackrox/rox/sensor/common/registry"
 	"github.com/stackrox/rox/sensor/common/scan"
 	"google.golang.org/grpc"
@@ -23,6 +24,8 @@ var (
 
 	scanTimeout         = env.ScanTimeout.DurationSetting()
 	statusUpdateTimeout = 10 * time.Second
+
+	enabled = env.LocalImageScanningEnabled.BooleanSetting() && !env.DelegatedScanningDisabled.BooleanSetting()
 )
 
 // Handler is responsible for processing delegated registry related requests
@@ -48,8 +51,7 @@ func NewHandler(registryStore *registry.Store, localScan *scan.LocalScan) Handle
 }
 
 func (d *delegatedRegistryImpl) Capabilities() []centralsensor.SensorCapability {
-	if !env.LocalImageScanningEnabled.BooleanSetting() {
-		// Do not advertise the capability if local scanning is disabled.
+	if !enabled {
 		return nil
 	}
 
@@ -59,8 +61,7 @@ func (d *delegatedRegistryImpl) Capabilities() []centralsensor.SensorCapability 
 func (d *delegatedRegistryImpl) Notify(_ common.SensorComponentEvent) {}
 
 func (d *delegatedRegistryImpl) ProcessMessage(msg *central.MsgToSensor) error {
-	if !env.LocalImageScanningEnabled.BooleanSetting() {
-		// Ignore all messages if local scanning is disabled.
+	if !enabled {
 		return nil
 	}
 
@@ -69,12 +70,14 @@ func (d *delegatedRegistryImpl) ProcessMessage(msg *central.MsgToSensor) error {
 		return d.processUpdatedDelegatedRegistryConfig(msg.GetDelegatedRegistryConfig())
 	case msg.GetScanImage() != nil:
 		return d.processScanImage(msg.GetScanImage())
+	case msg.GetImageIntegrations() != nil:
+		return d.processImageIntegrations(msg.GetImageIntegrations())
 	}
 
 	return nil
 }
 
-func (d *delegatedRegistryImpl) ResponsesC() <-chan *central.MsgFromSensor {
+func (d *delegatedRegistryImpl) ResponsesC() <-chan *message.ExpiringMessage {
 	return nil
 }
 
@@ -92,7 +95,7 @@ func (d *delegatedRegistryImpl) processUpdatedDelegatedRegistryConfig(config *ce
 		return errors.New("could not process updated delegated registry config, stop requested")
 	default:
 		d.registryStore.SetDelegatedRegistryConfig(config)
-		log.Infof("Stored updated delegated registry config: %q", config)
+		log.Infof("Upserted delegated registry config: %q", config)
 	}
 	return nil
 }
@@ -123,7 +126,12 @@ func (d *delegatedRegistryImpl) executeScan(scanReq *central.ScanImage) {
 	defer cancel()
 
 	// Execute the scan, ignore returned image because will be sent to Central during enrichment.
-	_, err = d.localScan.EnrichLocalImageInNamespace(ctx, d.imageSvc, ci, "", scanReq.GetRequestId(), scanReq.GetForce())
+	_, err = d.localScan.EnrichLocalImageInNamespace(ctx, d.imageSvc, &scan.LocalScanRequest{
+		ID:        scanReq.GetRequestId(),
+		Image:     ci,
+		Namespace: scanReq.GetNamespace(),
+		Force:     scanReq.GetForce(),
+	})
 	if err != nil {
 		log.Errorf("Scan failed for req %q image %q: %v", scanReq.GetRequestId(), ci.GetName().GetFullName(), err)
 
@@ -156,5 +164,18 @@ func (d *delegatedRegistryImpl) sendScanStatusUpdate(scanReq *central.ScanImage,
 
 func (d *delegatedRegistryImpl) SetCentralGRPCClient(cc grpc.ClientConnInterface) {
 	d.imageSvc = v1.NewImageServiceClient(cc)
-	log.Debugf("Received central GRPC client connection")
+	log.Debug("Received central GRPC client connection")
+}
+
+func (d *delegatedRegistryImpl) processImageIntegrations(iiReq *central.ImageIntegrations) error {
+	select {
+	case <-d.stopSig.Done():
+		return errors.New("could not process updated image integrations, stop requested")
+	default:
+		log.Infof("Received %d updated and %d deleted image integrations", len(iiReq.GetUpdatedIntegrations()), len(iiReq.GetDeletedIntegrationIds()))
+
+		d.registryStore.UpsertCentralRegistryIntegrations(iiReq.GetUpdatedIntegrations())
+		d.registryStore.DeleteCentralRegistryIntegrations(iiReq.GetDeletedIntegrationIds())
+	}
+	return nil
 }

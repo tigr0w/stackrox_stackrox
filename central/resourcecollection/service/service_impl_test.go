@@ -7,19 +7,20 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	deploymentDSMocks "github.com/stackrox/rox/central/deployment/datastore/mocks"
-	reportConfigurationDS "github.com/stackrox/rox/central/reportconfigurations/datastore"
+	reportConfigurationDS "github.com/stackrox/rox/central/reports/config/datastore"
 	datastoreMocks "github.com/stackrox/rox/central/resourcecollection/datastore/mocks"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/grpc/authn"
 	mockIdentity "github.com/stackrox/rox/pkg/grpc/authn/mocks"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/version/testutils"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestCollectionService(t *testing.T) {
@@ -44,10 +45,8 @@ func (suite *CollectionServiceTestSuite) SetupSuite() {
 	suite.queryResolver = datastoreMocks.NewMockQueryResolver(suite.mockCtrl)
 	suite.deploymentDS = deploymentDSMocks.NewMockDataStore(suite.mockCtrl)
 
-	var err error
 	suite.testDB = pgtest.ForT(suite.T())
-	suite.resourceConfigDS, err = reportConfigurationDS.GetTestPostgresDataStore(suite.T(), suite.testDB.DB)
-	suite.NoError(err)
+	suite.resourceConfigDS = reportConfigurationDS.GetTestPostgresDataStore(suite.T(), suite.testDB.DB)
 	suite.collectionService = New(suite.dataStore, suite.queryResolver, suite.deploymentDS, suite.resourceConfigDS)
 
 	testutils.SetExampleVersion(suite.T())
@@ -97,7 +96,7 @@ func (suite *CollectionServiceTestSuite) TestGetCollection() {
 
 	result, err := suite.collectionService.GetCollection(context.Background(), request)
 	suite.NoError(err)
-	suite.Equal(expected, result)
+	protoassert.Equal(suite.T(), expected, result)
 
 	// collection not present
 	suite.dataStore.EXPECT().Get(gomock.Any(), request.Id).Times(1).Return(nil, false, nil)
@@ -195,13 +194,13 @@ func (suite *CollectionServiceTestSuite) TestCreateCollection() {
 	mockID.EXPECT().FriendlyName().Return("name").Times(1)
 	ctx = authn.ContextWithIdentity(allAccessCtx, mockID, suite.T())
 
-	suite.dataStore.EXPECT().AddCollection(gomock.Any(), gomock.Any()).Times(1).Return(nil)
+	suite.dataStore.EXPECT().AddCollection(gomock.Any(), gomock.Any()).Times(1).Return("fake-id", nil)
 	resp, err = suite.collectionService.CreateCollection(ctx, request)
 	suite.NoError(err)
 	suite.NotNil(resp.GetCollection())
 	suite.Equal(request.Name, resp.GetCollection().GetName())
 	suite.Equal(request.GetDescription(), resp.GetCollection().GetDescription())
-	suite.Equal(request.GetResourceSelectors(), resp.GetCollection().GetResourceSelectors())
+	protoassert.SlicesEqual(suite.T(), request.GetResourceSelectors(), resp.GetCollection().GetResourceSelectors())
 	suite.NotNil(resp.GetCollection().GetEmbeddedCollections())
 	suite.Equal(request.GetEmbeddedCollectionIds(), suite.embeddedCollectionsToIds(resp.GetCollection().GetEmbeddedCollections()))
 	suite.NotNil(resp.GetCollection().GetCreatedBy())
@@ -214,7 +213,7 @@ func (suite *CollectionServiceTestSuite) TestCreateCollection() {
 	mockID.EXPECT().FullName().Return("name").Times(1)
 	mockID.EXPECT().FriendlyName().Return("name").Times(1)
 	ctx = authn.ContextWithIdentity(allAccessCtx, mockID, suite.T())
-	suite.dataStore.EXPECT().AddCollection(gomock.Any(), gomock.Any()).Times(1).Return(errors.New("test error"))
+	suite.dataStore.EXPECT().AddCollection(gomock.Any(), gomock.Any()).Times(1).Return("", errors.New("test error"))
 	_, err = suite.collectionService.CreateCollection(ctx, request)
 	suite.Error(err)
 }
@@ -297,7 +296,7 @@ func (suite *CollectionServiceTestSuite) TestUpdateCollection() {
 	suite.Equal(request.GetId(), resp.GetCollection().GetId())
 	suite.Equal(request.Name, resp.GetCollection().GetName())
 	suite.Equal(request.GetDescription(), resp.GetCollection().GetDescription())
-	suite.Equal(request.GetResourceSelectors(), resp.GetCollection().GetResourceSelectors())
+	protoassert.SlicesEqual(suite.T(), request.GetResourceSelectors(), resp.GetCollection().GetResourceSelectors())
 	suite.Equal(request.GetEmbeddedCollectionIds(), suite.embeddedCollectionsToIds(resp.GetCollection().GetEmbeddedCollections()))
 	suite.Equal("uid", resp.GetCollection().GetUpdatedBy().GetId())
 	suite.Equal("name", resp.GetCollection().GetUpdatedBy().GetName())
@@ -317,11 +316,11 @@ func (suite *CollectionServiceTestSuite) TestUpdateCollection() {
 func (suite *CollectionServiceTestSuite) TestDeleteCollection() {
 	allAccessCtx := sac.WithAllAccess(context.Background())
 
-	// test error when ID is empty
+	// Test error when ID is empty
 	_, err := suite.collectionService.DeleteCollection(allAccessCtx, &v1.ResourceByID{})
 	suite.Error(err)
 
-	// test error when collectionId is in use by report config
+	// Test error when collectionId is in use by report config v1.
 	reportConfig := &storage.ReportConfiguration{
 		Name:    "config0",
 		ScopeId: "col0",
@@ -331,19 +330,61 @@ func (suite *CollectionServiceTestSuite) TestDeleteCollection() {
 	idRequest := &v1.ResourceByID{Id: "col0"}
 	_, err = suite.collectionService.DeleteCollection(allAccessCtx, idRequest)
 	suite.Error(err)
+	suite.ErrorContains(err, "config0", "should contain referenced report name")
+
+	// Remove report configuration and test successful deletion of collection.
 	err = suite.resourceConfigDS.RemoveReportConfiguration(allAccessCtx, id)
 	suite.NoError(err)
 
-	// test successful deletion
+	// Test successful deletion
 	idRequest = &v1.ResourceByID{Id: "a"}
+	suite.dataStore.EXPECT().SearchCollections(allAccessCtx, gomock.Any()).Times(1).Return(nil, nil)
 	suite.dataStore.EXPECT().DeleteCollection(allAccessCtx, idRequest.GetId()).Times(1).Return(nil)
 	_, err = suite.collectionService.DeleteCollection(allAccessCtx, idRequest)
 	suite.NoError(err)
 
 	// test error when request fails
+	suite.dataStore.EXPECT().SearchCollections(allAccessCtx, gomock.Any()).Times(1).Return(nil, nil)
 	suite.dataStore.EXPECT().DeleteCollection(allAccessCtx, idRequest.GetId()).Times(1).Return(errors.New("test error"))
 	_, err = suite.collectionService.DeleteCollection(allAccessCtx, idRequest)
 	suite.Error(err)
+
+	// Test error when collectionId is in use by report config v2.
+	reportConfig = &storage.ReportConfiguration{
+		Name: "config0",
+		ResourceScope: &storage.ResourceScope{
+			ScopeReference: &storage.ResourceScope_CollectionId{
+				CollectionId: "col0",
+			},
+		},
+	}
+	id, err = suite.resourceConfigDS.AddReportConfiguration(allAccessCtx, reportConfig)
+	suite.NoError(err)
+	idRequest = &v1.ResourceByID{Id: "col0"}
+	_, err = suite.collectionService.DeleteCollection(allAccessCtx, idRequest)
+	suite.Error(err)
+	suite.ErrorContains(err, "config0", "should contain referenced report name")
+
+	// Remove report configuration and test successful deletion of collection.
+	err = suite.resourceConfigDS.RemoveReportConfiguration(allAccessCtx, id)
+	suite.NoError(err)
+
+	// Test error when collectionId is embedded by another collection
+	suite.dataStore.EXPECT().SearchCollections(allAccessCtx, gomock.Any()).Times(1).Return([]*storage.ResourceCollection{{
+		Id:                  "collection-id",
+		Name:                "collection-with-embedded",
+		EmbeddedCollections: []*storage.ResourceCollection_EmbeddedResourceCollection{{Id: idRequest.GetId()}},
+	}}, nil)
+	_, err = suite.collectionService.DeleteCollection(allAccessCtx, idRequest)
+	suite.Error(err)
+	suite.ErrorContains(err, "collection-with-embedded", "should contain collection which embeds the deleted collection")
+
+	// Test successful deletion
+	idRequest = &v1.ResourceByID{Id: "a"}
+	suite.dataStore.EXPECT().SearchCollections(allAccessCtx, gomock.Any()).Times(1).Return(nil, nil)
+	suite.dataStore.EXPECT().DeleteCollection(allAccessCtx, idRequest.GetId()).Times(1).Return(nil)
+	_, err = suite.collectionService.DeleteCollection(allAccessCtx, idRequest)
+	suite.NoError(err)
 }
 
 func (suite *CollectionServiceTestSuite) TestListCollections() {
@@ -364,7 +405,7 @@ func (suite *CollectionServiceTestSuite) TestListCollections() {
 	suite.dataStore.EXPECT().SearchCollections(allAccessCtx, gomock.Any()).Times(1).Return(expectedResp.Collections, nil)
 	resp, err := suite.collectionService.ListCollections(allAccessCtx, &v1.ListCollectionsRequest{})
 	suite.NoError(err)
-	suite.Equal(expectedResp, resp)
+	protoassert.Equal(suite.T(), expectedResp, resp)
 
 	// test failure
 	suite.dataStore.EXPECT().SearchCollections(allAccessCtx, gomock.Any()).Times(1).Return(nil, errors.New("test error"))
@@ -411,7 +452,7 @@ func (suite *CollectionServiceTestSuite) TestDryRunCollection() {
 	suite.dataStore.EXPECT().DryRunAddCollection(ctx, gomock.Any()).Times(1).Return(nil)
 	resp, err := suite.collectionService.DryRunCollection(ctx, request)
 	suite.NoError(err)
-	suite.Equal(expectedResp, resp)
+	protoassert.Equal(suite.T(), expectedResp, resp)
 
 	// test failure add request
 	mockID.EXPECT().UID().Return("uid").Times(1)
@@ -435,7 +476,7 @@ func (suite *CollectionServiceTestSuite) TestDryRunCollection() {
 	suite.dataStore.EXPECT().DryRunUpdateCollection(ctx, gomock.Any()).Times(1).Return(nil)
 	resp, err = suite.collectionService.DryRunCollection(ctx, request)
 	suite.NoError(err)
-	suite.Equal(expectedResp, resp)
+	protoassert.Equal(suite.T(), expectedResp, resp)
 
 	// test failure update request
 	mockID.EXPECT().UID().Return("uid").Times(1)
@@ -471,7 +512,7 @@ func (suite *CollectionServiceTestSuite) TestDryRunCollection() {
 	suite.deploymentDS.EXPECT().SearchListDeployments(ctx, gomock.Any()).Times(1).Return(expectedResp.Deployments, nil)
 	resp, err = suite.collectionService.DryRunCollection(ctx, request)
 	suite.NoError(err)
-	suite.Equal(expectedResp, resp)
+	protoassert.Equal(suite.T(), expectedResp, resp)
 
 	// test failure to resolve query
 	suite.dataStore.EXPECT().DryRunUpdateCollection(ctx, gomock.Any()).Times(1).Return(nil)

@@ -12,7 +12,7 @@ import {
 import { MinusIcon, WrenchIcon } from '@patternfly/react-icons';
 import { gql } from '@apollo/client';
 
-import { FixableStatus } from '../types';
+import { FixableStatus } from '../../types';
 
 export type ResourceCountByCveSeverityAndStatus = {
     critical: { total: number; fixable: number };
@@ -64,7 +64,12 @@ const statusDisplays = [
     },
 ] as const;
 
-const disabledColor100 = 'var(--pf-global--disabled-color--100)';
+const disabledColor100 = 'var(--pf-v5-global--disabled-color--100)';
+
+const statusHiddenText = {
+    Fixable: 'Fixable hidden',
+    'Not fixable': 'Not fixable hidden',
+} as const;
 
 export type CvesByStatusSummaryCardProps = {
     cveStatusCounts: ResourceCountByCveSeverityAndStatus;
@@ -79,13 +84,13 @@ function CvesByStatusSummaryCard({
         <Card isCompact isFlat>
             <CardTitle>CVEs by status</CardTitle>
             <CardBody>
-                <Grid className="pf-u-pl-sm">
+                <Grid className="pf-v5-u-pl-sm">
                     {statusDisplays.map(({ status, Icon, text }) => {
                         const isHidden = hiddenStatuses.has(status);
                         return (
                             <GridItem key={status} span={12}>
                                 <Flex
-                                    className="pf-u-pt-sm"
+                                    className="pf-v5-u-pt-sm"
                                     spaceItems={{ default: 'spaceItemsSm' }}
                                     alignItems={{ default: 'alignItemsCenter' }}
                                 >
@@ -95,7 +100,9 @@ function CvesByStatusSummaryCard({
                                             color: isHidden ? disabledColor100 : 'inherit',
                                         }}
                                     >
-                                        {isHidden ? 'Results hidden' : text(cveStatusCounts)}
+                                        {isHidden
+                                            ? statusHiddenText[status]
+                                            : text(cveStatusCounts)}
                                     </Text>
                                 </Flex>
                             </GridItem>

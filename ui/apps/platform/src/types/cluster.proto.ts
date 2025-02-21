@@ -120,7 +120,7 @@ export type Cluster = {
     dynamicConfig: DynamicClusterConfig;
     tolerationsConfig: TolerationsConfig;
     priority: string; // int64
-    healthStatus: ClusterHealthStatus;
+    healthStatus?: ClusterHealthStatus;
     slimCollector: boolean;
 
     // The Helm configuration of a cluster is only present in case the cluster is Helm- or Operator-managed.
@@ -131,6 +131,9 @@ export type Cluster = {
 
     // For internal use only.
     auditLogState: Record<string, AuditLogFileState>;
+
+    // used to check auto refresh cert "SecuredClusterCertificatesRefresh"
+    sensorCapabilities: string[];
 
     initBundleId: string;
     managedBy: ClusterManagerType;

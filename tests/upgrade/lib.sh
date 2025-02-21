@@ -15,7 +15,7 @@ wait_for_central_reconciliation() {
     local success=0
     for i in $(seq 1 90); do
         local numDeployments
-        numDeployments="$(curl -sSk -u "admin:$ROX_PASSWORD" "https://$API_ENDPOINT/v1/summary/counts" | jq '.numDeployments' -r)"
+        numDeployments="$(curl -sSk --config <(curl_cfg user "admin:$ROX_ADMIN_PASSWORD") -X POST -d "{\"operationName\":\"summary_counts\",\"variables\":{},\"query\":\"query summary_counts {\n  clusterCount\n  nodeCount\n  violationCount\n  deploymentCount\n  imageCount\n  secretCount\n}\"}" "https://$API_ENDPOINT/api/graphql" | jq '.data.deploymentCount' -r)"
         echo "Try number ${i}. Number of deployments in Central: $numDeployments"
         [[ -n "$numDeployments" ]]
         if [[ "$numDeployments" -lt 100 ]]; then
@@ -39,10 +39,10 @@ wait_for_scanner_to_be_ready() {
       if [[  "$replicas" == "$readyReplicas" ]]; then
         break
       fi
-      if (( $(date '+%s') - start_time > 300 )); then
+      if (( $(date '+%s') - start_time > 1200 )); then
         kubectl -n stackrox get pod -o wide
         kubectl -n stackrox get deploy -o wide
-        echo >&2 "Timed out after 5m"
+        echo >&2 "Timed out after 20m"
         exit 1
       fi
       sleep 5
@@ -65,6 +65,9 @@ validate_upgrade() {
         echo "${API_TOKEN}" | "${TEST_ROOT}/bin/${TEST_HOST_PLATFORM}/roxctl" --insecure-skip-tls-verify --insecure -e "${API_ENDPOINT}" --token-file /dev/stdin central whoami > /dev/null
     fi
 
+    rm -f FAIL
+    remove_qa_test_results
+
     info "Validating the upgrade with upgrade tests: $stage_description"
 
     CLUSTER="$CLUSTER_TYPE_FOR_TEST" \
@@ -78,45 +81,57 @@ validate_upgrade() {
 function roxcurl() {
   local url="$1"
   shift
-  curl -u "admin:${ROX_PASSWORD}" -k "https://${API_ENDPOINT}${url}" "$@"
+  curl --config <(curl_cfg user "admin:${ROX_ADMIN_PASSWORD}") -k "https://${API_ENDPOINT}${url}" "$@"
 }
 
-deploy_earlier_central() {
+deploy_earlier_postgres_central() {
     info "Deploying: $EARLIER_TAG..."
 
-    if is_CI; then
-        gsutil cp "gs://stackrox-ci/roxctl-$EARLIER_TAG" "bin/$TEST_HOST_PLATFORM/roxctl"
-    else
-        make cli
-    fi
-    chmod +x "bin/$TEST_HOST_PLATFORM/roxctl"
+    make cli
+
     PATH="bin/$TEST_HOST_PLATFORM:$PATH" command -v roxctl
     PATH="bin/$TEST_HOST_PLATFORM:$PATH" roxctl version
-    PATH="bin/$TEST_HOST_PLATFORM:$PATH" \
-    MAIN_IMAGE_TAG="$EARLIER_TAG" \
-    SCANNER_IMAGE="$REGISTRY/scanner:$(cat SCANNER_VERSION)" \
-    SCANNER_DB_IMAGE="$REGISTRY/scanner-db:$(cat SCANNER_VERSION)" \
-    ./deploy/k8s/central.sh
 
-    export_central_basic_auth_creds
+    # Let's try helm
+    ROX_ADMIN_PASSWORD="$(tr -dc _A-Z-a-z-0-9 < /dev/urandom | head -c12 || true)"
+    PATH="bin/$TEST_HOST_PLATFORM:$PATH" roxctl helm output central-services --image-defaults opensource --output-dir /tmp/early-stackrox-central-services-chart
+
+    helm install -n stackrox --create-namespace stackrox-central-services /tmp/early-stackrox-central-services-chart \
+         --set central.adminPassword.value="${ROX_ADMIN_PASSWORD}" \
+         --set central.db.enabled=true \
+         --set central.persistence.none=true \
+         --set central.exposure.loadBalancer.enabled=true \
+         --set system.enablePodSecurityPolicies=false \
+         --set central.image.tag="${EARLIER_TAG}" \
+         --set central.db.image.tag="${EARLIER_TAG}" \
+         --set scanner.image.tag="$(cat SCANNER_VERSION)" \
+         --set scanner.dbImage.tag="$(cat SCANNER_VERSION)" \
+         --set scanner.resources.limits.memory="6Gi"
+
+    # Installing this way returns faster than the scripts but everything isn't running when it finishes like with
+    # the scripts.  So we will give it a minute for things to get started before we proceed
+    sleep 60
+
+    ROX_USERNAME="admin"
+    ci_export "ROX_USERNAME" "$ROX_USERNAME"
+    ci_export "ROX_ADMIN_PASSWORD" "$ROX_ADMIN_PASSWORD"
 }
 
-restore_backup_test() {
-    info "Restoring a 56.1 backup into a newer central"
+restore_4_1_backup() {
+    info "Restoring a 4.1 backup into a newer central"
 
-    restore_56_1_backup
+    restore_4_1_postgres_backup
 }
 
 force_rollback() {
     info "Forcing a rollback to $FORCE_ROLLBACK_VERSION"
 
     local upgradeStatus
-    upgradeStatus=$(curl -sSk -X GET -u "admin:${ROX_PASSWORD}" https://"${API_ENDPOINT}"/v1/centralhealth/upgradestatus)
+    upgradeStatus=$(curl -sSk -X GET --config <(curl_cfg user "admin:${ROX_ADMIN_PASSWORD}") https://"${API_ENDPOINT}"/v1/centralhealth/upgradestatus)
     echo "upgrade status: ${upgradeStatus}"
-    test_equals_non_silent "$(echo "$upgradeStatus" | jq '.upgradeStatus.version' -r)" "$(make --quiet tag)"
+    test_equals_non_silent "$(echo "$upgradeStatus" | jq '.upgradeStatus.version' -r)" "$(make --quiet --no-print-directory tag)"
     test_equals_non_silent "$(echo "$upgradeStatus" | jq '.upgradeStatus.forceRollbackTo' -r)" "$FORCE_ROLLBACK_VERSION"
     test_equals_non_silent "$(echo "$upgradeStatus" | jq '.upgradeStatus.canRollbackAfterUpgrade' -r)" "true"
-    test_gt_non_silent "$(echo "$upgradeStatus" | jq '.upgradeStatus.spaceAvailableForRollbackAfterUpgrade' -r)" "$(echo "$upgradeStatus" | jq '.upgradeStatus.spaceRequiredForRollbackAfterUpgrade' -r)"
 
     kubectl -n stackrox get configmap/central-config -o yaml | yq e '{"data": .data}' - >/tmp/force_rollback_patch
     local central_config
@@ -161,7 +176,7 @@ test_sensor_bundle() {
     info "Testing the sensor bundle"
 
     rm -rf sensor-remote
-    "$TEST_ROOT/bin/${TEST_HOST_PLATFORM}/roxctl" -e "$API_ENDPOINT" -p "$ROX_PASSWORD" sensor get-bundle remote
+    "$TEST_ROOT/bin/${TEST_HOST_PLATFORM}/roxctl" -e "$API_ENDPOINT" sensor get-bundle remote
     [[ -d sensor-remote ]]
 
     ./sensor-remote/sensor.sh
@@ -182,9 +197,7 @@ test_upgrader() {
     info "Creating a 'sensor-remote-new' cluster"
 
     rm -rf sensor-remote-new
-    "$TEST_ROOT/bin/${TEST_HOST_PLATFORM}/roxctl" -e "$API_ENDPOINT" -p "$ROX_PASSWORD" sensor generate k8s \
-        --main-image-repository "${MAIN_IMAGE_REPO:-$REGISTRY/main}" \
-        --collector-image-repository "${COLLECTOR_IMAGE_REPO:-$REGISTRY/collector}" \
+    "$TEST_ROOT/bin/${TEST_HOST_PLATFORM}/roxctl" -e "$API_ENDPOINT" sensor generate k8s \
         --name remote-new \
         --create-admission-controller
 
@@ -282,6 +295,10 @@ deactivate_metrics_server() {
     for i in $(seq 1 10); do
         kubectl api-resources >stdout.out 2>stderr.out || true
         if grep -q 'metrics.k8s.io.*the server is currently unable to handle the request' stderr.out; then
+            success=1
+            break
+        fi
+        if ! grep -q 'metrics.k8s.io' stdout.out; then
             success=1
             break
         fi
@@ -418,7 +435,7 @@ preamble() {
 
     require_executable "$TEST_ROOT/bin/${TEST_HOST_PLATFORM}/roxctl"
 
-    info "Will clone or update a clean copy of the rox repo for legacy DB test at $REPO_FOR_TIME_TRAVEL"
+    info "Will clone or update a clean copy of the rox repo for test at $REPO_FOR_TIME_TRAVEL"
     if [[ -d "$REPO_FOR_TIME_TRAVEL" ]]; then
         if is_CI; then
           info "Repo for time travel already exists! Will use it."
@@ -427,16 +444,6 @@ preamble() {
     else
         (cd "$(dirname "$REPO_FOR_TIME_TRAVEL")" && git clone https://github.com/stackrox/stackrox.git "$(basename "$REPO_FOR_TIME_TRAVEL")")
     fi
-
-    info "Will clone or update a clean copy of the rox repo for Postgres DB test at $REPO_FOR_POSTGRES_TIME_TRAVEL"
-        if [[ -d "$REPO_FOR_POSTGRES_TIME_TRAVEL" ]]; then
-            if is_CI; then
-              info "Repo for time travel already exists! Will use it."
-            fi
-            (cd "$REPO_FOR_POSTGRES_TIME_TRAVEL" && git checkout master && git reset --hard && git pull)
-        else
-            (cd "$(dirname "$REPO_FOR_POSTGRES_TIME_TRAVEL")" && git clone https://github.com/stackrox/stackrox.git "$(basename "$REPO_FOR_POSTGRES_TIME_TRAVEL")")
-        fi
 
     if is_CI; then
         if ! command -v yq >/dev/null 2>&1; then

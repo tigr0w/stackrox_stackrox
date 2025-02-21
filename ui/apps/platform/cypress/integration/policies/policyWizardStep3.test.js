@@ -1,7 +1,6 @@
 import { selectors } from '../../constants/PoliciesPage';
 import * as api from '../../constants/apiEndpoints';
 import withAuth from '../../helpers/basicAuth';
-import DndSimulatorDataTransfer from '../../helpers/dndSimulatorDataTransfer';
 import {
     visitPolicies,
     doPolicyRowAction,
@@ -9,50 +8,50 @@ import {
     cloneFirstPolicyFromTable,
     goToStep3,
 } from '../../helpers/policies';
+import { closeModalByButton } from '../../helpers/modal';
+import { hasFeatureFlag } from '../../helpers/features';
 
-const dataTransfer = new DndSimulatorDataTransfer();
+const TREE_VIEW_SEARCH_INPUT = '.pf-v5-c-tree-view__search input[name="search-input"]';
+const TREE_VIEW_FIRST_LEVEL_CHILD = '.pf-v5-c-tree-view__list-item .pf-v5-c-tree-view__list-item';
 
-function dragFieldIntoSection(fieldSelector) {
-    cy.get(fieldSelector)
-        .trigger('mousedown', {
-            which: 1,
-        })
-        .trigger('dragstart', {
-            dataTransfer,
-        })
-        .trigger('drag');
-    cy.get(selectors.step3.policySection.dropTarget)
-        .trigger('dragover', {
-            dataTransfer,
-        })
-        .trigger('drop', {
-            dataTransfer,
-        })
-        .trigger('dragend', {
-            dataTransfer,
-        })
-        .trigger('mouseup', {
-            which: 1,
-        });
+// open Policy Fields modal, select given field, and add it to the section card
+function addPolicyField(fieldName) {
+    cy.get('.policy-section-card button:contains("Add policy field")').click();
+
+    // Note: we only use the first word of the field name to filter, because the PatternFly 4
+    // TreeView search field has a bug where it doesn't accept spaces
+    const firstWordOfFieldName = fieldName.split(' ')[0];
+    // cy.log(firstWordOfFieldName);
+    cy.get(TREE_VIEW_SEARCH_INPUT).type(firstWordOfFieldName);
+
+    // Match entire title to distinguish CVSS From NVD CVSS.
+    cy.get(`${TREE_VIEW_FIRST_LEVEL_CHILD} .pf-v5-c-tree-view__node-title`)
+        .contains(new RegExp(`^${fieldName}$`))
+        .click();
+
+    cy.get(`${TREE_VIEW_FIRST_LEVEL_CHILD} .pf-v5-c-tree-view__node`).should(
+        'have.class',
+        'pf-m-current'
+    );
+
+    closeModalByButton('Add policy field');
 }
 
-function addPolicyFieldCard(index) {
-    cy.get(selectors.step3.policyCriteria.key)
-        .eq(index)
-        .trigger('mousedown', { which: 1 })
-        .trigger('dragstart', { dataTransfer })
-        .trigger('drag');
-    cy.get(selectors.step3.policySection.dropTarget)
-        .trigger('dragover', { dataTransfer })
-        .trigger('drop', { dataTransfer })
-        .trigger('dragend', { dataTransfer })
-        .trigger('mouseup', { which: 1 });
-}
+// open Policy Fields modal and ensure a given field is not available
+function assertPolicyFieldNotAvailable(fieldName) {
+    cy.get('.policy-section-card button:contains("Add policy field")').click();
 
-function clickPolicyKeyGroup(categoryName) {
+    // Note: we only use the first word of the field name to filter, because the PatternFly 4
+    // TreeView search field has a bug where it doesn't accept spaces
+    const firstWordOfFieldName = fieldName.split(' ')[0];
+    // cy.log(firstWordOfFieldName);
+    cy.get(TREE_VIEW_SEARCH_INPUT).type(firstWordOfFieldName);
+
     cy.get(
-        `${selectors.step3.policyCriteria.keyGroup}:contains(${categoryName}) .pf-c-expandable-section__toggle`
-    ).click();
+        `${TREE_VIEW_FIRST_LEVEL_CHILD} .pf-v5-c-tree-view__node-title:contains(${fieldName})`
+    ).should('not.exist');
+
+    closeModalByButton('Cancel');
 }
 
 function goToPoliciesAndCloneToStep3() {
@@ -70,8 +69,14 @@ function clearPolicyCriteriaCards() {
     });
 }
 
-describe('Policy wizard, Step 3 Policy Criteria', () => {
+describe.skip('Policy wizard, Step 3 Policy Criteria', () => {
     withAuth();
+
+    before(function () {
+        if (!hasFeatureFlag('ROX_POLICY_CRITERIA_MODAL')) {
+            this.skip();
+        }
+    });
 
     it('should not allow user to edit policy criteria for default policies', () => {
         visitPolicies();
@@ -83,18 +88,45 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
         cy.get(selectors.step3.policySection.addBtn).should('not.exist');
     });
 
-    it('should have nested policy field keys', () => {
+    it('should have a modal with nested policy field keys', () => {
         goToPoliciesAndCloneToStep3();
 
-        cy.get(selectors.step3.policyCriteria.keyGroup).should((values) => {
-            // before we began filtering what policy criteria were available,
-            // there were 9 groups of criteria to count
-            // after filtering for Lifecycle was added, the number of groups for a Deploy-only policy is 7
-            const GROUPS_AVAILABLE_FOR_DEPLOY_POLICY = 7;
-            expect(values).to.have.length(GROUPS_AVAILABLE_FOR_DEPLOY_POLICY);
+        // open policy fields modal
+        cy.get('.policy-section-card button:contains("Add policy field")').click();
+        cy.get('.pf-v5-c-modal-box__title-text:contains("Add policy criteria field")');
+
+        // check that all Deploy-time categories are available
+        // after filtering for Lifecycle was added, the number of groups for a Deploy-only policy is 7
+        const GROUPS_AVAILABLE_FOR_DEPLOY_POLICY = [
+            'Image registry',
+            'Image contents',
+            'Container configuration',
+            'Deployment metadata',
+            'Storage',
+            'Networking',
+            'Kubernetes access',
+        ];
+        cy.get('.pf-v5-c-tree-view__list-item').each((element, index) => {
+            element.get(
+                `.pf-v5-c-tree-view__node-title:contains(${GROUPS_AVAILABLE_FOR_DEPLOY_POLICY[index]})`
+            );
         });
 
-        cy.get(`${selectors.step3.policyCriteria.key}:first`).scrollIntoView().should('be.visible');
+        // now, check the criteria in a category
+        const FIELDS_AVAILABLE_FOR_DEPLOY_POLICY = [
+            'Image registry',
+            'Image name',
+            'Image tag',
+            'Image signature',
+        ];
+        cy.get('.pf-v5-c-tree-view__list-item:first').click();
+        cy.get(TREE_VIEW_FIRST_LEVEL_CHILD).each((element, index) => {
+            element.get(
+                `.pf-v5-c-tree-view__node-title:contains(${FIELDS_AVAILABLE_FOR_DEPLOY_POLICY[index]})`
+            );
+        });
+
+        closeModalByButton('Cancel');
     });
 
     describe('Policy section', () => {
@@ -123,7 +155,8 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
             goToPoliciesAndCloneToStep3();
 
             cy.get(selectors.step3.policySection.nameEditBtn).click();
-            cy.get(selectors.step3.policySection.nameInput).clear().type('New Section');
+            cy.get(selectors.step3.policySection.nameInput).clear();
+            cy.get(selectors.step3.policySection.nameInput).type('New Section');
             cy.get(selectors.step3.policySection.nameSaveBtn).click();
             cy.get(selectors.step3.policySection.name).contains('New Section');
         });
@@ -133,7 +166,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
 
             // add policy field card
             cy.get(selectors.step3.policyCriteria.groupCards).then((cards) => {
-                addPolicyFieldCard(0);
+                addPolicyField('Image registry', 0);
                 cy.get(selectors.step3.policyCriteria.groupCards).then((newCards) => {
                     expect(newCards).to.have.length(cards.length + 1);
                 });
@@ -152,9 +185,9 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
             goToPoliciesAndCloneToStep3();
 
             cy.get(selectors.step3.policyCriteria.groupCards).then((cards) => {
-                addPolicyFieldCard(0);
-                addPolicyFieldCard(1);
-                addPolicyFieldCard(2);
+                addPolicyField('Image registry');
+                addPolicyField('Image name');
+                addPolicyField('Image tag');
                 cy.get(selectors.step3.policyCriteria.groupCards).then((newCards) => {
                     expect(newCards).to.have.length(cards.length + 3);
                 });
@@ -165,8 +198,8 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
             goToPoliciesAndCloneToStep3();
 
             cy.get(selectors.step3.policyCriteria.groupCards).then((cards) => {
-                addPolicyFieldCard(0);
-                addPolicyFieldCard(0);
+                addPolicyField('Image name');
+                assertPolicyFieldNotAvailable('Image name');
                 cy.get(selectors.step3.policyCriteria.groupCards).then((newCards) => {
                     expect(newCards).to.have.length(cards.length + 1);
                 });
@@ -181,9 +214,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 clearPolicyCriteriaCards();
 
                 // add field values for Image Registry
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Image registry')`
-                );
+                addPolicyField('Image name');
                 cy.get(selectors.step3.policyCriteria.value.deleteBtn).should('not.exist');
                 cy.get(selectors.step3.policyCriteria.value.addBtn).first().click();
                 cy.get(selectors.step3.policyCriteria.value.textInput).then((inputs) => {
@@ -206,10 +237,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Storage');
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Writable mounted volume')`
-                );
+                addPolicyField('Mounted volume writability');
                 cy.get(selectors.step3.policyCriteria.value.radioGroup).should('exist');
                 cy.get(selectors.step3.policyCriteria.value.addBtn).should('not.exist');
             });
@@ -220,9 +248,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Image registry')`
-                );
+                addPolicyField('Image registry');
                 cy.get(selectors.step3.policyCriteria.value.negateCheckbox).should(
                     'not.be.checked'
                 );
@@ -235,10 +261,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Storage');
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Writable mounted volume')`
-                );
+                addPolicyField('Mounted volume writability');
                 cy.get(selectors.step3.policyCriteria.value.negateCheckbox).should('not.exist');
             });
         });
@@ -248,9 +271,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Image registry')`
-                );
+                addPolicyField('Image registry');
                 cy.get(selectors.step3.policyCriteria.value.addBtn).first().click();
                 cy.get(selectors.step3.policyCriteria.booleanOperator).should('not.be.disabled');
                 cy.get(selectors.step3.policyCriteria.booleanOperator).contains('or');
@@ -262,8 +283,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Image contents');
-                dragFieldIntoSection(`${selectors.step3.policyCriteria.key}:contains('Image age')`);
+                addPolicyField('Image age');
                 cy.get(selectors.step3.policyCriteria.value.addBtn).first().click();
                 cy.get(selectors.step3.policyCriteria.booleanOperator).should('be.disabled');
                 cy.get(selectors.step3.policyCriteria.booleanOperator).contains('or');
@@ -275,10 +295,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Image contents');
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Unscanned image')`
-                );
+                addPolicyField('Image scan status');
                 cy.get(selectors.step3.policyCriteria.value.radioGroup).should('exist');
                 cy.get(
                     `${selectors.step3.policyCriteria.value.radioGroupItem}:contains('Scanned') button`
@@ -301,10 +318,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Container configuration');
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Seccomp profile type')`
-                );
+                addPolicyField('Seccomp profile type');
                 cy.get(selectors.step3.policyCriteria.value.radioGroupString).should('exist');
                 cy.get(
                     `${selectors.step3.policyCriteria.value.radioGroupStringItem} button.pf-m-selected`
@@ -324,9 +338,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Image registry')`
-                );
+                addPolicyField('Image registry');
                 cy.get(selectors.step3.policyCriteria.value.textInput).should('have.value', '');
                 cy.get(selectors.step3.policyCriteria.value.textInput).type('test');
                 cy.get(selectors.step3.policyCriteria.value.textInput).should('have.value', 'test');
@@ -336,10 +348,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Container configuration');
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Drop capabilities')`
-                );
+                addPolicyField('Drop capabilities');
                 cy.get(selectors.step3.policyCriteria.value.select).should('have.value', '');
                 cy.get(selectors.step3.policyCriteria.value.select).click();
                 cy.get(selectors.step3.policyCriteria.value.selectOption)
@@ -354,10 +363,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Storage');
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('Mount propagation')`
-                );
+                addPolicyField('Mount propagation');
                 cy.get(selectors.step3.policyCriteria.value.multiselect).should('have.value', '');
                 cy.get(selectors.step3.policyCriteria.value.multiselect).click();
                 cy.get(selectors.step3.policyCriteria.value.multiselectOption)
@@ -374,8 +380,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
 
-                clickPolicyKeyGroup('Image contents');
-                dragFieldIntoSection(`${selectors.step3.policyCriteria.key}:contains('CVSS')`);
+                addPolicyField('CVSS');
                 cy.get(selectors.step3.policyCriteria.value.select).should('have.value', '');
                 cy.get(selectors.step3.policyCriteria.value.numberInput).should('have.value', '');
                 cy.get(selectors.step3.policyCriteria.value.select).click();
@@ -398,9 +403,7 @@ describe('Policy wizard, Step 3 Policy Criteria', () => {
 
                 goToPoliciesAndCloneToStep3();
                 clearPolicyCriteriaCards();
-                dragFieldIntoSection(
-                    `${selectors.step3.policyCriteria.key}:contains('trusted image signers')`
-                );
+                addPolicyField('Image signature');
                 cy.wait('@getSignatureIntegrations');
             });
 

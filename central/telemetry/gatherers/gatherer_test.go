@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/central/grpc/metrics"
 	installationPostgres "github.com/stackrox/rox/central/installation/store/postgres"
 	"github.com/stackrox/rox/central/sensorupgradeconfig/datastore/mocks"
@@ -18,6 +17,7 @@ import (
 	"github.com/stackrox/rox/pkg/telemetry/data"
 	"github.com/stackrox/rox/pkg/telemetry/gatherers"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestGatherers(t *testing.T) {
@@ -49,7 +49,7 @@ func (s *gathererTestSuite) SetupSuite() {
 
 	installationStore := installationPostgres.New(s.tp.DB)
 
-	s.gatherer = newCentralGatherer(installationStore, newDatabaseGatherer(nil, nil, nil, newPostgresGatherer(s.tp.DB, adminConfig)), newAPIGatherer(metrics.GRPCSingleton(), metrics.HTTPSingleton()), gatherers.NewComponentInfoGatherer(), s.sensorUpgradeConfigDatastore)
+	s.gatherer = newCentralGatherer(installationStore, newDatabaseGatherer(newPostgresGatherer(s.tp.DB, adminConfig)), newAPIGatherer(metrics.GRPCSingleton(), metrics.HTTPSingleton()), gatherers.NewComponentInfoGatherer(), s.sensorUpgradeConfigDatastore)
 }
 
 func (s *gathererTestSuite) TearDownSuite() {

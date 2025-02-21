@@ -3,12 +3,11 @@ package user
 import (
 	"sort"
 
-	"github.com/gogo/protobuf/proto"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/pkg/auth/permissions/utils"
 	"github.com/stackrox/rox/pkg/jsonutil"
 	"github.com/stackrox/rox/pkg/logging"
-	"go.uber.org/zap"
+	"github.com/stackrox/rox/pkg/protocompat"
 )
 
 var log = logging.LoggerForModule()
@@ -39,7 +38,7 @@ type loggableAuthProvider struct {
 	Type string
 }
 
-func protoToJSON(message proto.Message) string {
+func protoToJSON(message protocompat.Message) string {
 	result, err := jsonutil.ProtoToJSON(message, jsonutil.OptCompact, jsonutil.OptUnEscape)
 	if err != nil {
 		log.Error("Failed to convert proto to JSON: ", err)
@@ -62,17 +61,17 @@ func extractUserLogFields(user *v1.AuthStatus) []interface{} {
 		serviceIDJSON = protoToJSON(user.GetServiceId())
 	}
 	return []interface{}{
-		zap.String("userID", user.GetUserId()),
-		zap.String("serviceID", serviceIDJSON),
-		zap.Any("expires", user.GetExpires()),
-		zap.String("username", user.GetUserInfo().GetUsername()),
-		zap.String("friendlyName", user.GetUserInfo().GetFriendlyName()),
-		zap.Any("roleNames", utils.RoleNamesFromUserInfo(user.GetUserInfo().GetRoles())),
-		zap.Any("authProvider", &loggableAuthProvider{
+		logging.String("userID", user.GetUserId()),
+		logging.String("serviceID", serviceIDJSON),
+		logging.Any("expires", user.GetExpires()),
+		logging.String("username", user.GetUserInfo().GetUsername()),
+		logging.String("friendlyName", user.GetUserInfo().GetFriendlyName()),
+		logging.Any("roleNames", utils.RoleNamesFromUserInfo(user.GetUserInfo().GetRoles())),
+		logging.Any("authProvider", &loggableAuthProvider{
 			ID:   user.GetAuthProvider().GetId(),
 			Type: user.GetAuthProvider().GetType(),
 			Name: user.GetAuthProvider().GetName(),
 		}),
-		zap.Any("userAttributes", user.GetUserAttributes()),
+		logging.Any("userAttributes", user.GetUserAttributes()),
 	}
 }

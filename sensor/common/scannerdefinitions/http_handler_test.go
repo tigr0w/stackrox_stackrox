@@ -4,34 +4,45 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
 	"github.com/stackrox/rox/pkg/httputil"
-	"github.com/stackrox/rox/pkg/httputil/mock"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestServeHTTP_Responses(t *testing.T) {
 	type args struct {
-		writer  *mock.ResponseWriter
+		writer  *httptest.ResponseRecorder
 		request *http.Request
 		methods []string
 	}
 	tests := []struct {
-		name         string
-		args         args
-		responseBody string
-		statusCode   int
+		name             string
+		args             args
+		responseBody     string
+		jsonResponse     bool
+		statusCode       int
+		centralReachable bool
 	}{
 		{
-			name:         "when central replies 200 with content then writer matches",
-			statusCode:   http.StatusOK,
-			responseBody: "the foobar body.",
+			name:             "when central is not reachable then return internal error",
+			statusCode:       http.StatusServiceUnavailable,
+			responseBody:     "{\"code\":14,\"message\":\"central not reachable\"}",
+			jsonResponse:     true,
+			centralReachable: false,
 		},
 		{
-			name:       "when central replies 304 then writer matches",
-			statusCode: http.StatusNotModified,
+			name:             "when central replies 200 with content then writer matches",
+			statusCode:       http.StatusOK,
+			responseBody:     "the foobar body.",
+			centralReachable: true,
+		},
+		{
+			name:             "when central replies 304 then writer matches",
+			statusCode:       http.StatusNotModified,
+			centralReachable: true,
 		},
 		{
 			name:       "when method is not GET then 405",
@@ -49,6 +60,7 @@ func TestServeHTTP_Responses(t *testing.T) {
 				},
 				request: &http.Request{},
 			},
+			centralReachable: true,
 		},
 		{
 			name:       "when request contains multiple headers then proxy all of them",
@@ -59,13 +71,14 @@ func TestServeHTTP_Responses(t *testing.T) {
 					Header: map[string][]string{"Accept-Encoding": {"foo", "bar"}},
 				},
 			},
+			centralReachable: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set args defaults.
 			if tt.args.writer == nil {
-				tt.args.writer = mock.NewResponseWriter()
+				tt.args.writer = httptest.NewRecorder()
 			}
 			if tt.args.methods == nil {
 				// Defaults to GET.
@@ -82,7 +95,7 @@ func TestServeHTTP_Responses(t *testing.T) {
 				} else {
 					tt.args.request.Method = method
 				}
-				h := &scannerDefinitionsHandler{
+				h := &Handler{
 					centralClient: &http.Client{
 						Transport: httputil.RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 							assert.Equal(t, tt.args.request.URL.RawQuery, req.URL.RawQuery)
@@ -96,8 +109,13 @@ func TestServeHTTP_Responses(t *testing.T) {
 						}),
 					},
 				}
+				h.centralReachable.Store(tt.centralReachable)
 				h.ServeHTTP(tt.args.writer, tt.args.request)
-				assert.Equal(t, tt.responseBody, tt.args.writer.Data.String())
+				if tt.jsonResponse {
+					assert.JSONEq(t, tt.responseBody, tt.args.writer.Body.String())
+				} else {
+					assert.Equal(t, tt.responseBody, tt.args.writer.Body.String())
+				}
 				assert.Equal(t, tt.statusCode, tt.args.writer.Code)
 			}
 		})

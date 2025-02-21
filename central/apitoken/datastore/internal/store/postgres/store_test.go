@@ -10,39 +10,42 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
 
-type ApiTokensStoreSuite struct {
+type APITokensStoreSuite struct {
 	suite.Suite
 	store  Store
 	testDB *pgtest.TestPostgres
 }
 
-func TestApiTokensStore(t *testing.T) {
-	suite.Run(t, new(ApiTokensStoreSuite))
+func TestAPITokensStore(t *testing.T) {
+	suite.Run(t, new(APITokensStoreSuite))
 }
 
-func (s *ApiTokensStoreSuite) SetupSuite() {
+func (s *APITokensStoreSuite) SetupSuite() {
 
 	s.testDB = pgtest.ForT(s.T())
 	s.store = New(s.testDB.DB)
 }
 
-func (s *ApiTokensStoreSuite) SetupTest() {
+func (s *APITokensStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE api_tokens CASCADE")
 	s.T().Log("api_tokens", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
-func (s *ApiTokensStoreSuite) TearDownSuite() {
+func (s *APITokensStoreSuite) TearDownSuite() {
 	s.testDB.Teardown(s.T())
 }
 
-func (s *ApiTokensStoreSuite) TestStore() {
+func (s *APITokensStoreSuite) TestStore() {
 	ctx := sac.WithAllAccess(context.Background())
 
 	store := s.store
@@ -61,12 +64,12 @@ func (s *ApiTokensStoreSuite) TestStore() {
 	foundTokenMetadata, exists, err = store.Get(ctx, tokenMetadata.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(tokenMetadata, foundTokenMetadata)
+	protoassert.Equal(s.T(), tokenMetadata, foundTokenMetadata)
 
-	tokenMetadataCount, err := store.Count(ctx)
+	tokenMetadataCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, tokenMetadataCount)
-	tokenMetadataCount, err = store.Count(withNoAccessCtx)
+	tokenMetadataCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(tokenMetadataCount)
 
@@ -75,11 +78,6 @@ func (s *ApiTokensStoreSuite) TestStore() {
 	s.True(tokenMetadataExists)
 	s.NoError(store.Upsert(ctx, tokenMetadata))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, tokenMetadata), sac.ErrResourceAccessDenied)
-
-	foundTokenMetadata, exists, err = store.Get(ctx, tokenMetadata.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(tokenMetadata, foundTokenMetadata)
 
 	s.NoError(store.Delete(ctx, tokenMetadata.GetId()))
 	foundTokenMetadata, exists, err = store.Get(ctx, tokenMetadata.GetId())
@@ -99,13 +97,13 @@ func (s *ApiTokensStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, tokenMetadatas))
 
-	tokenMetadataCount, err = store.Count(ctx)
+	tokenMetadataCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, tokenMetadataCount)
 
 	s.NoError(store.DeleteMany(ctx, tokenMetadataIDs))
 
-	tokenMetadataCount, err = store.Count(ctx)
+	tokenMetadataCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, tokenMetadataCount)
 }

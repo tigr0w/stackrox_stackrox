@@ -1,7 +1,7 @@
 import { visitFromLeftNavExpandable } from '../../helpers/nav';
 import { interactAndWaitForResponses } from '../../helpers/request';
 import { getTableRowActionButtonByName } from '../../helpers/tableHelpers';
-import { visit } from '../../helpers/visit';
+import { visit, visitWithStaticResponseForCapabilities } from '../../helpers/visit';
 
 import { selectors } from './integrations.selectors';
 
@@ -55,6 +55,8 @@ function getIntegrationsEndpointAddress(integrationSource, integrationType) {
                     return '/v1/apitokens'; // plural in endpoint address (and see next function)
                 case 'clusterInitBundle': // singular in page address
                     return '/v1/cluster-init/init-bundles'; // plural in endpoint address
+                case 'machineAccess':
+                    return '/v1/auth/m2m';
                 default:
                     return '';
             }
@@ -66,6 +68,8 @@ function getIntegrationsEndpointAddress(integrationSource, integrationType) {
             return '/v1/notifiers';
         case 'signatureIntegrations': // camelCase in page address
             return '/v1/signatureintegrations'; // lowercase in endpoint address
+        case 'cloudSources':
+            return '/v1/cloud-sources';
         default:
             return '';
     }
@@ -79,6 +83,8 @@ export function getIntegrationsEndpointAlias(integrationSource, integrationType)
                     return 'apitokens'; // plural in endpoint alias
                 case 'clusterInitBundle': // singular in page address
                     return 'cluster-init/init-bundles'; // plural in endpoint alias
+                case 'machineAccess':
+                    return '/v1/auth/m2m';
                 default:
                     return '';
             }
@@ -90,6 +96,8 @@ export function getIntegrationsEndpointAlias(integrationSource, integrationType)
             return 'notifiers';
         case 'signatureIntegrations': // camelCase in page address
             return 'signatureintegrations'; // lowercase in endpoint alias
+        case 'cloudSources':
+            return '/v1/cloud-sources';
         default:
             return '';
     }
@@ -119,7 +127,7 @@ function getIntegrationEndpointAddress(integrationSource, integrationType, integ
 const routeMatcherMapForIntegrationsDashboard = Object.fromEntries(
     [
         ['authProviders', 'apitoken'],
-        ['authProviders', 'clusterInitBundle'],
+        ['authProviders', 'machineAccess'],
         ['imageIntegrations'],
         ['signatureIntegrations'],
         ['notifiers'],
@@ -149,10 +157,12 @@ const integrationTitleMap = {
     authProviders: {
         apitoken: 'API Token',
         clusterInitBundle: 'Cluster Init Bundle',
+        machineAccess: 'Machine access configuration',
     },
     backups: {
         gcs: 'Google Cloud Storage',
         s3: 'Amazon S3',
+        s3compatible: 'S3 API Compatible',
     },
     imageIntegrations: {
         artifactory: 'JFrog Artifactory',
@@ -162,6 +172,7 @@ const integrationTitleMap = {
         clairify: 'StackRox Scanner',
         docker: 'Generic Docker Registry',
         ecr: 'Amazon ECR',
+        ghcr: 'GitHub Container Registry',
         google: 'Google Container Registry',
         ibm: 'IBM Cloud',
         nexus: 'Sonatype Nexus',
@@ -183,6 +194,10 @@ const integrationTitleMap = {
     },
     signatureIntegrations: {
         signature: 'Signature',
+    },
+    cloudSources: {
+        paladinCloud: 'Paladin Cloud',
+        ocm: 'OpenShift Cluster Manager',
     },
 };
 
@@ -215,7 +230,7 @@ export function visitIntegrationsDashboard(staticResponseMap) {
     visit(basePath, routeMatcherMapForIntegrationsDashboard, staticResponseMap);
 
     cy.get(`h1:contains("${integrationsTitle}")`);
-    cy.get(`.pf-c-nav__link.pf-m-current:contains("${integrationsTitle}")`);
+    cy.get(`.pf-v5-c-nav__link.pf-m-current:contains("${integrationsTitle}")`);
 }
 
 /**
@@ -248,6 +263,43 @@ export function visitIntegrationsTable(integrationSource, integrationType, stati
     assertIntegrationsTable(integrationSource, integrationType);
 }
 
+/**
+ * Visit an integrations page with
+ * static response either body or fixture
+ * optional segments for additional path beyond integrations dashboard
+ *
+ * @param {{ body: { [key: string]: 'CapabilityAvailable' | 'CapabilityDisabled' } } | { fixture: string }} staticResponseForCapabilities
+ * @param string [integrationSource]
+ * @param string [integrationType]
+ * @param string [integrationId]
+ * @param {String('view' | 'edit' | 'create')} [integrationAction]
+ */
+export function visitIntegrationsWithStaticResponseForCapabilities(
+    staticResponseForCapabilities,
+    integrationSource,
+    integrationType,
+    integrationId,
+    integrationAction
+) {
+    visitWithStaticResponseForCapabilities(
+        getIntegrationsPath(integrationSource, integrationType, integrationId, integrationAction),
+        staticResponseForCapabilities
+    );
+}
+export function visitIntegrationsAndVerifyRedirectWithStaticResponseForCapabilities(
+    staticResponseForCapabilities,
+    integrationSource,
+    integrationType,
+    integrationId,
+    integrationAction
+) {
+    visitWithStaticResponseForCapabilities(
+        getIntegrationsPath(integrationSource, integrationType, integrationId, integrationAction),
+        staticResponseForCapabilities
+    );
+    cy.location('pathname').should('eq', basePath);
+}
+
 // interact on dashboard
 
 export function clickIntegrationTileOnDashboard(integrationSource, integrationType) {
@@ -255,7 +307,7 @@ export function clickIntegrationTileOnDashboard(integrationSource, integrationTy
     const integrationTitle = integrationTitleMap[integrationSource][integrationType];
 
     cy.get(`h2:contains("${integrationSourceTitle}")`);
-    cy.get(`a .pf-c-card__title:contains("${integrationTitle}")`).click();
+    cy.get(`a .pf-v5-c-card__title:contains("${integrationTitle}")`).click();
 }
 
 // interact in table
@@ -263,7 +315,8 @@ export function clickIntegrationTileOnDashboard(integrationSource, integrationTy
 export function clickCreateNewIntegrationInTable(
     integrationSource,
     integrationType,
-    createLinkText = 'New integration'
+    createLinkText = 'New integration',
+    createPageTitleText = 'Create integration'
 ) {
     cy.get(`a:contains("${createLinkText}")`).click();
 
@@ -274,7 +327,7 @@ export function clickCreateNewIntegrationInTable(
     const integrationTitle = integrationTitleMap[integrationSource][integrationType];
     cy.get(`${selectors.breadcrumbItem} a:contains("${integrationsTitle}")`);
     cy.get(`${selectors.breadcrumbItem} a:contains("${integrationTitle}")`);
-    cy.get(`${selectors.breadcrumbItem}:contains("Create Integration")`); // TODO Title Case
+    cy.get(`${selectors.breadcrumbItem}:contains("${createPageTitleText}")`);
 }
 
 export function deleteIntegrationInTable(integrationSource, integrationType, integrationName) {
@@ -289,11 +342,11 @@ export function deleteIntegrationInTable(integrationSource, integrationType, int
     };
 
     interactAndWaitForResponses(() => {
-        cy.get(`tr:contains("${integrationName}") button[aria-label="Actions"]`).click();
+        cy.get(`tr:contains("${integrationName}") button[aria-label="Kebab toggle"]`).click();
         cy.get(
             `tr:contains("${integrationName}") button[role="menuitem"]:contains("Delete Integration")`
         ).click(); // TODO Title Case
-        cy.get('button:contains("Delete")').click(); // confirmation modal
+        cy.get('.pf-v5-c-modal-box__footer button:contains("Delete")').click(); // confirmation modal
     }, routeMatcherMap);
 }
 
@@ -325,7 +378,7 @@ export function revokeAuthProvidersIntegrationInTable(integrationType, integrati
     getTableRowActionButtonByName(integrationName).click();
     interactAndWaitForResponses(() => {
         cy.get('button:contains("Delete Integration")').click(); // row actions
-        cy.get('button:contains("Delete")').click(); // confirmation modal
+        cy.get('.pf-v5-c-modal-box__footer button:contains("Delete")').click(); // confirmation modal
     }, routeMatcherMap);
 }
 

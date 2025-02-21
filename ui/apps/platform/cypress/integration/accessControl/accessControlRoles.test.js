@@ -1,4 +1,5 @@
 import withAuth from '../../helpers/basicAuth';
+import { assertCannotFindThePage } from '../../helpers/visit';
 
 import {
     assertAccessControlEntityDoesNotExist,
@@ -16,7 +17,7 @@ const defaultNames = ['Admin', 'Analyst', 'Continuous Integration', 'None', 'Sen
 describe('Access Control Roles', () => {
     withAuth();
 
-    it('displays alert if no permission', () => {
+    it('cannot find the page if no permission', () => {
         const staticResponseForPermissions = {
             fixture: 'auth/mypermissionsMinimalAccess.json',
         };
@@ -25,10 +26,7 @@ describe('Access Control Roles', () => {
             staticResponseForPermissions
         );
 
-        cy.get(selectors.alertTitle).should(
-            'contain', // not have.text because it contains "Info alert:" for screen reader
-            'You do not have permission to view roles.'
-        );
+        assertCannotFindThePage();
     });
 
     it('list has heading, button, and table head cells', () => {
@@ -43,7 +41,7 @@ describe('Access Control Roles', () => {
         cy.get('th:contains("Description")');
         cy.get('th:contains("Permission set")');
         cy.get('th:contains("Access scope")');
-        cy.get('th[aria-label="Row actions"]');
+        cy.get(`th:has('span.pf-v5-screen-reader:contains("Row actions")')`);
     });
 
     it('list has default names', () => {
@@ -68,8 +66,8 @@ describe('Access Control Roles', () => {
         const entityName = 'Admin';
         clickEntityNameInTable(entitiesKey, entityName);
 
-        cy.get('h2').should('have.text', entityName);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("${entityName}")`);
+        cy.get('h1').should('have.text', entityName);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("${entityName}")`);
 
         cy.get(selectors.form.notEditableLabel).should('exist');
         cy.get(selectors.form.editButton).should('not.exist');
@@ -111,7 +109,7 @@ describe('Access Control Roles', () => {
 
         cy.get('button:contains("Create role")').click();
 
-        cy.get('h2').should('have.text', 'Create role');
+        cy.get('h1').should('have.text', 'Create role');
         cy.get(selectors.form.notEditableLabel).should('not.exist');
         cy.get(selectors.form.editButton).should('not.exist');
         cy.get(selectors.form.saveButton).should('be.disabled');
@@ -138,7 +136,7 @@ describe('Access Control Roles', () => {
         cy.contains('h2', /^\d+ results? found$/).should('exist');
         cy.get(`td[data-label="Name"] a:contains("${name}")`).click();
 
-        cy.get('h2').should('have.text', name);
+        cy.get('h1').should('have.text', name);
         cy.get(selectors.form.inputName).should('be.disabled').should('have.value', name);
         cy.get(selectors.form.notEditableLabel).should('not.exist');
         cy.get(selectors.form.editButton).should('exist');

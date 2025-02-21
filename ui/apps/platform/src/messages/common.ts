@@ -1,5 +1,4 @@
 import { AccessControlEntityType, RbacConfigType } from 'constants/entityTypes';
-import { VulnerabilitySeverity } from 'types/cve.proto';
 import {
     EnforcementAction,
     LifecycleStage,
@@ -14,13 +13,13 @@ export const severityLabels: Record<PolicySeverity, string> = Object.freeze({
     LOW_SEVERITY: 'Low',
 });
 
-export const vulnerabilitySeverityLabels: Record<VulnerabilitySeverity, string> = Object.freeze({
+export const vulnerabilitySeverityLabels = {
     CRITICAL_VULNERABILITY_SEVERITY: 'Critical',
     IMPORTANT_VULNERABILITY_SEVERITY: 'Important',
     MODERATE_VULNERABILITY_SEVERITY: 'Moderate',
     LOW_VULNERABILITY_SEVERITY: 'Low',
     UNKNOWN_VULNERABILITY_SEVERITY: 'Unknown',
-});
+} as const;
 
 export const clusterTypeLabels = Object.freeze({
     KUBERNETES_CLUSTER: 'Kubernetes Clusters',
@@ -106,14 +105,6 @@ export const accessControlLabels: Record<AccessControlEntityType, string> = {
     PERMISSION_SET: 'Permission set',
     ROLE: 'Role',
 };
-
-export const stackroxSupport = Object.freeze({
-    phoneNumber: {
-        withSpaces: '1 (650) 385-8329',
-        withDashes: '1-650-385-8329',
-    },
-    email: 'support@stackrox.com',
-});
 
 export const portExposureLabels = Object.freeze({
     ROUTE: 'Route',

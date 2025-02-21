@@ -1,10 +1,9 @@
-import React, { useState, useContext } from 'react';
+import React from 'react';
 import PropTypes from 'prop-types';
 import { gql } from '@apollo/client';
-import { List } from 'react-feather';
 
-import PanelButton from 'Components/PanelButton';
 import ImageActiveIconText from 'Components/PatternFly/IconText/ImageActiveIconText';
+import TableCellLink from 'Components/TableCellLink';
 import TopCvssLabel from 'Components/TopCvssLabel';
 import ImageTableCountLinks from 'Components/workflow/ImageTableCountLinks';
 import CVEStackedPill from 'Components/CVEStackedPill';
@@ -16,20 +15,14 @@ import {
 } from 'Components/Table';
 import entityTypes from 'constants/entityTypes';
 import { LIST_PAGE_SIZE } from 'constants/workflowPages.constants';
-import WorkflowListPage from 'Containers/Workflow/WorkflowListPage';
-import workflowStateContext from 'Containers/workflowStateContext';
-import { imageWatchStatuses } from 'Containers/VulnMgmt/VulnMgmt.constants';
-import {
-    IMAGE_LIST_FRAGMENT,
-    OLD_IMAGE_LIST_FRAGMENT,
-} from 'Containers/VulnMgmt/VulnMgmt.fragments';
+import { IMAGE_LIST_FRAGMENT } from 'Containers/VulnMgmt/VulnMgmt.fragments';
 import getImageScanMessage from 'Containers/VulnMgmt/VulnMgmt.utils/getImageScanMessage';
 import { workflowListPropTypes, workflowListDefaultProps } from 'constants/entityPageProps';
 import removeEntityContextColumns from 'utils/tableUtils';
 import { imageSortFields } from 'constants/sortFields';
 import queryService from 'utils/queryService';
-import useFeatureFlags from 'hooks/useFeatureFlags';
-import WatchedImagesDialog from './WatchedImagesDialog';
+import WorkflowListPage from '../WorkflowListPage';
+import { getVulnMgmtPathForEntitiesAndId } from '../../VulnMgmt.utils/entities';
 
 export const defaultImageSort = [
     {
@@ -38,9 +31,7 @@ export const defaultImageSort = [
     },
 ];
 
-export function getCurriedImageTableColumns(watchedImagesTrigger, isFeatureFlagEnabled) {
-    const isFrontendVMUpdatesEnabled = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-
+export function getCurriedImageTableColumns() {
     return function getImageTableColumns(workflowState) {
         const tableColumns = [
             {
@@ -53,23 +44,27 @@ export function getCurriedImageTableColumns(watchedImagesTrigger, isFeatureFlagE
                 Header: `Image`,
                 headerClassName: `w-1/6 ${defaultHeaderClassName}`,
                 className: `w-1/6 word-break-all ${defaultColumnClassName}`,
+                Cell: ({ original, pdf }) => {
+                    const url = getVulnMgmtPathForEntitiesAndId('IMAGE', original.id);
+                    return (
+                        <TableCellLink pdf={pdf} url={url}>
+                            {original.name.fullName}
+                        </TableCellLink>
+                    );
+                },
                 id: imageSortFields.NAME,
                 accessor: 'name.fullName',
                 sortField: imageSortFields.NAME,
             },
             {
-                Header: isFrontendVMUpdatesEnabled ? 'Image CVEs' : 'CVEs',
-                entityType: isFrontendVMUpdatesEnabled ? entityTypes.IMAGE_CVE : entityTypes.CVE,
+                Header: 'Image CVEs',
+                entityType: entityTypes.IMAGE_CVE,
                 headerClassName: `w-1/6 ${defaultHeaderClassName}`,
                 className: `w-1/6 ${defaultColumnClassName}`,
                 Cell: ({ original, pdf }) => {
                     const { vulnCounter, id, scanTime, scanNotes, notes } = original;
 
-                    const newState = workflowState
-                        .pushListItem(id)
-                        .pushList(
-                            isFrontendVMUpdatesEnabled ? entityTypes.IMAGE_CVE : entityTypes.CVE
-                        );
+                    const newState = workflowState.pushListItem(id).pushList(entityTypes.IMAGE_CVE);
                     const url = newState.toUrl();
                     const fixableUrl = newState.setSearch({ Fixable: true }).toUrl();
 
@@ -155,21 +150,11 @@ export function getCurriedImageTableColumns(watchedImagesTrigger, isFeatureFlagE
                 headerClassName: `w-1/10 ${nonSortableHeaderClassName}`,
                 className: `w-1/10 ${defaultColumnClassName} content-center`,
                 Cell: ({ original, pdf }) => {
-                    const { deploymentCount, watchStatus } = original;
+                    const { deploymentCount } = original;
                     const isActive = deploymentCount !== 0;
-                    const isWatched = watchStatus === imageWatchStatuses.WATCHED;
                     return (
                         <div className="flex-col justify-center items-center w-full">
                             <ImageActiveIconText isActive={isActive} isTextOnly={pdf} />
-                            {isWatched && (
-                                <button
-                                    type="button"
-                                    onClick={watchedImagesTrigger}
-                                    className="text-primary-700 text-center underline w-full"
-                                >
-                                    Scanning via watch tag
-                                </button>
-                            )}
                         </div>
                     );
                 },
@@ -183,13 +168,7 @@ export function getCurriedImageTableColumns(watchedImagesTrigger, isFeatureFlagE
                 entityType: entityTypes.DEPLOYMENT,
                 headerClassName: `w-1/12 ${defaultHeaderClassName}`,
                 className: `w-1/12 ${defaultColumnClassName}`,
-                Cell: ({ original, pdf }) => (
-                    <ImageTableCountLinks
-                        row={original}
-                        textOnly={pdf}
-                        isFrontendVMUpdatesEnabled={isFrontendVMUpdatesEnabled}
-                    />
-                ),
+                Cell: ({ original, pdf }) => <ImageTableCountLinks row={original} textOnly={pdf} />,
                 accessor: 'entities',
                 sortable: false,
             },
@@ -214,15 +193,8 @@ const VulnMgmtImages = ({
     data,
     totalResults,
     refreshTrigger,
-    setRefreshTrigger,
 }) => {
-    const [showWatchedImagesDialog, setShowWatchedImagesDialog] = useState(false);
-    const workflowState = useContext(workflowStateContext);
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVmUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-    const fragmentToUse = showVmUpdates ? IMAGE_LIST_FRAGMENT : OLD_IMAGE_LIST_FRAGMENT;
-
-    const inactiveImageScanningEnabled = workflowState.isBaseList(entityTypes.IMAGE);
+    const fragmentToUse = IMAGE_LIST_FRAGMENT;
 
     const query = gql`
         query getImages($query: String, $pagination: Pagination) {
@@ -245,65 +217,32 @@ const VulnMgmtImages = ({
         },
     };
 
-    function toggleWatchedImagesDialog(e) {
-        e.stopPropagation();
-
-        if (showWatchedImagesDialog) {
-            // changing this param value on the query vars, to force the query to refetch
-            setRefreshTrigger(Math.random());
-        }
-
-        setShowWatchedImagesDialog(!showWatchedImagesDialog);
-    }
-    const tableHeaderComponents = inactiveImageScanningEnabled ? (
-        <PanelButton
-            icon={<List className="h-4 w-4" />}
-            className="btn-icon btn-tertiary"
-            onClick={toggleWatchedImagesDialog}
-            tooltip="Manage Scanning of Watched Images"
-            dataTestId="panel-button-manage-inactive-images"
-        >
-            Manage Watches
-        </PanelButton>
-    ) : null;
-
-    const getImageTableColumns = getCurriedImageTableColumns(
-        toggleWatchedImagesDialog,
-        isFeatureFlagEnabled
-    );
+    const getImageTableColumns = getCurriedImageTableColumns();
 
     return (
-        <>
-            <WorkflowListPage
-                data={data}
-                totalResults={totalResults}
-                query={query}
-                queryOptions={queryOptions}
-                entityListType={entityTypes.IMAGE}
-                getTableColumns={getImageTableColumns}
-                selectedRowId={selectedRowId}
-                search={search}
-                sort={tableSort}
-                page={page}
-                tableHeaderComponents={tableHeaderComponents}
-            />
-            {showWatchedImagesDialog && (
-                <WatchedImagesDialog closeDialog={toggleWatchedImagesDialog} />
-            )}
-        </>
+        <WorkflowListPage
+            data={data}
+            totalResults={totalResults}
+            query={query}
+            queryOptions={queryOptions}
+            entityListType={entityTypes.IMAGE}
+            getTableColumns={getImageTableColumns}
+            selectedRowId={selectedRowId}
+            search={search}
+            sort={tableSort}
+            page={page}
+        />
     );
 };
 
 VulnMgmtImages.propTypes = {
     ...workflowListPropTypes,
     refreshTrigger: PropTypes.number,
-    setRefreshTrigger: PropTypes.func,
 };
 
 VulnMgmtImages.defaultProps = {
     ...workflowListDefaultProps,
     refreshTrigger: 0,
-    setRefreshTrigger: null,
 };
 
 export default VulnMgmtImages;

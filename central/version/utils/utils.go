@@ -6,6 +6,7 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/migrations"
 	"github.com/stackrox/rox/pkg/postgres"
+	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/timestamp"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/pkg/version"
@@ -30,7 +31,7 @@ func ReadVersionPostgres(pool postgres.DB) (*migrations.MigrationVersion, error)
 }
 
 // ReadPreviousVersionPostgres - reads the version from the postgres database.
-// TODO(ROX-16774) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
+// TODO(ROX-18005) -- remove this.  During transition away from serialized version, UpgradeStatus will make this call against
 // the older database.  In that case we will need to process the serialized data.
 func ReadPreviousVersionPostgres(pool postgres.DB) (*migrations.MigrationVersion, error) {
 	store := vStore.NewPostgres(pool)
@@ -58,7 +59,7 @@ func SetCurrentVersionPostgres(pool postgres.DB) {
 			SeqNum:        int32(migrations.CurrentDBVersionSeqNum()),
 			Version:       version.GetMainVersion(),
 			MinSeqNum:     int32(migrations.MinimumSupportedDBVersionSeqNum()),
-			LastPersisted: timestamp.Now().GogoProtobuf(),
+			LastPersisted: protoconv.ConvertMicroTSToProtobufTS(timestamp.Now()),
 		}
 		setVersionPostgres(pool, newVersion)
 	}

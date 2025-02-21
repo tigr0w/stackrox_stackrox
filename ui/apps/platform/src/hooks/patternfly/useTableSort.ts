@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ThProps } from '@patternfly/react-table';
 import { SortOption } from 'types/table';
-import { ApiSortOption } from 'types/search';
+import { ApiSortOptionSingle } from 'types/search';
 
 export type GetSortParams = (field: string) => ThProps['sort'];
 
@@ -11,7 +11,7 @@ type UseTableSortProps = {
 };
 
 type UseTableSortResult = {
-    sortOption: ApiSortOption;
+    sortOption: ApiSortOptionSingle;
     getSortParams: GetSortParams;
 };
 
@@ -29,10 +29,13 @@ function useURLSort({ sortFields, defaultSortOption }: UseTableSortProps): UseTa
     // we'll construct a map of sort fields to ids that will make it easier to work with
     // PatternFly
     useEffect(() => {
-        const newFieldToIdMap = sortFields.reduce((acc, curr, index) => {
-            acc[curr] = index;
-            return acc;
-        }, {} as Record<string, number>);
+        const newFieldToIdMap = sortFields.reduce(
+            (acc, curr, index) => {
+                acc[curr] = index;
+                return acc;
+            },
+            {} as Record<string, number>
+        );
         setFieldToIdMap(newFieldToIdMap);
     }, [sortFields]);
 

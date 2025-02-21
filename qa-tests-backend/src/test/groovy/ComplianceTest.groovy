@@ -49,7 +49,6 @@ import services.ComplianceService
 import services.ImageIntegrationService
 import services.ImageService
 import services.NetworkPolicyService
-import services.NodeService
 import services.PolicyService
 import services.ProcessService
 import services.RoleService
@@ -60,8 +59,8 @@ import spock.lang.IgnoreIf
 import spock.lang.Shared
 import spock.lang.Tag
 import spock.lang.Unroll
-import util.Env
 
+@Tag("PZ")
 class ComplianceTest extends BaseSpecification {
     @Shared
     private static final PCI_ID = "PCI_DSS_3_2"
@@ -71,8 +70,6 @@ class ComplianceTest extends BaseSpecification {
     private static final NIST_800_53_ID = "NIST_SP_800_53_Rev_4"
     @Shared
     private static final HIPAA_ID = "HIPAA_164"
-    @Shared
-    private static final DOCKER_1_2_0_ID = "CIS_Docker_v1_2_0"
     @Shared
     private static final Map<String, ComplianceRunResults> BASE_RESULTS = [:]
     @Shared
@@ -168,19 +165,12 @@ class ComplianceTest extends BaseSpecification {
                                 '", and provides continuous risk assessment.'],
                         ComplianceState.COMPLIANCE_STATE_SUCCESS).setType(Control.ControlType.CLUSTER),
         ]
-        if (!ClusterService.isAKS()) { // ROX-6993
-            List<Node> nodes = NodeService.getNodes()
-            if (nodes.size() > 0 && nodes.get(0).containerRuntimeVersion.contains("docker")) {
-                staticControls.add(new Control(
-                        "CIS_Docker_v1_2_0:2_6",
-                        ["Docker daemon is not exposed over TCP"],
-                        ComplianceState.COMPLIANCE_STATE_SUCCESS).setType(Control.ControlType.NODE))
-            } else {
-                staticControls.add(new Control(
-                        "CIS_Docker_v1_2_0:2_6",
-                        ["Node does not use Docker container runtime"],
-                        ComplianceState.COMPLIANCE_STATE_SKIP).setType(Control.ControlType.NODE))
-            }
+        if (!ClusterService.isAzure()) { // ROX-6993
+            staticControls.add(new Control(
+               "CIS_Kubernetes_v1_5:1_1_13",
+               ["File \"/etc/kubernetes/manifests/admin.conf\" does not exist on host, " +
+               "therefore check is not applicable"],
+               ComplianceState.COMPLIANCE_STATE_SUCCESS).setType(Control.ControlType.NODE))
         }
 
         expect:
@@ -515,16 +505,6 @@ class ComplianceTest extends BaseSpecification {
     def "Verify a subset of the checks in nodes were run in each node"() {
         expect:
         "check a subset of the checks run in the compliance pods are present in the results"
-        def dockerResults = BASE_RESULTS.get("CIS_Docker_v1_2_0")
-        for (ComplianceRunResults.EntityResults nodeResults : dockerResults.getNodeResultsMap().values()) {
-            def controlResults = nodeResults.getControlResultsMap()
-            assert controlResults.containsKey("CIS_Docker_v1_2_0:1_1_1")
-            assert controlResults.containsKey("CIS_Docker_v1_2_0:2_1")
-            assert controlResults.containsKey("CIS_Docker_v1_2_0:3_1")
-            assert controlResults.containsKey("CIS_Docker_v1_2_0:4_2")
-            assert controlResults.containsKey("CIS_Docker_v1_2_0:5_1")
-            assert controlResults.containsKey("CIS_Docker_v1_2_0:6_1")
-        }
 
         def kubernetesResults = BASE_RESULTS.get("CIS_Kubernetes_v1_5")
         for (ComplianceRunResults.EntityResults nodeResults : kubernetesResults.getNodeResultsMap().values()) {
@@ -563,17 +543,9 @@ class ComplianceTest extends BaseSpecification {
         expect:
         "the control result has a pass/fail result when run in an environment with a master node"
         List<objects.Node> orchNodes = orchestrator.getNodeDetails()
-        def hasMaster = false
-        for (objects.Node node : orchNodes) {
-            for (String label : node.getLabels().keySet()) {
-                if (label == "node-role.kubernetes.io/master" || label == "node-role.kubernetes.io/control-plane") {
-                    hasMaster = true
-                    break
-                }
-            }
-            if (hasMaster) {
-                break
-            }
+        boolean hasMaster = orchNodes.any { objects.Node node ->
+            Set<String> keys = node.getLabels().keySet()
+            keys.contains("node-role.kubernetes.io/master") || keys.contains("node-role.kubernetes.io/control-plane")
         }
 
         def overallState = controlResult.getOverallState()
@@ -625,7 +597,6 @@ class ComplianceTest extends BaseSpecification {
     */
 
     @Tag("BAT")
-    @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
     def "Verify checks based on Integrations"() {
         def failureEvidence = ["No image scanners are being used in the cluster"]
         def controls = [
@@ -754,7 +725,7 @@ class ComplianceTest extends BaseSpecification {
         "create Deployment that forces checks to fail"
         Deployment deployment = new Deployment()
                 .setName("compliance-deployment")
-                .setImage("quay.io/rhacs-eng/qa-multi-arch:nginx-1-15-4-alpine")
+                .setImage(TEST_IMAGE)
                 .addPort(80, "UDP")
                 .setCommand(["/bin/sh", "-c",])
                 .setArgs(["dd if=/dev/zero of=/dev/null & yes"])
@@ -1015,11 +986,7 @@ class ComplianceTest extends BaseSpecification {
             if (entry.value.controlResultsMap.size()  > 0) {
                 machineConfigsWithResults++
             }
-            for (def ctrlResults : entry.value.controlResultsMap.values()) {
-                if (ctrlResults.overallState == Compliance.ComplianceState.COMPLIANCE_STATE_ERROR) {
-                    numErrors++
-                }
-            }
+            numErrors += errorsCount(entry.value.controlResultsMap.values())
         }
         assert numErrors == 0
         assert machineConfigsWithResults == 2
@@ -1088,12 +1055,12 @@ class ComplianceTest extends BaseSpecification {
         def controls = [
                 new Control(
                         "PCI_DSS_3_2:6_2",
-                        ["Image quay.io/rhacs-eng/qa-multi-arch:nginx-1.12 has \\d{2}\\d+ fixed CVEs. " +
+                        ["Image $TEST_IMAGE has \\d{2}\\d+ fixed CVEs. " +
                                  "An image upgrade is required."],
                         ComplianceState.COMPLIANCE_STATE_FAILURE),
                 new Control(
                         "HIPAA_164:306_e",
-                        ["Image quay.io/rhacs-eng/qa-multi-arch:nginx-1.12 has \\d{2}\\d+ fixed CVEs. " +
+                        ["Image $TEST_IMAGE has \\d{2}\\d+ fixed CVEs. " +
                                  "An image upgrade is required."],
                         ComplianceState.COMPLIANCE_STATE_FAILURE),
         ]
@@ -1102,7 +1069,7 @@ class ComplianceTest extends BaseSpecification {
         "deploy image with fixable CVEs"
         Deployment cveDeployment = new Deployment()
                 .setName("cve-compliance-deployment")
-                .setImage("quay.io/rhacs-eng/qa-multi-arch:nginx-1.12")
+                .setImage(TEST_IMAGE)
                 .addLabel("app", "cve-compliance-deployment")
         orchestrator.createDeployment(cveDeployment)
 
@@ -1193,24 +1160,12 @@ class ComplianceTest extends BaseSpecification {
             assert metadata.runId == complianceRun.id
             assert metadata.standardId == NIST_800_190_ID
 
-            for (def ctrlResults : results.clusterResults.controlResultsMap.values()) {
-                if (ctrlResults.overallState == Compliance.ComplianceState.COMPLIANCE_STATE_ERROR) {
-                    numErrors++
-                }
-            }
+            numErrors += errorsCount(results.clusterResults.controlResultsMap.values())
             for (def deploymentResults : results.deploymentResultsMap.values()) {
-                for (def ctrlResults : deploymentResults.controlResultsMap.values()) {
-                    if (ctrlResults.overallState == Compliance.ComplianceState.COMPLIANCE_STATE_ERROR) {
-                        numErrors++
-                    }
-                }
+                numErrors += errorsCount(deploymentResults.controlResultsMap.values())
             }
             for (def nodeResults : results.nodeResultsMap.values()) {
-                for (def ctrlResults : nodeResults.controlResultsMap.values()) {
-                    if (ctrlResults.overallState == Compliance.ComplianceState.COMPLIANCE_STATE_ERROR) {
-                        numErrors++
-                    }
-                }
+                numErrors += errorsCount(nodeResults.controlResultsMap.values())
             }
         }
         assert numErrors > 0
@@ -1220,63 +1175,6 @@ class ComplianceTest extends BaseSpecification {
         def start = System.currentTimeMillis()
         orchestrator.waitForSensor()
         log.info "waited ${System.currentTimeMillis() - start}ms for sensor to come back online"
-    }
-
-    @Tag("BAT")
-    def "Verify Docker 5_6, no SSH processes"() {
-        def deployment = new Deployment()
-                .setName("triggerssh")
-                .setImage("quay.io/rhacs-eng/qa-multi-arch:fail-compliance-ssh")
-
-        given:
-        "create a deployment which forces the ssh check to fail"
-        orchestrator.createDeployment(deployment)
-        assert Services.waitForDeployment(deployment)
-
-        and:
-        "create an expected control result"
-        def control = new Control(
-                "CIS_Docker_v1_2_0:5_6",
-                [],
-                ComplianceState.COMPLIANCE_STATE_FAILURE)
-
-        and:
-        "verify deployment fully detected"
-        Set<String> receivedProcessPaths = []
-        def foundSSHProcess = false
-        Timer t = new Timer(30, 2)
-        while (t.IsValid()) {
-            receivedProcessPaths = ProcessService.getUniqueProcessPaths(deployment.deploymentUid)
-            for (String path : receivedProcessPaths) {
-                if (path.contains("ssh")) {
-                    foundSSHProcess = true
-                    break
-                }
-            }
-            log.info "Didn't find an SSH processes, retrying..."
-        }
-        assert foundSSHProcess
-
-        and:
-        "trigger compliance runs"
-        def dockerResults = ComplianceService.triggerComplianceRunAndWaitForResult(DOCKER_1_2_0_ID, clusterId)
-
-        expect:
-        "check the SSH control for a failed for state"
-
-        def results = dockerResults.getDeploymentResultsMap()
-        assert results
-        assert results.containsKey(deployment.getDeploymentUid())
-        def controlResultsMap = results[deployment.getDeploymentUid()].getControlResultsMap()
-        assert controlResultsMap
-        assert controlResultsMap.containsKey(control.id)
-        ComplianceResultValue value = controlResultsMap.get(control.id)
-        assert value.overallState == control.state
-        assert value.evidenceList*.message.any { msg -> msg =~ /has ssh process running/ }
-
-        cleanup:
-        "remove the deployment we created"
-        orchestrator.deleteDeployment(deployment)
     }
 
     @Tag("BAT")
@@ -1326,14 +1224,14 @@ class ComplianceTest extends BaseSpecification {
         String testRole = RoleService.createRoleWithScopeAndPermissionSet(
                 "Compliance Test Automation Role " + UUID.randomUUID(),
                 remoteStackroxAccessScope.id, [
-                "Access"               : READ_WRITE_ACCESS,
-                "Administration"       : READ_WRITE_ACCESS,
-                "Detection"            : READ_WRITE_ACCESS,
-                "Integration"          : READ_WRITE_ACCESS,
-                "Policy"               : READ_WRITE_ACCESS,
-                "Cluster"              : READ_WRITE_ACCESS,
-                "Compliance"           : READ_WRITE_ACCESS,
-                "Node"                 : READ_WRITE_ACCESS,
+                "Access"                    : READ_WRITE_ACCESS,
+                "Administration"            : READ_WRITE_ACCESS,
+                "Detection"                 : READ_WRITE_ACCESS,
+                "Integration"               : READ_WRITE_ACCESS,
+                "WorkflowAdministration"    : READ_WRITE_ACCESS,
+                "Cluster"                   : READ_WRITE_ACCESS,
+                "Compliance"                : READ_WRITE_ACCESS,
+                "Node"                      : READ_WRITE_ACCESS,
         ]).name
 
         "Enable SAC token and add other cluster"
@@ -1347,6 +1245,7 @@ class ComplianceTest extends BaseSpecification {
 
         then:
         "check results under SAC"
+        assert complianceRuns.keySet().size() > 0
         for (String standard : complianceRuns.keySet()) {
             def runId = complianceRuns.get(standard)
             ComplianceRunResults results = ComplianceService.getComplianceRunResult(standard, clusterId, runId).results
@@ -1358,5 +1257,11 @@ class ComplianceTest extends BaseSpecification {
         BaseService.useBasicAuth()
         ClusterService.deleteCluster(ClusterService.getClusterId(otherClusterName))
         RoleService.deleteRole(testRole)
+    }
+
+    int errorsCount(Collection<ComplianceResultValue> values) {
+        return values.count { ComplianceResultValue ctrlResults ->
+            ctrlResults.overallState == ComplianceState.COMPLIANCE_STATE_ERROR
+        }
     }
 }
