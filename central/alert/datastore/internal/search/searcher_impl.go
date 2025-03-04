@@ -5,37 +5,25 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/stackrox/rox/central/alert/datastore/internal/index"
 	"github.com/stackrox/rox/central/alert/datastore/internal/store"
-	"github.com/stackrox/rox/central/alert/mappings"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/alert/convert"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/logging"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
-	"github.com/stackrox/rox/pkg/search/paginated"
-	"github.com/stackrox/rox/pkg/search/sortfields"
 )
 
-var (
-	log = logging.LoggerForModule()
-
-	alertSearchHelper            = sac.ForResource(resources.Alert).MustCreateSearchHelper(mappings.OptionsMap)
-	alertPostgresSACSearchHelper = sac.ForResource(resources.Alert).MustCreatePgSearchHelper()
-)
+type AlertSearcher interface {
+	Search(ctx context.Context, q *v1.Query, excludeResolved bool) ([]search.Result, error)
+	Count(ctx context.Context, q *v1.Query, excludeResolved bool) (int, error)
+}
 
 // searcherImpl provides an intermediary implementation layer for AlertStorage.
 type searcherImpl struct {
 	storage           store.Store
-	indexer           index.Indexer
-	formattedSearcher search.Searcher
+	formattedSearcher AlertSearcher
 }
 
-// SearchAlerts retrieves SearchResults from the indexer and storage
+// SearchAlerts retrieves SearchResults from the storage
 func (ds *searcherImpl) SearchAlerts(ctx context.Context, q *v1.Query) ([]*v1.SearchResult, error) {
 	alerts, results, err := ds.searchListAlerts(ctx, q)
 	if err != nil {
@@ -48,32 +36,31 @@ func (ds *searcherImpl) SearchAlerts(ctx context.Context, q *v1.Query) ([]*v1.Se
 	return protoResults, nil
 }
 
-// SearchListAlerts retrieves list alerts from the indexer and storage
-func (ds *searcherImpl) SearchListAlerts(ctx context.Context, q *v1.Query) ([]*storage.ListAlert, error) {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
+// SearchListAlerts retrieves list alerts from the storage, passing excludeResolved = true will exclude resolved alerts unless the query has explicitly added Violation State = Resolved to the filter
+func (ds *searcherImpl) SearchListAlerts(ctx context.Context, q *v1.Query, excludeResolved bool) ([]*storage.ListAlert, error) {
+	if excludeResolved {
 		q = applyDefaultState(q)
-		alerts, err := ds.storage.GetByQuery(ctx, q)
-		if err != nil {
-			return nil, err
-		}
-		listAlerts := make([]*storage.ListAlert, 0, len(alerts))
-		for _, alert := range alerts {
-			listAlerts = append(listAlerts, convert.AlertToListAlert(alert))
-		}
-		return listAlerts, nil
 	}
-	alerts, _, err := ds.searchListAlerts(ctx, q)
-	return alerts, err
+	alerts, err := ds.storage.GetByQuery(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	listAlerts := make([]*storage.ListAlert, 0, len(alerts))
+	for _, alert := range alerts {
+		listAlerts = append(listAlerts, convert.AlertToListAlert(alert))
+	}
+	return listAlerts, nil
+
 }
 
-// SearchRawAlerts retrieves Alerts from the indexer and storage
-func (ds *searcherImpl) SearchRawAlerts(ctx context.Context, q *v1.Query) ([]*storage.Alert, error) {
-	alerts, err := ds.searchAlerts(ctx, q)
+// SearchRawAlerts retrieves Alerts from the storage
+func (ds *searcherImpl) SearchRawAlerts(ctx context.Context, q *v1.Query, excludeResolved bool) ([]*storage.Alert, error) {
+	alerts, err := ds.searchAlerts(ctx, q, excludeResolved)
 	return alerts, err
 }
 
 func (ds *searcherImpl) searchListAlerts(ctx context.Context, q *v1.Query) ([]*storage.ListAlert, []search.Result, error) {
-	results, err := ds.Search(ctx, q)
+	results, err := ds.Search(ctx, q, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -89,30 +76,21 @@ func (ds *searcherImpl) searchListAlerts(ctx context.Context, q *v1.Query) ([]*s
 	return listAlerts, results, nil
 }
 
-func (ds *searcherImpl) searchAlerts(ctx context.Context, q *v1.Query) ([]*storage.Alert, error) {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
+func (ds *searcherImpl) searchAlerts(ctx context.Context, q *v1.Query, excludeResolved bool) ([]*storage.Alert, error) {
+	if excludeResolved {
 		q = applyDefaultState(q)
-		return ds.storage.GetByQuery(ctx, q)
 	}
-	results, err := ds.Search(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	alerts, _, err := ds.storage.GetMany(ctx, search.ResultsToIDs(results))
-	if err != nil {
-		return nil, err
-	}
-	return alerts, nil
+	return ds.storage.GetByQuery(ctx, q)
 }
 
 // Search takes a SearchRequest and finds any matches
-func (ds *searcherImpl) Search(ctx context.Context, q *v1.Query) ([]search.Result, error) {
-	return ds.formattedSearcher.Search(ctx, q)
+func (ds *searcherImpl) Search(ctx context.Context, q *v1.Query, excludeResolved bool) ([]search.Result, error) {
+	return ds.formattedSearcher.Search(ctx, q, excludeResolved)
 }
 
 // Count returns the number of search results from the query
-func (ds *searcherImpl) Count(ctx context.Context, q *v1.Query) (int, error) {
-	return ds.formattedSearcher.Count(ctx, q)
+func (ds *searcherImpl) Count(ctx context.Context, q *v1.Query, excludeResolved bool) (int, error) {
+	return ds.formattedSearcher.Count(ctx, q, excludeResolved)
 }
 
 // convertAlert returns proto search result from an alert object and the internal search result
@@ -147,17 +125,8 @@ func convertAlert(alert *storage.ListAlert, result search.Result) *v1.SearchResu
 // Helper functions which format our searching.
 ///////////////////////////////////////////////
 
-func formatSearcher(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher {
-	var filteredSearcher search.Searcher
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		// Make the UnsafeSearcher safe.
-		filteredSearcher = alertPostgresSACSearchHelper.FilteredSearcher(unsafeSearcher)
-	} else {
-		filteredSearcher = alertSearchHelper.FilteredSearcher(unsafeSearcher) // Make the UnsafeSearcher safe.
-		filteredSearcher = sortfields.TransformSortFields(filteredSearcher, mappings.OptionsMap)
-		filteredSearcher = paginated.Paginated(filteredSearcher)
-	}
-	withDefaultViolationState := withDefaultActiveViolations(filteredSearcher)
+func formatSearcher(searcher search.Searcher) AlertSearcher {
+	withDefaultViolationState := withDefaultActiveViolations(searcher)
 	return withDefaultViolationState
 }
 
@@ -186,7 +155,7 @@ func applyDefaultState(q *v1.Query) *v1.Query {
 }
 
 // If no active violation field is set, add one by default.
-func withDefaultActiveViolations(searcher search.Searcher) search.Searcher {
+func withDefaultActiveViolations(searcher search.Searcher) AlertSearcher {
 	return &defaultViolationStateSearcher{
 		searcher: searcher,
 	}
@@ -196,12 +165,16 @@ type defaultViolationStateSearcher struct {
 	searcher search.Searcher
 }
 
-func (ds *defaultViolationStateSearcher) Search(ctx context.Context, q *v1.Query) ([]search.Result, error) {
-	q = applyDefaultState(q)
+func (ds *defaultViolationStateSearcher) Search(ctx context.Context, q *v1.Query, excludeResolved bool) ([]search.Result, error) {
+	if excludeResolved {
+		q = applyDefaultState(q)
+	}
 	return ds.searcher.Search(ctx, q)
 }
 
-func (ds *defaultViolationStateSearcher) Count(ctx context.Context, q *v1.Query) (int, error) {
-	q = applyDefaultState(q)
+func (ds *defaultViolationStateSearcher) Count(ctx context.Context, q *v1.Query, excludeResolved bool) (int, error) {
+	if excludeResolved {
+		q = applyDefaultState(q)
+	}
 	return ds.searcher.Count(ctx, q)
 }

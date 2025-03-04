@@ -12,7 +12,8 @@ Location: `./helm/stackrox-central`
 
 Installs:
  - `central`
- - `scanner`
+ - `scanner`, if enabled
+ - `scanner-v4`, if enabled
 
 ## StackRox secured cluster services
 
@@ -22,6 +23,7 @@ Installs:
  - `admission-controller`
  - `sensor`
  - `collector`
+ - `scanner`, if enabled
 
 ## Developing helm charts
 
@@ -81,9 +83,6 @@ $ helm list -n stackrox
 
 # To uninstall central, run:
 $ helm uninstall stackrox-central-services -n stackrox
-
-# Delete the pvc if you want to reset the database
-$ kubectl -n stackrox delete pvc stackrox-db
 
 # To access central, forward port 443:
 $ kubectl -n stackrox port-forward svc/central 8000:443 &

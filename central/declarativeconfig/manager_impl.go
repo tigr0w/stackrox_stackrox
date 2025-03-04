@@ -2,7 +2,6 @@ package declarativeconfig
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path"
 	"reflect"
@@ -10,29 +9,29 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
-	timestamp "github.com/gogo/protobuf/types"
 	"github.com/hashicorp/go-multierror"
 	"github.com/mitchellh/hashstructure/v2"
 	"github.com/pkg/errors"
+	declarativeConfigHealth "github.com/stackrox/rox/central/declarativeconfig/health/datastore"
 	"github.com/stackrox/rox/central/declarativeconfig/types"
 	"github.com/stackrox/rox/central/declarativeconfig/updater"
 	declarativeConfigUtils "github.com/stackrox/rox/central/declarativeconfig/utils"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/declarativeconfig/transform"
 	"github.com/stackrox/rox/pkg/errox"
-	"github.com/stackrox/rox/pkg/integrationhealth"
 	"github.com/stackrox/rox/pkg/k8scfgwatch"
 	"github.com/stackrox/rox/pkg/maputil"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sliceutils"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/telemetry/phonehome"
 	"github.com/stackrox/rox/pkg/utils"
+	"golang.org/x/exp/maps"
 )
 
 const (
@@ -40,11 +39,9 @@ const (
 
 	// The number of consecutive errors for a declarative configuration that causes its health status to be UNHEALTHY.
 	consecutiveReconciliationErrorThreshold = 3
-
-	handlerIntegrationHealthStatusPrefix = "Config Map"
 )
 
-type protoMessagesByType = map[reflect.Type][]proto.Message
+type protoMessagesByType = map[reflect.Type][]protocompat.Message
 
 type managerImpl struct {
 	once sync.Once
@@ -69,8 +66,8 @@ type managerImpl struct {
 
 	reconciliationCtx context.Context
 
-	declarativeConfigErrorReporter integrationhealth.Reporter
-	errorsPerDeclarativeConfig     map[string]int32
+	declarativeConfigHealthDS  declarativeConfigHealth.DataStore
+	errorsPerDeclarativeConfig map[string]int32
 
 	updaters map[reflect.Type]updater.ResourceUpdater
 
@@ -90,24 +87,25 @@ var protoTypesOrder = []reflect.Type{
 // Note that it will not watch the declarative configuration directories when created, only after
 // ReconcileDeclarativeConfigurations has been called.
 func New(reconciliationTickerDuration, watchIntervalDuration time.Duration, updaters map[reflect.Type]updater.ResourceUpdater,
-	reconciliationErrorReporter integrationhealth.Reporter, nameExtractor types.NameExtractor, idExtractor types.IDExtractor) Manager {
+	declarativeConfigHealthStore declarativeConfigHealth.DataStore, nameExtractor types.NameExtractor, idExtractor types.IDExtractor) Manager {
 	writeDeclarativeRoleCtx := declarativeconfig.WithModifyDeclarativeResource(context.Background())
 	writeDeclarativeRoleCtx = sac.WithGlobalAccessScopeChecker(writeDeclarativeRoleCtx,
 		sac.AllowFixedScopes(
 			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
 			sac.ResourceScopeKeys(resources.Access, resources.Integration)))
+
 	return &managerImpl{
-		universalTransformer:           transform.New(),
-		transformedMessagesByHandler:   map[string]protoMessagesByType{},
-		reconciliationTickerDuration:   reconciliationTickerDuration,
-		watchIntervalDuration:          watchIntervalDuration,
-		updaters:                       updaters,
-		reconciliationCtx:              writeDeclarativeRoleCtx,
-		declarativeConfigErrorReporter: reconciliationErrorReporter,
-		errorsPerDeclarativeConfig:     map[string]int32{},
-		idExtractor:                    idExtractor,
-		nameExtractor:                  nameExtractor,
-		shortCircuitSignal:             concurrency.NewSignal(),
+		universalTransformer:         transform.New(),
+		transformedMessagesByHandler: map[string]protoMessagesByType{},
+		reconciliationTickerDuration: reconciliationTickerDuration,
+		watchIntervalDuration:        watchIntervalDuration,
+		updaters:                     updaters,
+		reconciliationCtx:            writeDeclarativeRoleCtx,
+		declarativeConfigHealthDS:    declarativeConfigHealthStore,
+		errorsPerDeclarativeConfig:   map[string]int32{},
+		idExtractor:                  idExtractor,
+		nameExtractor:                nameExtractor,
+		shortCircuitSignal:           concurrency.NewSignal(),
 	}
 }
 
@@ -151,10 +149,7 @@ func (m *managerImpl) ReconcileDeclarativeConfigurations() {
 			startedWatchHandler = true
 			numberOfWatchHandlers++
 
-			if err := m.declarativeConfigErrorReporter.Register(dirToWatch, handlerNameForIntegrationHealth(dirToWatch),
-				storage.IntegrationHealth_DECLARATIVE_CONFIG); err != nil {
-				utils.Should(errors.Wrapf(err, "registering health status for handler %s", dirToWatch))
-			}
+			m.registerDeclarativeConfigHealth(declarativeConfigUtils.HealthStatusForHandler(dirToWatch, nil))
 		}
 
 		// Only start the reconciliation loop if at least one watch handler has been started.
@@ -176,14 +171,19 @@ func (m *managerImpl) Gather() phonehome.GatherFunc {
 
 // UpdateDeclarativeConfigContents will take the file contents and transform these to declarative configurations.
 func (m *managerImpl) UpdateDeclarativeConfigContents(handlerID string, contents [][]byte) {
+	// Operate the whole function under a single lock.
+	// This is due to the nature of the function being called from multiple go routines, and the possibility currently
+	// being there that two concurrent calls to Update lead to transformed configurations being potentially overwritten.
+	m.transformedMessagesMutex.Lock()
+	defer m.transformedMessagesMutex.Unlock()
 	configurations, err := declarativeconfig.ConfigurationFromRawBytes(contents...)
 	if err != nil {
-		m.updateHandlerHealth(handlerID, err)
+		m.updateDeclarativeConfigHealth(declarativeConfigUtils.HealthStatusForHandler(handlerID, err))
 		log.Debugf("Error during unmarshalling of declarative configuration files: %+v", err)
 		return
 	}
 
-	transformedConfigurations := make(map[reflect.Type][]proto.Message, len(configurations))
+	transformedConfigurations := make(map[reflect.Type][]protocompat.Message, len(configurations))
 	var transformationErrors *multierror.Error
 	for _, configuration := range configurations {
 		transformedConfig, err := m.universalTransformer.Transform(configuration)
@@ -195,19 +195,13 @@ func (m *managerImpl) UpdateDeclarativeConfigContents(handlerID string, contents
 		for protoType, protoMessages := range transformedConfig {
 			transformedConfigurations[protoType] = append(transformedConfigurations[protoType], protoMessages...)
 			// Register health status for all new messages. Existing messages will not be re-registered.
-			m.registerHealthForMessage(handlerID, protoMessages...)
+			m.registerHealthForMessages(handlerID, protoMessages...)
 		}
 	}
+	m.updateDeclarativeConfigHealth(declarativeConfigUtils.HealthStatusForHandler(handlerID,
+		errors.Wrap(transformationErrors.ErrorOrNil(), "during transforming configuration")))
 
-	if err := transformationErrors.ErrorOrNil(); err != nil {
-		m.updateHandlerHealth(handlerID, errors.Wrap(err, "during transforming configuration"))
-	} else {
-		m.updateHandlerHealth(handlerID, nil)
-	}
-
-	m.transformedMessagesMutex.Lock()
 	m.transformedMessagesByHandler[handlerID] = transformedConfigurations
-	m.transformedMessagesMutex.Unlock()
 	m.shortCircuitReconciliationLoop()
 }
 
@@ -243,15 +237,15 @@ func (m *managerImpl) reconciliationLoop() {
 }
 
 func (m *managerImpl) runReconciliation() {
-	m.transformedMessagesMutex.RLock()
-	transformedMessagesByHandler := maputil.ShallowClone(m.transformedMessagesByHandler)
-	m.transformedMessagesMutex.RUnlock()
+	transformedMessagesByHandler := concurrency.WithRLock1(&m.transformedMessagesMutex, func() map[string]protoMessagesByType {
+		return maputil.ShallowClone(m.transformedMessagesByHandler)
+	})
 
 	m.reconcileTransformedMessages(transformedMessagesByHandler)
 }
 
 func (m *managerImpl) reconcileTransformedMessages(transformedMessagesByHandler map[string]protoMessagesByType) {
-	log.Debugf("Run reconciliation for the next handlers: %v", maputil.Keys(transformedMessagesByHandler))
+	log.Debugf("Run reconciliation for the next handlers: %v", maps.Keys(transformedMessagesByHandler))
 
 	hasChanges := m.calculateHashAndIndicateChanges(transformedMessagesByHandler)
 
@@ -334,49 +328,27 @@ func (m *managerImpl) doDeletion(transformedMessagesByHandler map[string]protoMe
 // In case err == nil, the health status will be set to healthy.
 // In case err != nil _and_ the number of errors for this message is >= the given threshold, the health
 // status will be set to unhealthy.
-func (m *managerImpl) updateHealthForMessage(handler string, message proto.Message, err error, threshold int32) {
+func (m *managerImpl) updateHealthForMessage(handler string, message protocompat.Message, err error, threshold int32) {
 	messageID := m.idExtractor(message)
-	integrationHealth := declarativeConfigUtils.IntegrationHealthForProtoMessage(message, handler, err, m.idExtractor, m.nameExtractor)
+	healthStatus := declarativeConfigUtils.HealthStatusForProtoMessage(message, handler, err, m.idExtractor, m.nameExtractor)
 
 	if err != nil {
 		m.errorsPerDeclarativeConfig[messageID]++
 		if m.errorsPerDeclarativeConfig[messageID] >= threshold {
-			m.declarativeConfigErrorReporter.UpdateIntegrationHealthAsync(integrationHealth)
+			m.updateDeclarativeConfigHealth(healthStatus)
 		}
 		log.Debugf("Error within reconciliation for %+v: %v", message, err)
 	} else {
 		m.errorsPerDeclarativeConfig[messageID] = 0
-		m.declarativeConfigErrorReporter.UpdateIntegrationHealthAsync(integrationHealth)
+		m.updateDeclarativeConfigHealth(healthStatus)
 		log.Debugf("Message %+v marked as healthy", message)
 	}
 }
 
-// updateHandlerHealth will update the health status of a handler using the integrationhealth.Reporter.
-func (m *managerImpl) updateHandlerHealth(handlerID string, err error) {
-	var errMsg string
-	if err != nil {
-		errMsg = err.Error()
-	}
-
-	m.declarativeConfigErrorReporter.UpdateIntegrationHealthAsync(&storage.IntegrationHealth{
-		Id:            handlerID,
-		Name:          handlerNameForIntegrationHealth(handlerID),
-		Type:          storage.IntegrationHealth_DECLARATIVE_CONFIG,
-		Status:        utils.IfThenElse(err != nil, storage.IntegrationHealth_UNHEALTHY, storage.IntegrationHealth_HEALTHY),
-		ErrorMessage:  errMsg,
-		LastTimestamp: timestamp.TimestampNow(),
-	})
-}
-
-func (m *managerImpl) registerHealthForMessage(handler string, messages ...proto.Message) {
+func (m *managerImpl) registerHealthForMessages(handler string, messages ...protocompat.Message) {
 	for _, message := range messages {
-		messageID := m.idExtractor(message)
-		messageName := declarativeConfigUtils.NameForIntegrationHealthFromProtoMessage(message, handler, m.nameExtractor, m.idExtractor)
-
-		if err := m.declarativeConfigErrorReporter.Register(messageID, messageName,
-			storage.IntegrationHealth_DECLARATIVE_CONFIG); err != nil {
-			log.Errorf("Error registering health status for declarative config %+v: %v", message, err)
-		}
+		health := declarativeConfigUtils.HealthStatusForProtoMessage(message, handler, nil, m.idExtractor, m.nameExtractor)
+		m.registerDeclarativeConfigHealth(health)
 	}
 }
 
@@ -384,8 +356,7 @@ func (m *managerImpl) registerHealthForMessage(handler string, messages ...proto
 // It deletes health status entries for deleted proto messages, as well as entries for which the first creation
 // of a resource failed.
 func (m *managerImpl) removeStaleHealthStatuses(idsToSkip []string) error {
-	healths, err := m.declarativeConfigErrorReporter.
-		RetrieveIntegrationHealths(storage.IntegrationHealth_DECLARATIVE_CONFIG)
+	healths, err := m.declarativeConfigHealthDS.GetDeclarativeConfigs(m.reconciliationCtx)
 	if err != nil {
 		return errors.Wrap(err, "retrieving integration health statuses for declarative config")
 	}
@@ -398,11 +369,19 @@ func (m *managerImpl) removeStaleHealthStatuses(idsToSkip []string) error {
 			continue
 		}
 
-		if strings.Contains(health.GetName(), handlerIntegrationHealthStatusPrefix) {
+		if health.GetResourceType() == storage.DeclarativeConfigHealth_CONFIG_MAP {
 			continue
 		}
 
-		if err := m.declarativeConfigErrorReporter.RemoveIntegrationHealth(health.GetId()); err != nil {
+		// Special case: for roles, the health ID will be a UUID instead of the name. Hence, need to verify whether
+		// the IDs to skip (which will include the role names) contains the health's resource name.
+		if health.GetResourceType() == storage.DeclarativeConfigHealth_ROLE &&
+			idsToSkipSet.Contains(health.GetResourceName()) {
+			continue
+		}
+
+		if err := m.declarativeConfigHealthDS.RemoveDeclarativeConfig(m.reconciliationCtx,
+			health.GetId()); err != nil {
 			removingIntegrationHealthsErr = multierror.Append(removingIntegrationHealthsErr, err)
 		}
 	}
@@ -444,6 +423,24 @@ func (m *managerImpl) calculateHashAndIndicateChanges(transformedMessagesByHandl
 	return false
 }
 
-func handlerNameForIntegrationHealth(handlerID string) string {
-	return fmt.Sprintf("%s %s", handlerIntegrationHealthStatusPrefix, path.Base(handlerID))
+func (m *managerImpl) updateDeclarativeConfigHealth(healthStatus *storage.DeclarativeConfigHealth) {
+	if err := m.declarativeConfigHealthDS.UpsertDeclarativeConfig(m.reconciliationCtx, healthStatus); err != nil {
+		log.Errorf("Could not upsert declarative config health %q: %v", healthStatus.GetId(), err)
+	}
+}
+
+func (m *managerImpl) registerDeclarativeConfigHealth(healthStatus *storage.DeclarativeConfigHealth) {
+	_, exists, err := m.declarativeConfigHealthDS.GetDeclarativeConfig(m.reconciliationCtx,
+		healthStatus.GetId())
+	// No-op. We do not want to upsert existing health status, as this might override the status and error messages.
+	if exists {
+		return
+	}
+
+	if err != nil {
+		log.Errorf("Failed to retrieve declarative config health %q: %v", healthStatus.GetId(), err)
+	}
+
+	// Irrespective if we received an error to retrieve the health status, attempt to upsert it.
+	m.updateDeclarativeConfigHealth(healthStatus)
 }

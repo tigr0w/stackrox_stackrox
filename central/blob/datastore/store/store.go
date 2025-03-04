@@ -4,23 +4,33 @@ import (
 	"context"
 	"io"
 
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/blob/datastore/store/postgres"
+	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/logging"
 	pgPkg "github.com/stackrox/rox/pkg/postgres"
+	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+	"github.com/stackrox/rox/pkg/search"
 )
 
-var log = logging.LoggerForModule()
+var (
+	scopeChecker = sac.ForResource(resources.Administration)
+)
 
 // Store is the interface to interact with the storage for storage.Blob
+//
+//go:generate mockgen-wrapper
 type Store interface {
-	Upsert(ctx context.Context, obj *storage.Blob, reader io.Reader) error
+	Search(ctx context.Context, q *v1.Query) ([]search.Result, error)
+	Count(ctx context.Context, q *v1.Query) (int, error)
 	Get(ctx context.Context, name string, writer io.Writer) (*storage.Blob, bool, error)
-	Delete(ctx context.Context, name string) error
+	GetMetadataByQuery(ctx context.Context, query *v1.Query) ([]*storage.Blob, error)
 	GetIDs(ctx context.Context) ([]string, error)
 	GetMetadata(ctx context.Context, name string) (*storage.Blob, bool, error)
+	Upsert(ctx context.Context, obj *storage.Blob, reader io.Reader) error
+	Delete(ctx context.Context, name string) error
 }
 
 type storeImpl struct {
@@ -44,8 +54,25 @@ func wrapRollback(ctx context.Context, tx *pgPkg.Tx, err error) error {
 	return err
 }
 
+func (s *storeImpl) Count(ctx context.Context, q *v1.Query) (int, error) {
+	return s.store.Count(ctx, q)
+}
+
+func (s *storeImpl) Search(ctx context.Context, q *v1.Query) ([]search.Result, error) {
+	return s.store.Search(ctx, q)
+}
+
 // Upsert adds a blob to the database
 func (s *storeImpl) Upsert(ctx context.Context, obj *storage.Blob, reader io.Reader) error {
+	if err := sac.VerifyAuthzOK(scopeChecker.WriteAllowed(ctx)); err != nil {
+		return err
+	}
+	// Augment permission because we require read permission internally
+	ctx = sac.WithGlobalAccessScopeChecker(ctx,
+		sac.AllowFixedScopes(
+			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
+			sac.ResourceScopeKeys(resources.Administration)))
+
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -166,6 +193,14 @@ func (s *storeImpl) Get(ctx context.Context, name string, writer io.Writer) (*st
 
 // Delete removes a blob from database if it exists
 func (s *storeImpl) Delete(ctx context.Context, name string) error {
+	if err := sac.VerifyAuthzOK(scopeChecker.WriteAllowed(ctx)); err != nil {
+		return err
+	}
+	// Augment permission because we require read permission internally
+	ctx = sac.WithGlobalAccessScopeChecker(ctx,
+		sac.AllowFixedScopes(
+			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
+			sac.ResourceScopeKeys(resources.Administration)))
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -193,6 +228,11 @@ func (s *storeImpl) Delete(ctx context.Context, name string) error {
 // GetIDs all blob names
 func (s *storeImpl) GetIDs(ctx context.Context) ([]string, error) {
 	return s.store.GetIDs(ctx)
+}
+
+// GetMetadataByQuery get a list of Blobs by query.
+func (s *storeImpl) GetMetadataByQuery(ctx context.Context, query *v1.Query) ([]*storage.Blob, error) {
+	return s.store.GetByQuery(ctx, query)
 }
 
 // GetMetadata all blob names

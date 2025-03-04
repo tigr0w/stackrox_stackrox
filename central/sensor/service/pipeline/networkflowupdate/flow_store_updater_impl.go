@@ -2,12 +2,15 @@ package networkflowupdate
 
 import (
 	"context"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	networkBaselineManager "github.com/stackrox/rox/central/networkbaseline/manager"
+	entityDataStore "github.com/stackrox/rox/central/networkgraph/entity/datastore"
 	flowDataStore "github.com/stackrox/rox/central/networkgraph/flow/datastore"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/networkgraph"
+	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/timestamp"
 )
 
@@ -17,12 +20,42 @@ type flowPersisterImpl struct {
 	baselines       networkBaselineManager.Manager
 	flowStore       flowDataStore.FlowDataStore
 	firstUpdateSeen bool
+	entityStore     entityDataStore.EntityDataStore
 }
 
 // update updates the FlowStore with the given network flow updates.
-func (s *flowPersisterImpl) update(ctx context.Context, newFlows []*storage.NetworkFlow, updateTS *types.Timestamp) error {
+func (s *flowPersisterImpl) update(ctx context.Context, newFlows []*storage.NetworkFlow, updateTS *time.Time) error {
+	if features.ExternalIPs.Enabled() {
+		// Sensor may have forwarded unknown NetworkEntities that we want to learn
+		for _, newFlow := range newFlows {
+			err := s.updateExternalNetworkEntityIfDiscovered(ctx, newFlow.GetProps().DstEntity)
+			if err != nil {
+				return err
+			}
+			err = s.updateExternalNetworkEntityIfDiscovered(ctx, newFlow.GetProps().SrcEntity)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		// We are not storing the discovered entities. Let net-flows point to INTERNET instead.
+		internetEntity := networkgraph.InternetEntity().ToProto()
+		for _, newFlow := range newFlows {
+			if newFlow.GetProps().GetSrcEntity().GetExternalSource().GetDiscovered() {
+				newFlow.GetProps().SrcEntity = internetEntity
+			}
+
+			if newFlow.GetProps().GetDstEntity().GetExternalSource().GetDiscovered() {
+				newFlow.GetProps().DstEntity = internetEntity
+			}
+		}
+	}
+
 	now := timestamp.Now()
-	updateMicroTS := timestamp.FromProtobuf(updateTS)
+	var updateMicroTS timestamp.MicroTS
+	if updateTS != nil {
+		updateMicroTS = timestamp.FromGoTime(*updateTS)
+	}
 
 	flowsByIndicator := getFlowsByIndicator(newFlows, updateMicroTS, now)
 	if err := s.baselines.ProcessFlowUpdate(flowsByIndicator); err != nil {
@@ -46,7 +79,10 @@ func (s *flowPersisterImpl) markExistingFlowsAsTerminatedIfNotSeen(ctx context.C
 		return err
 	}
 
-	closeTS := timestamp.FromProtobuf(lastUpdateTS)
+	var closeTS timestamp.MicroTS
+	if lastUpdateTS != nil {
+		closeTS = timestamp.FromGoTime(*lastUpdateTS)
+	}
 	if closeTS == 0 {
 		closeTS = timestamp.Now()
 	}
@@ -83,17 +119,25 @@ func convertToFlows(updatedFlows map[networkgraph.NetworkConnIndicator]timestamp
 	flowsToBeUpserted := make([]*storage.NetworkFlow, 0, len(updatedFlows))
 	for indicator, ts := range updatedFlows {
 		toBeUpserted := &storage.NetworkFlow{
-			Props:             indicator.ToNetworkFlowPropertiesProto(),
-			LastSeenTimestamp: convertTS(ts),
+			Props: indicator.ToNetworkFlowPropertiesProto(),
+		}
+		if ts != 0 {
+			toBeUpserted.LastSeenTimestamp = protoconv.ConvertMicroTSToProtobufTS(ts)
 		}
 		flowsToBeUpserted = append(flowsToBeUpserted, toBeUpserted)
 	}
 	return flowsToBeUpserted
 }
 
-func convertTS(ts timestamp.MicroTS) *types.Timestamp {
-	if ts == 0 {
+func (s *flowPersisterImpl) updateExternalNetworkEntityIfDiscovered(ctx context.Context, entityInfo *storage.NetworkEntityInfo) error {
+	if !entityInfo.GetExternalSource().GetDiscovered() {
 		return nil
 	}
-	return ts.GogoProtobuf()
+
+	entity := &storage.NetworkEntity{
+		Info: entityInfo,
+		// Scope.ClusterId defaults to "", which is the default cluster
+	}
+
+	return s.entityStore.UpdateExternalNetworkEntity(ctx, entity, true)
 }

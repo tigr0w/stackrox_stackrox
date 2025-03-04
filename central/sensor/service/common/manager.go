@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 
+	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 )
 
@@ -35,9 +36,21 @@ type DelegatedRegistryConfigManager interface {
 	GetConfig(ctx context.Context) (*storage.DelegatedRegistryConfig, bool, error)
 }
 
+// ImageIntegrationManager defines an interface to retrieve image integrations.
+type ImageIntegrationManager interface {
+	GetImageIntegrations(ctx context.Context, integration *v1.GetImageIntegrationsRequest) ([]*storage.ImageIntegration, error)
+}
+
 // NetworkEntityManager implements an interface to retrieve network entities.
 //
 //go:generate mockgen-wrapper
 type NetworkEntityManager interface {
 	GetAllEntitiesForCluster(ctx context.Context, clusterID string) ([]*storage.NetworkEntity, error)
+}
+
+// ComplianceOperatorManager implements an interface to process scan request responses
+//
+//go:generate mockgen-wrapper
+type ComplianceOperatorManager interface {
+	HandleScanRequestResponse(ctx context.Context, requestID string, clusterID string, responsePayload string) error
 }

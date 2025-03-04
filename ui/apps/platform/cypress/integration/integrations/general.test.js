@@ -80,6 +80,7 @@ describe('Integrations Dashboard', () => {
         assertIntegrationsTable(integrationSource, integrationType);
     });
 
+    // Cluster Init Bundle card will be removed in a future version.
     it('should go to the table for clusterInitBundle type of authProviders', () => {
         const integrationSource = 'authProviders';
         const integrationType = 'clusterInitBundle';
@@ -88,6 +89,6 @@ describe('Integrations Dashboard', () => {
 
         clickIntegrationTileOnDashboard(integrationSource, integrationType);
 
-        assertIntegrationsTable(integrationSource, integrationType);
+        cy.location('pathname').should('eq', '/main/clusters/init-bundles');
     });
 });

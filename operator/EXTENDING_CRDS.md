@@ -65,6 +65,51 @@ Regarding defaulting, note that there exist different kinds of defaults:
 * Propagating chart-level defaults: The translation logic will set the corresponding Helm values field only for explicitly set values; for absent
   values, it will do nothing, thus deferring to the chart's defaulting logic (see [example](https://github.com/stackrox/rox/blob/84d841c870f59d2c423f78eb7ecd44a196f8a659/operator/pkg/central/values/translation/translation.go#L86)).
 
+## Breaking changes
+
+The CR of an operator is the public API of the ACS configuration.
+Additionally we need to keep in mind that CRs are often managed in CI/CD pipelines which would
+break existing automations.
+
+* Never remove a CR field from a CRD
+* Never remove an enum field from a CRD
+* Defined values must continue to stay valid values, e.g.:
+  * `KERNEL_MODULE` defaults to `EBPF`, but `KERNEL_MODULE` remains a valid value as an alias for `EBPF`
+  * `central-db` is still a valid config section in the Central CR even though users must use postgres
+* Defaults can change when the change is not going to break things
+
+**Introducing a breaking change:**
+
+This is possible by promoting a CR, i.e. from `v1alpha1` to `v1beta`. Technically this
+is equal to introducing moving from a `/v1` to a `/v2` API.
+
+* Using conversion webhooks from v1alpha1 to v1beta1 (introducing a CRD with a new version)
+* Kubernetes deprecation notices are 2 years on their resources
+
+## crd-schema-checker
+
+[crd-schema-checker](https://github.com/openshift/crd-schema-checker) is a tool for finding breaking changes and violations of best practices in CRDs.
+
+crd-schema-checker has limitations. It cannot find all types of breaking changes and violations of best practices. A passing grade from crd-schma-checker does not mean that there are no breaking changes or violations of best practices. For example crd-schema-checker cannot find the breaking change caused by the removal of an enum. However, it can find the breaking change caused by the removal of a field.
+
+crd-schema-checker can be run on one CRD, to check for violations of best practices, or it can be run on two CRDs to find breaking changes and violations of best practices introduced into the new CRD.
+
+When running crd-schema-checker on ACS CRDs, many violations of best practices are reported. These include use of booleans and maps. Most if not all of these violations cannot be fixed without introducing breaking changes.
+
+The following shows how to run crd-schema-checker.
+
+```
+crd-schema-checker check-manifests [--existing-crd-filename=] --new-crd-filename=
+```
+
+Example
+
+```
+cd operator/config/crd/bases
+git show release-4.4:./platform.stackrox.io_securedclusters.yaml > platform.stackrox.io_securedclusters-4.4.yaml
+crd-schema-checker check-manifests --existing-crd-filename=platform.stackrox.io_securedclusters-4.4.yaml --new-crd-filename=platform.stackrox.io_securedclusters.yaml
+```
+
 ## Style Recommendations
 
 ### Naming

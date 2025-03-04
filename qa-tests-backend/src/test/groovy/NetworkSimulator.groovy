@@ -15,6 +15,7 @@ import spock.lang.IgnoreIf
 import spock.lang.Tag
 import spock.lang.Unroll
 
+@Tag("PZ")
 class NetworkSimulator extends BaseSpecification {
 
     // Deployment names
@@ -294,6 +295,9 @@ class NetworkSimulator extends BaseSpecification {
 
     @Tag("NetworkPolicySimulation")
     @Tag("BAT")
+    // skip if executed in a test environment with just secured-cluster deployed in the test cluster
+    // i.e. central is deployed elsewhere
+    @IgnoreIf({ Env.ONLY_SECURED_CLUSTER == "true" })
     def "Verify NetworkPolicy Simulator with query - single policy simulation"() {
         given:
         def allDeps = NetworkGraphUtil.getDeploymentsAsGraphNodes()
@@ -662,8 +666,6 @@ class NetworkSimulator extends BaseSpecification {
     }
 
     @Tag("NetworkPolicySimulation")
-    // skipping tests using SLACK_MAIN_WEBHOOK on P/Z
-    @IgnoreIf({ Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x" })
     def "Verify invalid clusterId passed to notification API"() {
         when:
         "create slack notifier"

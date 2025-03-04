@@ -3,15 +3,17 @@ package notifiers
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"strings"
 	"text/template"
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/images/types"
+	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/mitre/datastore"
 	mitreUtils "github.com/stackrox/rox/pkg/mitre/utils"
-	"github.com/stackrox/rox/pkg/readable"
+	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/stringutils"
 )
@@ -40,9 +42,11 @@ const bplPolicyFormat = `
 	{{range .Violations}}
 		{{list .Message}}
 		{{if .MessageAttributes}}
-			{{if .MessageAttributes.KeyValueAttrs}}
-				{{range .MessageAttributes.KeyValueAttrs.Attrs}}
-					{{stringify .Key ":" .Value | nestedList}}
+			{{if isViolationKeyValue .MessageAttributes }}
+				{{if .MessageAttributes.KeyValueAttrs}}
+					{{range .MessageAttributes.KeyValueAttrs.Attrs}}
+						{{stringify .Key ":" .Value | nestedList}}
+					{{end}}
 				{{end}}
 			{{end}}
 		{{end}}
@@ -91,7 +95,7 @@ const bplPolicyFormat = `
 	{{stringify "Type:" .GetResource.ResourceType | list}}
 	{{stringify "Cluster:" .GetResource.ClusterName | list}}
 	{{stringify "ClusterId:" .GetResource.ClusterId | list}}
-	{{stringify "Namespace:" .GetResource.Namespace | list}}
+	{{if .GetResource.Namespace }}{{stringify "Namespace:" .GetResource.Namespace | list}}{{end}}
 {{end}}
 
 {{if .GetImage}}{{line ""}}{{header "Image:"}}
@@ -121,13 +125,14 @@ func FormatAlert(alert *storage.Alert, alertLink string, funcMap template.FuncMa
 	}
 	funcMap["stringify"] = stringify
 	funcMap["default"] = stringutils.OrDefault
+	funcMap["isViolationKeyValue"] = isViolationKeyValue
 	if _, ok := funcMap["valuePrinter"]; !ok {
 		funcMap["valuePrinter"] = valuePrinter
 	}
 
 	fullMitreVectors, err := mitreUtils.GetFullMitreAttackVectors(mitreStore, alert.GetPolicy())
 	if err != nil {
-		log.Errorf("Could not get MITRE details for alert %s: %v", alert.GetId(), err)
+		log.Errorw("Could not get MITRE details for alert", logging.AlertID(alert.GetId()), logging.Err(err))
 	}
 
 	data := policyFormatStruct{
@@ -135,7 +140,7 @@ func FormatAlert(alert *storage.Alert, alertLink string, funcMap template.FuncMa
 		FullMitreAttackVectors: fullMitreVectors,
 		AlertLink:              alertLink,
 		Severity:               SeverityString(alert.Policy.Severity),
-		Time:                   readable.ProtoTime(alert.Time),
+		Time:                   protoconv.ReadableTime(alert.Time),
 	}
 	switch alert.GetEntity().(type) {
 	case *storage.Alert_Deployment_:
@@ -146,8 +151,8 @@ func FormatAlert(alert *storage.Alert, alertLink string, funcMap template.FuncMa
 
 	// Remove all the formatting
 	format := bplPolicyFormat
-	f := strings.Replace(format, "\t", "", -1)
-	f = strings.Replace(f, "\n", "", -1)
+	f := strings.ReplaceAll(format, "\t", "")
+	f = strings.ReplaceAll(f, "\n", "")
 
 	tmpl, err := template.New("").Funcs(funcMap).Parse(f)
 	if err != nil {
@@ -202,6 +207,12 @@ func FormatNetworkPolicyYAML(yaml string, clusterName string, funcMap template.F
 		return "", err
 	}
 	return tpl.String(), nil
+}
+
+// isViolationKeyValue returns try if src is of type **storage.Alert_Violation_KeyValueAttrs_
+// Used to validate if a one-of is of type KeyValueAttrs within a template
+func isViolationKeyValue(src interface{}) bool {
+	return reflect.TypeOf(src) == reflect.TypeOf((*storage.Alert_Violation_KeyValueAttrs_)(nil))
 }
 
 // stringify converts a list of interfaces into a space separated string of their string representations

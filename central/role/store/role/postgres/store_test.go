@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *RolesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE roles CASCADE")
 	s.T().Log("roles", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *RolesStoreSuite) TestStore() {
 	foundRole, exists, err = store.Get(ctx, role.GetName())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(role, foundRole)
+	protoassert.Equal(s.T(), role, foundRole)
 
-	roleCount, err := store.Count(ctx)
+	roleCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, roleCount)
-	roleCount, err = store.Count(withNoAccessCtx)
+	roleCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(roleCount)
 
@@ -75,11 +78,6 @@ func (s *RolesStoreSuite) TestStore() {
 	s.True(roleExists)
 	s.NoError(store.Upsert(ctx, role))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, role), sac.ErrResourceAccessDenied)
-
-	foundRole, exists, err = store.Get(ctx, role.GetName())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(role, foundRole)
 
 	s.NoError(store.Delete(ctx, role.GetName()))
 	foundRole, exists, err = store.Get(ctx, role.GetName())
@@ -99,13 +97,13 @@ func (s *RolesStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, roles))
 
-	roleCount, err = store.Count(ctx)
+	roleCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, roleCount)
 
 	s.NoError(store.DeleteMany(ctx, roleIDs))
 
-	roleCount, err = store.Count(ctx)
+	roleCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, roleCount)
 }

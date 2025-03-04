@@ -3,9 +3,8 @@ package renderer
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -48,16 +47,15 @@ func getDefaultMetaValues(t *testing.T) *charts.MetaValues {
 
 		AdvertisedEndpoint: "sensor.stackrox:443",
 
-		CollectorRegistry:        "collector.stackrox.io",
-		CollectorFullImageRemote: "collector",
-		CollectorSlimImageRemote: "collector",
-		CollectorFullImageTag:    "3.0.11-latest",
-		CollectorSlimImageTag:    "3.0.11-slim",
+		CollectorRegistry:    "collector.stackrox.io",
+		CollectorImageRemote: "collector",
+		CollectorImageTag:    "3.0.11",
 
 		ScannerSlimImageRemote: "scanner",
 		ScannerImageTag:        "3.0.11-slim",
+		ScannerV4ImageTag:      "4.4.0.x-92-g9e8a347ffe",
 
-		CollectionMethod: "EBPF",
+		CollectionMethod: "CORE_BPF",
 
 		ClusterType: "KUBERNETES_CLUSTER",
 
@@ -151,7 +149,6 @@ func TestRenderSensorHelm(t *testing.T) {
 
 			for _, file := range files {
 				if file.Name == "admission-controller.yaml" {
-					fmt.Println(string(file.Content))
 					admissionControllerRendered = true
 				}
 				if file.Name == "admission-controller-secret.yaml" {
@@ -211,6 +208,6 @@ func TestRenderSensorTLSSecretsOnly(t *testing.T) {
 		encounteredSecretNames = append(encounteredSecretNames, secret.Name)
 	}
 
-	sort.Strings(encounteredSecretNames)
+	slices.Sort(encounteredSecretNames)
 	assert.Equal(t, expectedSecrets, encounteredSecretNames)
 }

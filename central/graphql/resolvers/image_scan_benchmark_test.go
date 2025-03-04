@@ -3,8 +3,9 @@ package resolvers
 import (
 	"testing"
 
-	"github.com/golang/mock/gomock"
+	imagesView "github.com/stackrox/rox/central/views/images"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 const (
@@ -76,6 +77,7 @@ func BenchmarkImageResolver(b *testing.B) {
 	defer testDB.Teardown(b)
 
 	resolver, schema := SetupTestResolver(b,
+		imagesView.NewImageView(testDB.DB),
 		CreateTestImageDatastore(b, testDB, mockCtrl),
 		CreateTestImageComponentDatastore(b, testDB, mockCtrl),
 		CreateTestImageCVEDatastore(b, testDB),

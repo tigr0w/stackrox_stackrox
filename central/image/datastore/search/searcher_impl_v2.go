@@ -4,35 +4,32 @@ import (
 	"context"
 
 	"github.com/stackrox/rox/central/image/datastore/store"
-	"github.com/stackrox/rox/central/image/index"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/images/types"
 	"github.com/stackrox/rox/pkg/postgres/schema"
-	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	"github.com/stackrox/rox/pkg/search/paginated"
 	"github.com/stackrox/rox/pkg/search/scoped/postgres"
 	"github.com/stackrox/rox/pkg/search/sortfields"
 )
 
 var (
-	sacHelper = sac.ForResource(resources.Image).MustCreatePgSearchHelper()
+	defaultSortOption = &v1.QuerySortOption{
+		Field: search.LastUpdatedTime.String(),
+	}
 )
 
-// NewV2 returns a new instance of Searcher for the given storage and indexer.
-func NewV2(storage store.Store, indexer index.Indexer) Searcher {
+// NewV2 returns a new instance of Searcher for the given the storage.
+func NewV2(storage store.Store) Searcher {
 	return &searcherImplV2{
 		storage:  storage,
-		indexer:  indexer,
-		searcher: formatSearcherV2(indexer),
+		searcher: formatSearcherV2(storage),
 	}
 }
 
-func formatSearcherV2(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher {
-	scopedSearcher := postgres.WithScoping(sacHelper.FilteredSearcher(unsafeSearcher))
+func formatSearcherV2(searcher search.Searcher) search.Searcher {
+	scopedSearcher := postgres.WithScoping(searcher)
 	transformedSortFieldSearcher := sortfields.TransformSortFields(scopedSearcher, schema.ImagesSchema.OptionsMap)
 	return paginated.WithDefaultSortOption(transformedSortFieldSearcher, defaultSortOption)
 }
@@ -40,11 +37,10 @@ func formatSearcherV2(unsafeSearcher blevesearch.UnsafeSearcher) search.Searcher
 // searcherImplV2 provides an intermediary implementation layer for image storage.
 type searcherImplV2 struct {
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 }
 
-// SearchImages retrieves SearchResults from the indexer and storage
+// SearchImages retrieves SearchResults from the storage.
 func (s *searcherImplV2) SearchImages(ctx context.Context, q *v1.Query) ([]*v1.SearchResult, error) {
 	images, results, err := s.searchImages(ctx, q)
 	if err != nil {
@@ -66,7 +62,7 @@ func (s *searcherImplV2) SearchListImages(ctx context.Context, q *v1.Query) ([]*
 	return listImages, err
 }
 
-// SearchRawImages retrieves SearchResults from the indexer and storage
+// SearchRawImages retrieves SearchResults from the storage.
 func (s *searcherImplV2) SearchRawImages(ctx context.Context, q *v1.Query) ([]*storage.Image, error) {
 	results, err := s.Search(ctx, q)
 	if err != nil {

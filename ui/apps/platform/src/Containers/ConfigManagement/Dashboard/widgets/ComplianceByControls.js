@@ -1,31 +1,33 @@
 import React, { useState, useContext } from 'react';
+import { Alert } from '@patternfly/react-core';
 import PropTypes from 'prop-types';
-import ReactRouterPropTypes from 'react-router-prop-types';
 import { gql } from '@apollo/client';
+import { Link, useLocation, useRouteMatch } from 'react-router-dom';
 import queryService from 'utils/queryService';
 import entityTypes, { standardEntityTypes, standardBaseTypes } from 'constants/entityTypes';
-import { COMPLIANCE_FAIL_COLOR, COMPLIANCE_PASS_COLOR } from 'constants/visuals/colors';
+import { COMPLIANCE_FAIL_COLOR, COMPLIANCE_PASS_COLOR } from 'constants/severityColors';
 import { standardLabels } from 'messages/standards';
-import { Link, withRouter } from 'react-router-dom';
 import URLService from 'utils/URLService';
+import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 import searchContext from 'Containers/searchContext';
 import networkStatuses from 'constants/networkStatuses';
 import COMPLIANCE_STATES from 'constants/complianceStates';
 
 import ScanButton from 'Containers/Compliance/ScanButton';
+import ComplianceScanProgress from 'Containers/Compliance/Dashboard/ComplianceScanProgress';
+import { useComplianceRunStatuses } from 'Containers/Compliance/Dashboard/useComplianceRunStatuses';
+
 import Query from 'Components/CacheFirstQuery';
 import Widget from 'Components/Widget';
 import Loader from 'Components/Loader';
 import Sunburst from 'Components/visuals/Sunburst';
 import TextSelect from 'Components/TextSelect';
 import NoResultsMessage from 'Components/NoResultsMessage';
+import usePermissions from 'hooks/usePermissions';
 
 const passingColor = COMPLIANCE_PASS_COLOR;
 const failingColor = COMPLIANCE_FAIL_COLOR;
 const NAColor = 'var(--base-400)'; // same as skippedColor in ComplianceByStandards
-
-const linkColor = 'var(--base-600)';
-const textColor = 'var(--base-600)';
 
 const sunburstLegendData = [
     { title: 'Passing', color: passingColor },
@@ -118,7 +120,6 @@ const getSunburstData = (categoryMapping, urlBuilder, searchParam, standardType)
         return {
             name: `${category.name}. ${category.description}`,
             color: getColor(totalPassing, totalFailing),
-            textColor,
             value: categoryValue,
             children: controls.map(({ control, numPassing, numFailing }) => {
                 const value = getPercentagePassing(numPassing, numFailing);
@@ -135,7 +136,6 @@ const getSunburstData = (categoryMapping, urlBuilder, searchParam, standardType)
                 return {
                     name: `${control.name} - ${control.description}`,
                     color: getColor(numPassing, numFailing),
-                    textColor,
                     value,
                     link,
                 };
@@ -206,17 +206,14 @@ const getSunburstRootData = (
         {
             text: `${controlsPassing} Controls Passing`,
             link: controlsPassingLink,
-            color: linkColor,
         },
         {
             text: `${controlsFailing} Controls Failing`,
             link: controlsFailingLink,
-            color: linkColor,
         },
         {
             text: `${controlsNA} Controls N/A`,
             link: controlsNALink,
-            color: linkColor,
         },
     ];
     return sunburstRootData;
@@ -252,23 +249,22 @@ const ViewStandardButton = ({ standardType, searchParam, urlBuilder }) => {
         })
         .url();
 
-    const viewStandardLink = (
-        <Link to={linkTo} className="no-underline">
-            <button className="btn-sm btn-base" type="button">
-                View Standard
-            </button>
+    return (
+        <Link to={linkTo} className="no-underline btn-sm btn-base">
+            View standard
         </Link>
     );
-    return viewStandardLink;
 };
 
-const ComplianceByControls = ({
-    match,
-    location,
-    className,
-    standardOptions,
-    isConfigMangement,
-}) => {
+const queriesToRefetchOnPollingComplete = [QUERY];
+
+const ComplianceByControls = ({ className, standardOptions }) => {
+    const { hasReadWriteAccess } = usePermissions();
+    const hasWriteAccessForCompliance = hasReadWriteAccess('Compliance');
+
+    const { runs, error, restartPolling, inProgressScanDetected, isCurrentScanIncomplete } =
+        useComplianceRunStatuses(queriesToRefetchOnPollingComplete);
+
     const searchParam = useContext(searchContext);
     const options = standardOptions.map((standard) => ({
         label: standardLabels[standard],
@@ -277,6 +273,9 @@ const ComplianceByControls = ({
         standard,
     }));
     const [selectedStandard, selectStandard] = useState(options[0]);
+
+    const location = useLocation();
+    const match = useRouteMatch();
 
     function onChange(datum) {
         const standard = options.find((option) => option.value === datum);
@@ -302,7 +301,7 @@ const ComplianceByControls = ({
 
                 const headerComponents = (
                     <div className="flex">
-                        {isConfigMangement && (
+                        {hasWriteAccessForCompliance && (
                             <ScanButton
                                 key={selectedStandard.standard}
                                 className="btn-sm btn-base mr-2"
@@ -314,6 +313,8 @@ const ComplianceByControls = ({
                                 clusterId="*"
                                 standardId={selectedStandard.standard}
                                 loaderSize={10}
+                                onScanTriggered={restartPolling}
+                                scanInProgress={isCurrentScanIncomplete}
                             />
                         )}
                         <ViewStandardButton
@@ -347,6 +348,25 @@ const ComplianceByControls = ({
                         );
                     }
                 }
+
+                if (isCurrentScanIncomplete) {
+                    contents = (
+                        <div className="flex-1">
+                            {error && (
+                                <Alert
+                                    variant="danger"
+                                    title="There was an error fetching compliance scan status, data below may be out of date"
+                                    component="p"
+                                >
+                                    {getAxiosErrorMessage(error)}
+                                </Alert>
+                            )}
+                            {inProgressScanDetected && !error && (
+                                <ComplianceScanProgress runs={runs} isFullHeight />
+                            )}
+                        </div>
+                    );
+                }
                 return (
                     <Widget
                         className={`s-2 ${className}`}
@@ -363,16 +383,12 @@ const ComplianceByControls = ({
 };
 
 ComplianceByControls.propTypes = {
-    match: ReactRouterPropTypes.match.isRequired,
-    location: ReactRouterPropTypes.location.isRequired,
     className: PropTypes.string,
     standardOptions: PropTypes.arrayOf(PropTypes.shape).isRequired,
-    isConfigMangement: PropTypes.string,
 };
 
 ComplianceByControls.defaultProps = {
     className: '',
-    isConfigMangement: 'false',
 };
 
-export default withRouter(ComplianceByControls);
+export default ComplianceByControls;

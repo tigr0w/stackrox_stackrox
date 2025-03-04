@@ -1,15 +1,6 @@
 import React, { ReactElement, useState } from 'react';
-import {
-    Alert,
-    AlertVariant,
-    Button,
-    Modal,
-    ModalVariant,
-    PageSection,
-    pluralize,
-    Title,
-} from '@patternfly/react-core';
-import { TableComposable, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
+import { Alert, Button, Modal, PageSection, pluralize, Title } from '@patternfly/react-core';
+import { ActionsColumn, Table, Tbody, Td, Thead, Th, Tr } from '@patternfly/react-table';
 
 import { AccessScope } from 'services/AccessScopesService';
 import { Role } from 'services/RolesService';
@@ -52,7 +43,8 @@ function AccessScopesList({
                 setAlertDelete(
                     <Alert
                         title="Delete access scope failed"
-                        variant={AlertVariant.danger}
+                        component="p"
+                        variant="danger"
                         isInline
                     >
                         {error.message}
@@ -73,14 +65,16 @@ function AccessScopesList({
         <PageSection variant="light">
             <Title headingLevel="h2">{pluralize(accessScopes.length, 'result')} found</Title>
             {alertDelete}
-            <TableComposable variant="compact">
+            <Table variant="compact">
                 <Thead>
                     <Tr>
                         <Th width={15}>Name</Th>
                         <Th width={15}>Origin</Th>
                         <Th width={25}>Description</Th>
                         <Th width={35}>Roles</Th>
-                        <Th width={10} aria-label="Row actions" />
+                        <Th width={10}>
+                            <span className="pf-v5-screen-reader">Row actions</span>
+                        </Th>
                     </Tr>
                 </Thead>
                 <Tbody>
@@ -104,28 +98,28 @@ function AccessScopesList({
                                     entityId={id}
                                 />
                             </Td>
-                            <Td
-                                actions={{
-                                    disable:
+                            <Td isActionCell>
+                                <ActionsColumn
+                                    isDisabled={
                                         !hasWriteAccessForPage ||
                                         idDeleting === id ||
                                         !isUserResource(traits) ||
-                                        roles.some(({ accessScopeId }) => accessScopeId === id),
-                                    items: [
+                                        roles.some(({ accessScopeId }) => accessScopeId === id)
+                                    }
+                                    items={[
                                         {
                                             title: 'Delete access scope',
                                             onClick: () => onClickDelete(id),
                                         },
-                                    ],
-                                }}
-                                className="pf-u-text-align-right"
-                            />
+                                    ]}
+                                />
+                            </Td>
                         </Tr>
                     ))}
                 </Tbody>
-            </TableComposable>
+            </Table>
             <Modal
-                variant={ModalVariant.small}
+                variant="small"
                 title="Permanently delete access scope?"
                 isOpen={typeof nameConfirmingDelete === 'string'}
                 onClose={onCancelDelete}

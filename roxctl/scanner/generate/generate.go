@@ -13,7 +13,6 @@ import (
 	"github.com/stackrox/rox/pkg/apiparams"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/istioutils"
-	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/roxctl/common"
 	"github.com/stackrox/rox/roxctl/common/environment"
 	"github.com/stackrox/rox/roxctl/common/flags"
@@ -92,7 +91,7 @@ func Command(cliEnvironment environment.Environment) *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "generate",
-		Short: "Generate the required YAML configuration files to deploy StackRox Scanner",
+		Short: "Generate the required YAML configuration files to deploy StackRox Scanner and Scanner V4",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			scannerGenerateCmd.construct(c)
@@ -109,16 +108,16 @@ func Command(cliEnvironment environment.Environment) *cobra.Command {
 
 	c.Flags().StringVar(&scannerGenerateCmd.outputDir, "output-dir", "", "Output directory for scanner bundle (leave blank for default)")
 	c.Flags().StringVar(&scannerGenerateCmd.apiParams.ScannerImage, flags.FlagNameScannerImage, "", "Scanner image to use (leave blank to use server default)")
+	c.Flags().StringVar(&scannerGenerateCmd.apiParams.ScannerV4Image, flags.FlagNameScannerV4Image, "", "Scanner V4 image to use (leave blank to use server default)")
+	c.Flags().StringVar(&scannerGenerateCmd.apiParams.ScannerV4DBImage, flags.FlagNameScannerV4DBImage, "", "Scanner V4 DB image to use (leave blank to use server default)")
 	c.Flags().StringVar(&scannerGenerateCmd.apiParams.IstioVersion, istioSupportArg, "",
 		fmt.Sprintf(
 			"Generate deployment files supporting the given Istio version. Valid versions: %s",
 			strings.Join(istioutils.ListKnownIstioVersions(), ", ")))
-	c.PersistentFlags().BoolVar(&scannerGenerateCmd.enablePodSecurityPolicies, "enable-pod-security-policies", true, "Create PodSecurityPolicy resources (for pre-v1.25 Kubernetes)")
+	c.PersistentFlags().BoolVar(&scannerGenerateCmd.enablePodSecurityPolicies, "enable-pod-security-policies", false, "Create PodSecurityPolicy resources (for pre-v1.25 Kubernetes)")
 
-	// TODO(ROX-15868): Remove the offline-mode flag after the deprecation notice has passed.
-	c.Flags().BoolVar(&scannerGenerateCmd.apiParams.OfflineMode, "offline-mode", false, "Whether to run the scanner in offline mode (so "+
-		"it doesn't reach out to the internet for updates)")
-	utils.Must(c.Flags().MarkDeprecated("offline-mode", "The offline mode option has been deprecated, scanner will reach out to central for updates"))
+	flags.AddTimeout(c)
+	flags.AddRetryTimeout(c)
 
 	return c
 }

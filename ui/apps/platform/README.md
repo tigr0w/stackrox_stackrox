@@ -13,55 +13,68 @@ The documentation below is only specific to this package.
 
 ### Running the development server
 
-To start the local development server in watch mode, run `yarn start`.
+To start the local development server in watch mode, run `npm run start`.
 
-The behavior of `yarn start` can be changed with the following environment variables:
+The behavior of `npm run start` can be changed with the following environment variables:
 
 
-#### YARN_START_TARGET
-`YARN_START_TARGET` will set the default endpoint that API requests are forwarded to from
+#### UI_START_TARGET
+`UI_START_TARGET` will set the default endpoint that API requests are forwarded to from
 the UI. By default the UI will forward API requests to `https://localhost:8000`.
 
 ```sh
-YARN_START_TARGET=https://8.8.8.8:443 yarn start
+UI_START_TARGET=https://8.8.8.8:443 npm run start
 ```
 will start the development server
 and forward all API requests to `https://8.8.8.8:443`. _Note that the protocol (https) is required to
 be set for this option._
 
 
-#### YARN_CUSTOM_PROXIES
+#### UI_CUSTOM_PROXIES
 
-`YARN_CUSTOM_PROXIES` will override the endpoint that API requests are forwarded to for specific
-endpoints that you define. The value of `YARN_CUSTOM_PROXIES` is a comma separated list of URL and
+`UI_CUSTOM_PROXIES` will override the endpoint that API requests are forwarded to for specific
+endpoints that you define. The value of `UI_CUSTOM_PROXIES` is a comma separated list of URL and
 remote endpoint pairs. ('url1,endpoint1,url2,endpoint2...') This value can be combined with
-`YARN_START_TARGET` and will take precedence over the latter for the endpoints that are defined.
+`UI_START_TARGET` and will take precedence over the latter for the endpoints that are defined.
 
 ```sh
-YARN_CUSTOM_PROXIES='/v1/newapi,https://localhost:3030,/sso,https://localhost:9000' yarn start
+UI_CUSTOM_PROXIES='/v1/newapi,https://localhost:3030,/sso,https://localhost:9000' npm run start
 ```
 will forward any requests from `/v1/newapi` to `https://localhost:3030` and from `/sso` to `https://localhost:9000`. All
 other requests will be forwarded to the default location of `https://localhost:8000`.
 
 ```sh
-YARN_START_TARGET='https://8.8.8.8:443' YARN_CUSTOM_PROXIES='/v1/newapi,https://localhost:3030' yarn start
+UI_START_TARGET='https://8.8.8.8:443' UI_CUSTOM_PROXIES='/v1/newapi,https://localhost:3030' npm run start
 ```
 will forward any request from `/v1/newapi` to `https://localhost:3030` and all other requests will be forwarded to
-the value of `YARN_START_TARGET`: `https://8.8.8.8:443`.
+the value of `UI_START_TARGET`: `https://8.8.8.8:443`.
+
+### Linting
+
+Unlike ESLint 8 which auto-detects eslint.config.js **flat config** file, ESLint plugin for Visual Studio code editor does not (yet).
+
+If **stackrox/ui** is your workspace root folder, you can create or edit stackrox/ui/.vscode/settings.json file to add the following properties:
+
+```json
+{
+    "eslint.experimental.useFlatConfig": true,
+    "eslint.workingDirectories": ["apps/platform"]
+}
+```
 
 ### Testing
 
 #### Unit Tests
 
-Use `yarn test` to run all unit tests and show test coverage. To run tests and
-continuously watch for changes use `yarn test-watch`.
+Use `npm run test` to run all unit tests and show test coverage. To run tests and
+continuously watch for changes use `npm run test-watch`.
 
 #### End-to-end Tests (Cypress)
 
-To bring up [Cypress](https://www.cypress.io/) UI use `yarn cypress-open`. To
-run all end-to-end tests in a headless mode use `yarn test-e2e-local`. To run
+To bring up [Cypress](https://www.cypress.io/) UI use `npm run cypress-open`. To
+run all end-to-end tests in a headless mode use `npm run test-e2e-local`. To run
 one test suite specifically in headless mode, use
-`yarn cypress-spec <spec-file>`.
+`npm run cypress-spec <spec-file>`.
 
 ### Feature flags
 
@@ -153,13 +166,19 @@ Given a feature flag environment variable `"ROX_WHATEVER"` in pkg/features/list.
 4. To turn on a feature flag for continuous integration in **branch** and **master** builds:
 
     * Add `ci_export ROX_WHATEVER "${ROX_WHATEVER:-true}"` to `export_test_environment` function in tests/e2e/lib.sh
+    * Add code below to `deploy_central_via_operator` function in tests/e2e/lib.sh
+
+        ```
+        customize_envVars+=$'\n      - name: ROX_WHATEVER'
+        customize_envVars+=$'\n        value: "true"'
+        ```
 
     The value of feature flags for **demo** and **release** builds is in pkg/features/list.go 
 
 5. To turn on a feature flag for **local deployment**, do either or both of the following:
 
-    * Before you enter `yarn deploy-local` command in **ui** directory, enter `export ROX_WHATEVER=true` command
-    * Before you enter `yarn cypress-open` command in **ui/apps/platform** directory, enter `export CYPRESS_ROX_WHATEVER=true` command
+    * Before you enter `npm run deploy-local` command in **ui** directory, enter `export ROX_WHATEVER=true` command
+    * Before you enter `npm run cypress-open` command in **ui/apps/platform** directory, enter `export CYPRESS_ROX_WHATEVER=true` command
 
 #### Delete a feature flag from frontend code
 
@@ -245,6 +264,93 @@ Given a feature flag environment variable `"ROX_WHATEVER"` in pkg/features/list.
 4. For continuous integration:
 
     * Delete `ci_export ROX_WHATEVER "${ROX_WHATEVER:-true}"` from `export_test_environment` function in tests/e2e/lib.sh
+    * Delete code below from `deploy_central_via_operator` function in tests/e2e/lib.sh
+
+        ```
+        customize_envVars+=$'\n      - name: ROX_WHATEVER'
+        customize_envVars+=$'\n        value: "true"'
+        ```
+
+### Routes
+
+#### Add a route
+
+Read and obey comments to add strings or properties **in alphabetical order to minimize merge conflicts**.
+
+1. Edit ui/apps/platform/src/routePaths.ts file.
+
+    * Add a path **without** params for link from sidebar navigation and, if needed, path **with** param for the `Route` element.
+
+        * Use a **plural** noun for something like **clusters**.
+        * Use a **singular** noun for something like **compliance**.
+
+        ```ts
+        export const whateversBasePath = `${mainPath}/whatevers`;
+        export const whateversPathWithParam = `${whateversBasePath}/:id?`;
+        ```
+
+    * Add a string to `RouteKey` type.
+
+        ```ts
+        | 'whatevers'
+        ```
+
+    * Add a property to `routeRequirementsMap` object.
+
+        Specify a feature flag during development of a new route.
+
+        Specify minimum resource requirements. Component files might have conditional rendering for additional resources.
+
+        ```ts
+        'whatevers': {
+            featureFlagDependency: ['ROX_WHATEVERS'],
+            resourceAccessRequirements: everyResource(['Whichever']),
+        },
+        ```
+
+2. Edit ui/apps/platform/src/Containers/MainPage/Body.tsx file.
+
+    * Import the path for the `Route` element.
+
+        ```ts
+        whateversPathWithParam,
+        ```
+
+    * Add a property to `routeComponentMap` object.
+
+        Specify the path to the root component of the asynchronously-loaded bundle file for the route (see step 4).
+
+        ```ts
+        'whatevers': {
+            component: asyncComponent(
+                () => import('Containers/Whatevers/WhateversRoute')
+            ),
+            path: whateversPathWithParam,
+        },
+        ```
+
+3. Edit ui/apps/platform/src/Containers/MainPage/Sidebar/NavigationSidebar.tsx file, **if** the route has a link.
+
+    * Import a path **without params**.
+
+    ```ts
+    whateversBasePath,
+    ```
+
+    * Add a child item for the link in the `navDescriptions` array.
+
+    ```ts
+    {
+        type: 'child',
+        content: 'Whatevers',
+        path: whateversBasePath,
+        routeKey: 'whatevers',
+    },
+    ```
+
+4. Add a folder and root component file (see step 2).
+
+    For example: ui/apps/platform/src/Containers/Whatevers/WhateversRoute.tsx
 
 ### API
 

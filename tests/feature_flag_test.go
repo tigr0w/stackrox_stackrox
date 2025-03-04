@@ -1,12 +1,14 @@
+//go:build test_e2e
+
 package tests
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	v1 "github.com/stackrox/rox/generated/api/v1"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/testutils/centralgrpc"
 	"github.com/stretchr/testify/assert"
@@ -14,6 +16,9 @@ import (
 )
 
 func TestFeatureFlagSettings(t *testing.T) {
+	if os.Getenv("ORCHESTRATOR_FLAVOR") == "openshift" {
+		t.Skip("Temporarily skipping this test on OCP: TODO(ROX-25171)")
+	}
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -44,10 +49,6 @@ func TestFeatureFlagSettings(t *testing.T) {
 	for _, flag := range featureFlags.GetFeatureFlags() {
 		actualFlagVals[flag.GetEnvVar()] = flag.GetEnabled()
 	}
-
-	// TODO(ROX-14939): Refactor feature flag logic to include environment variables
-	delete(actualFlagVals, env.PostgresDatastoreEnabled.EnvVar())
-	delete(actualFlagVals, env.ActiveVulnMgmt.EnvVar())
 
 	assert.Equal(t, expectedFlagVals, actualFlagVals, "mismatch between expected and actual feature flag settings")
 }

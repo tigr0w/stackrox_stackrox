@@ -2,18 +2,19 @@ package datastore
 
 import (
 	"context"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/cve/common"
-	"github.com/stackrox/rox/central/cve/node/datastore/index"
 	"github.com/stackrox/rox/central/cve/node/datastore/search"
 	"github.com/stackrox/rox/central/cve/node/datastore/store"
-	"github.com/stackrox/rox/central/role/resources"
+	"github.com/stackrox/rox/central/metrics"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/dackbox/concurrency"
+	"github.com/stackrox/rox/pkg/concurrency"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/sync"
 )
@@ -24,18 +25,30 @@ var (
 		sac.ForResource(resources.VulnerabilityManagementApprovals),
 	)
 
+	nodeSAC = sac.ForResource(resources.Node)
+
 	accessAllCtx = sac.WithAllAccess(context.Background())
+
+	errNilSuppressionStart = errors.New("suppression start time is nil")
+
+	errNilSuppressionDuration = errors.New("suppression duration is nil")
 )
 
 type datastoreImpl struct {
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 
 	cveSuppressionLock  sync.RWMutex
 	cveSuppressionCache common.CVESuppressionCache
 
 	keyFence concurrency.KeyFence
+}
+
+func getSuppressionCacheEntry(cve *storage.NodeCVE) common.SuppressionCacheEntry {
+	cacheEntry := common.SuppressionCacheEntry{}
+	cacheEntry.SuppressActivation = protocompat.ConvertTimestampToTimeOrNil(cve.GetSnoozeStart())
+	cacheEntry.SuppressExpiry = protocompat.ConvertTimestampToTimeOrNil(cve.GetSnoozeExpiry())
+	return cacheEntry
 }
 
 func (ds *datastoreImpl) buildSuppressedCache() error {
@@ -48,10 +61,7 @@ func (ds *datastoreImpl) buildSuppressedCache() error {
 	ds.cveSuppressionLock.Lock()
 	defer ds.cveSuppressionLock.Unlock()
 	for _, cve := range suppressedCVEs {
-		ds.cveSuppressionCache[cve.GetCveBaseInfo().GetCve()] = common.SuppressionCacheEntry{
-			SuppressActivation: cve.GetSnoozeStart(),
-			SuppressExpiry:     cve.GetSnoozeExpiry(),
-		}
+		ds.cveSuppressionCache[cve.GetCveBaseInfo().GetCve()] = getSuppressionCacheEntry(cve)
 	}
 	return nil
 }
@@ -103,7 +113,37 @@ func (ds *datastoreImpl) GetBatch(ctx context.Context, ids []string) ([]*storage
 	return cves, nil
 }
 
-func (ds *datastoreImpl) Suppress(ctx context.Context, start *types.Timestamp, duration *types.Duration, cves ...string) error {
+func (ds *datastoreImpl) UpsertMany(ctx context.Context, cves []*storage.NodeCVE) error {
+	defer metrics.SetDatastoreFunctionDuration(time.Now(), "NodeCVE", "UpsertMany")
+
+	if ok, err := nodeSAC.WriteAllowed(ctx); err != nil {
+		return err
+	} else if !ok {
+		return sac.ErrResourceAccessDenied
+	}
+
+	if err := ds.storage.UpsertMany(ctx, cves); err != nil {
+		return errors.Wrap(err, "Upserting node CVEs")
+	}
+	return nil
+}
+
+func (ds *datastoreImpl) PruneNodeCVEs(ctx context.Context, ids []string) error {
+	defer metrics.SetDatastoreFunctionDuration(time.Now(), "NodeCVE", "PruneNodeCVEs")
+
+	if ok, err := nodeSAC.WriteAllowed(ctx); err != nil {
+		return err
+	} else if !ok {
+		return sac.ErrResourceAccessDenied
+	}
+
+	if err := ds.storage.PruneMany(ctx, ids); err != nil {
+		return errors.Wrap(err, "Pruning node CVEs")
+	}
+	return nil
+}
+
+func (ds *datastoreImpl) Suppress(ctx context.Context, start *time.Time, duration *time.Duration, cves ...string) error {
 	if ok, err := vulnRequesterOrApproverSAC.WriteAllowedToAll(ctx); err != nil {
 		return err
 	} else if !ok {
@@ -123,8 +163,8 @@ func (ds *datastoreImpl) Suppress(ctx context.Context, start *types.Timestamp, d
 	err = ds.keyFence.DoStatusWithLock(concurrency.DiscreteKeySet(gatherKeys(vulns)...), func() error {
 		for _, vuln := range vulns {
 			vuln.Snoozed = true
-			vuln.SnoozeStart = start
-			vuln.SnoozeExpiry = expiry
+			vuln.SnoozeStart = protocompat.ConvertTimeToTimestampOrNil(start)
+			vuln.SnoozeExpiry = protocompat.ConvertTimeToTimestampOrNil(expiry)
 		}
 		return ds.storage.UpsertMany(ctx, vulns)
 	})
@@ -172,19 +212,22 @@ func (ds *datastoreImpl) EnrichNodeWithSuppressedCVEs(node *storage.Node) {
 		for _, vuln := range component.GetVulnerabilities() {
 			if entry, ok := ds.cveSuppressionCache[vuln.GetCveBaseInfo().GetCve()]; ok {
 				vuln.Snoozed = true
-				vuln.SnoozeStart = entry.SuppressActivation
-				vuln.SnoozeExpiry = entry.SuppressExpiry
+				vuln.SnoozeStart = protocompat.ConvertTimeToTimestampOrNil(entry.SuppressActivation)
+				vuln.SnoozeExpiry = protocompat.ConvertTimeToTimestampOrNil(entry.SuppressExpiry)
 			}
 		}
 	}
 }
 
-func getSuppressExpiry(start *types.Timestamp, duration *types.Duration) (*types.Timestamp, error) {
-	d, err := types.DurationFromProto(duration)
-	if err != nil || d == 0 {
-		return nil, err
+func getSuppressExpiry(start *time.Time, duration *time.Duration) (*time.Time, error) {
+	if start == nil {
+		return nil, errNilSuppressionStart
 	}
-	return &types.Timestamp{Seconds: start.GetSeconds() + int64(d.Seconds())}, nil
+	if duration == nil {
+		return nil, errNilSuppressionDuration
+	}
+	expiry := start.Truncate(time.Second).Add(duration.Truncate(time.Second))
+	return &expiry, nil
 }
 
 func (ds *datastoreImpl) updateCache(cves ...*storage.NodeCVE) {
@@ -193,10 +236,7 @@ func (ds *datastoreImpl) updateCache(cves ...*storage.NodeCVE) {
 
 	for _, cve := range cves {
 		// Vulnerabilities are snoozed by cve (name) and not by ID field to for backward compatibility purpose (when cve name and id were same).
-		ds.cveSuppressionCache[cve.GetCveBaseInfo().GetCve()] = common.SuppressionCacheEntry{
-			SuppressActivation: cve.SnoozeStart,
-			SuppressExpiry:     cve.SnoozeExpiry,
-		}
+		ds.cveSuppressionCache[cve.GetCveBaseInfo().GetCve()] = getSuppressionCacheEntry(cve)
 	}
 }
 

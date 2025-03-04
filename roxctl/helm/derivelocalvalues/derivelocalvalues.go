@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
@@ -24,9 +25,10 @@ var (
 	supportedCharts = []string{common.ChartCentralServices}
 )
 
-func deriveLocalValuesForChart(env environment.Environment, namespace, chartName, input, output string, useDirectory bool) error {
+func deriveLocalValuesForChart(env environment.Environment, namespace, chartName, input, output string,
+	useDirectory bool, timeout time.Duration) error {
 	var err error
-	ctx, cancel := context.WithTimeout(context.Background(), contextTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	switch chartName {
 	case common.ChartCentralServices:
@@ -299,14 +301,6 @@ func derivePublicLocalValuesForCentralServices(ctx context.Context, _ string, k8
 			},
 			"resources": k8s.evaluateToObject(ctx, "deployment", "central",
 				`{.spec.template.spec.containers[?(@.name == "central")].resources}`, nil),
-			"persistence": map[string]interface{}{
-				"hostPath": k8s.evaluateToStringP(ctx, "deployment", "central",
-					`{.spec.template.spec.volumes[?(@.hostPath)].hostPath.path}`),
-				"persistentVolumeClaim": map[string]interface{}{
-					"claimName": k8s.evaluateToStringP(ctx, "deployment", "central",
-						`{.spec.template.spec.volumes[?(@.persistentVolumeClaim)].persistentVolumeClaim.claimName}`),
-				},
-			},
 			// Regarding the exposure configuration: Currently we make the assumption that the default port (443) is unchanged.
 			// Can be improved to also fetch the port information from the central-loadbalancer service.
 			"exposure": map[string]interface{}{
@@ -331,6 +325,12 @@ func derivePublicLocalValuesForCentralServices(ctx context.Context, _ string, k8
 				`{.spec.template.metadata.annotations}`, nil)),
 			"envVars": retrieveCustomEnvVars(envVarSliceToObj(k8s.evaluateToSlice(ctx, "deployment", "central",
 				`{.spec.template.spec.containers[?(@.name == "central")].env}`, nil))),
+		},
+		"monitoring": map[string]interface{}{
+			"openshift": map[string]interface{}{
+				"enabled": k8s.evaluateToString(ctx, "deployment", "central",
+					`{.spec.template.spec.containers[?(@.name == "central")].env[?(@.name == "ROX_ENABLE_SECURE_METRICS")].value}`, "false") == "true",
+			},
 		},
 	}
 	return m, nil
@@ -401,7 +401,7 @@ func printWarnings(logger logger.Logger, warnings []string) {
 	if len(warnings) == 0 {
 		return
 	}
-	logger.WarnfLn("The following warnings occured:")
+	logger.WarnfLn("The following warnings occurred:")
 	for _, msg := range warnings {
 		logger.WarnfLn("%s", msg)
 	}

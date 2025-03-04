@@ -2,14 +2,16 @@ package datastore
 
 import (
 	"context"
+	"errors"
 
-	"github.com/pkg/errors"
+	pkgErrors "github.com/pkg/errors"
 	"github.com/stackrox/rox/central/authprovider/datastore/internal/store"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
 )
@@ -39,6 +41,19 @@ func (b *datastoreImpl) GetAuthProvider(ctx context.Context, id string) (*storag
 
 	return b.storage.Get(ctx, id)
 }
+func (b *datastoreImpl) AuthProviderExistsWithName(ctx context.Context, name string) (bool, error) {
+	if err := sac.VerifyAuthzOK(accessSAC.ReadAllowed(ctx)); err != nil {
+		return false, err
+	}
+
+	query := search.NewQueryBuilder().AddExactMatches(search.AuthProviderName, name).ProtoQuery()
+	results, err := b.storage.Search(ctx, query)
+	if err != nil {
+		return false, err
+	}
+
+	return len(results) > 0, nil
+}
 
 func (b *datastoreImpl) GetAuthProvidersFiltered(ctx context.Context,
 	filter func(provider *storage.AuthProvider) bool) ([]*storage.AuthProvider, error) {
@@ -50,7 +65,7 @@ func (b *datastoreImpl) GetAuthProvidersFiltered(ctx context.Context,
 	// store.Walk.
 	authProviders, err := b.storage.GetAll(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "retrieving auth providers")
+		return nil, pkgErrors.Wrap(err, "retrieving auth providers")
 	}
 	filteredAuthProviders := make([]*storage.AuthProvider, 0, len(authProviders))
 	for _, authProvider := range authProviders {
@@ -61,13 +76,16 @@ func (b *datastoreImpl) GetAuthProvidersFiltered(ctx context.Context,
 	return filteredAuthProviders, nil
 }
 
-// AddAuthProvider adds an auth provider into bolt.
+// AddAuthProvider adds an auth provider into the database.
 func (b *datastoreImpl) AddAuthProvider(ctx context.Context, authProvider *storage.AuthProvider) error {
 	if err := sac.VerifyAuthzOK(accessSAC.WriteAllowed(ctx)); err != nil {
 		return err
 	}
 	if err := verifyAuthProviderOrigin(ctx, authProvider); err != nil {
-		return errors.Wrap(err, "origin didn't match for new auth provider")
+		return pkgErrors.Wrap(err, "origin didn't match for new auth provider")
+	}
+	if err := validateAuthProvider(authProvider); err != nil {
+		return err
 	}
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -81,9 +99,12 @@ func (b *datastoreImpl) AddAuthProvider(ctx context.Context, authProvider *stora
 	return b.storage.Upsert(ctx, authProvider)
 }
 
-// UpdateAuthProvider upserts an auth provider into bolt.
+// UpdateAuthProvider upserts an auth provider.
 func (b *datastoreImpl) UpdateAuthProvider(ctx context.Context, authProvider *storage.AuthProvider) error {
 	if err := sac.VerifyAuthzOK(accessSAC.WriteAllowed(ctx)); err != nil {
+		return err
+	}
+	if err := validateAuthProvider(authProvider); err != nil {
 		return err
 	}
 	b.lock.Lock()
@@ -96,15 +117,15 @@ func (b *datastoreImpl) UpdateAuthProvider(ctx context.Context, authProvider *st
 		return err
 	}
 	if err = verifyAuthProviderOrigin(ctx, existingProvider); err != nil {
-		return errors.Wrap(err, "origin didn't match for existing auth provider")
+		return pkgErrors.Wrap(err, "origin didn't match for existing auth provider")
 	}
 	if err = verifyAuthProviderOrigin(ctx, authProvider); err != nil {
-		return errors.Wrap(err, "origin didn't match for new auth provider")
+		return pkgErrors.Wrap(err, "origin didn't match for new auth provider")
 	}
 	return b.storage.Upsert(ctx, authProvider)
 }
 
-// RemoveAuthProvider removes an auth provider from bolt.
+// RemoveAuthProvider removes an auth provider from the database.
 func (b *datastoreImpl) RemoveAuthProvider(ctx context.Context, id string, force bool) error {
 	if err := sac.VerifyAuthzOK(accessSAC.WriteAllowed(ctx)); err != nil {
 		return err
@@ -122,7 +143,7 @@ func (b *datastoreImpl) RemoveAuthProvider(ctx context.Context, id string, force
 
 func verifyAuthProviderOrigin(ctx context.Context, ap *storage.AuthProvider) error {
 	if !declarativeconfig.CanModifyResource(ctx, ap) {
-		return errors.Wrapf(errox.NotAuthorized, "auth provider %q's origin is %s, cannot be modified or deleted with the current permission",
+		return pkgErrors.Wrapf(errox.NotAuthorized, "auth provider %q's origin is %s, cannot be modified or deleted with the current permission",
 			ap.GetName(), ap.GetTraits().GetOrigin())
 	}
 	return nil
@@ -147,8 +168,22 @@ func (b *datastoreImpl) verifyExistsAndMutable(ctx context.Context, id string, f
 		return nil, errox.InvalidArgs.Newf("auth provider %q is immutable and can only be removed"+
 			" via API and specifying the force flag", id)
 	default:
-		utils.Should(errors.Wrapf(errox.InvalidArgs, "unknown mutability mode given: %q",
+		utils.Should(pkgErrors.Wrapf(errox.InvalidArgs, "unknown mutability mode given: %q",
 			provider.GetTraits().GetMutabilityMode()))
 	}
 	return nil, errox.InvalidArgs.Newf("auth provider %q is immutable", id)
+}
+
+func validateAuthProvider(ap *storage.AuthProvider) error {
+	var validationErrs error
+	if ap.GetId() == "" {
+		validationErrs = errors.Join(validationErrs, errox.InvalidArgs.CausedBy("auth provider ID is empty"))
+	}
+	if ap.GetName() == "" {
+		validationErrs = errors.Join(validationErrs, errox.InvalidArgs.CausedBy("auth provider name is empty"))
+	}
+	if ap.GetLoginUrl() == "" {
+		validationErrs = errors.Join(validationErrs, errox.InvalidArgs.CausedBy("auth provider login URL is empty"))
+	}
+	return pkgErrors.Wrap(validationErrs, "validating auth provider")
 }

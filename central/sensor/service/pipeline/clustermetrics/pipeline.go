@@ -3,16 +3,28 @@ package clustermetrics
 import (
 	"context"
 
+	datastore "github.com/stackrox/rox/central/administration/usage/datastore/securedunits"
 	clusterTelemetry "github.com/stackrox/rox/central/cluster/datastore"
 	"github.com/stackrox/rox/central/metrics"
+	"github.com/stackrox/rox/central/metrics/telemetry"
 	"github.com/stackrox/rox/central/sensor/service/common"
 	"github.com/stackrox/rox/central/sensor/service/pipeline"
 	"github.com/stackrox/rox/central/sensor/service/pipeline/reconciliation"
 	"github.com/stackrox/rox/generated/internalapi/central"
+	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 )
 
-var log = logging.LoggerForModule()
+var (
+	administrationUsageWriteSCC = sac.AllowFixedScopes(
+		sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
+		sac.ResourceScopeKeys(resources.Administration))
+
+	_ pipeline.Fragment = (*pipelineImpl)(nil)
+)
 
 // Template design pattern. We define control flow here and defer logic to subclasses.
 //////////////////////////////////////////////////////////////////////////////////////
@@ -34,18 +46,24 @@ func (prometheusStore) Set(clusterID string, cm *central.ClusterMetrics) {
 
 // GetPipeline returns an instantiation of this particular pipeline.
 func GetPipeline() pipeline.Fragment {
-	return &pipelineImpl{metricsStore: &prometheusStore{}}
+	return NewPipeline(&prometheusStore{}, telemetry.Singleton(), datastore.Singleton())
 }
 
 // NewPipeline returns a new instance of the pipeline.
-func NewPipeline(metricsStore MetricsStore) pipeline.Fragment {
-	return &pipelineImpl{metricsStore: metricsStore}
+func NewPipeline(metricsStore MetricsStore, telemetryMetrics telemetry.Telemetry, usageStore datastore.DataStore) pipeline.Fragment {
+	return &pipelineImpl{metricsStore: metricsStore, telemetryMetrics: telemetryMetrics, usageStore: usageStore}
 }
 
 type pipelineImpl struct {
 	pipeline.Fragment
 
-	metricsStore MetricsStore
+	metricsStore     MetricsStore
+	telemetryMetrics telemetry.Telemetry
+	usageStore       datastore.DataStore
+}
+
+func (p *pipelineImpl) Capabilities() []centralsensor.CentralCapability {
+	return nil
 }
 
 func (p *pipelineImpl) Reconcile(_ context.Context, _ string, _ *reconciliation.StoreMap) error {
@@ -63,12 +81,23 @@ func (p *pipelineImpl) Run(
 	msg *central.MsgFromSensor,
 	_ common.MessageInjector,
 ) error {
-	p.metricsStore.Set(clusterID, msg.GetClusterMetrics())
+	clusterMetrics := msg.GetClusterMetrics()
+	p.metricsStore.Set(clusterID, clusterMetrics)
+	p.telemetryMetrics.SetClusterMetrics(clusterID, clusterMetrics)
 
-	clusterTelemetry.UpdateSecuredClusterIdentity(ctx, clusterID, msg.GetClusterMetrics())
+	if err := p.usageStore.UpdateUsage(sac.WithGlobalAccessScopeChecker(ctx, administrationUsageWriteSCC),
+		clusterID, &storage.SecuredUnits{
+			NumNodes:    clusterMetrics.GetNodeCount(),
+			NumCpuUnits: clusterMetrics.GetCpuCapacity(),
+		}); err != nil {
+		logging.GetRateLimitedLogger().Warn(
+			"Error while trying to update secured units usage: ", err.Error())
+	}
+	clusterTelemetry.UpdateSecuredClusterIdentity(ctx, clusterID, clusterMetrics)
 	return nil
 }
 
 func (p *pipelineImpl) OnFinish(clusterID string) {
 	p.metricsStore.Set(clusterID, &central.ClusterMetrics{})
+	p.telemetryMetrics.DeleteClusterMetrics(clusterID)
 }

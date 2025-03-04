@@ -6,25 +6,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/blevesearch/bleve"
-	"github.com/stackrox/rox/central/globalindex"
-	nodeDackbox "github.com/stackrox/rox/central/node/dackbox"
-	nodeIndex "github.com/stackrox/rox/central/node/index"
-	"github.com/stackrox/rox/central/node/index/mappings"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
-	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/dackbox"
-	dackboxConcurrency "github.com/stackrox/rox/pkg/dackbox/concurrency"
-	"github.com/stackrox/rox/pkg/dackbox/indexer"
-	"github.com/stackrox/rox/pkg/dackbox/utils/queue"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
 	"github.com/stackrox/rox/pkg/postgres/schema"
-	"github.com/stackrox/rox/pkg/rocksdb"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sac/testconsts"
 	"github.com/stackrox/rox/pkg/sac/testutils"
 	searchPkg "github.com/stackrox/rox/pkg/search"
@@ -45,67 +34,23 @@ type nodeDatastoreSACSuite struct {
 	// Elements for postgres mode
 	pgtestbase *pgtest.TestPostgres
 
-	// Elements for bleve+rocksdb mode
-	rocksEngine *rocksdb.RocksDB
-	bleveIndex  bleve.Index
-	keyFence    dackboxConcurrency.KeyFence
-	indexQ      queue.WaitableQueue
-	dacky       *dackbox.DackBox
-
 	testContexts map[string]context.Context
 
 	testNodeIDs map[string][]string
 	testNodes   map[string]*storage.Node
 }
 
-func (s *nodeDatastoreSACSuite) setupPostgres() {
-	var err error
-
+func (s *nodeDatastoreSACSuite) SetupSuite() {
 	s.pgtestbase = pgtest.ForT(s.T())
 	s.Require().NotNil(s.pgtestbase)
-	s.datastore, err = GetTestPostgresDataStore(s.T(), s.pgtestbase.DB)
-	s.Require().NoError(err)
+	s.datastore = GetTestPostgresDataStore(s.T(), s.pgtestbase.DB)
 	s.optionsMap = schema.NodesSchema.OptionsMap
-}
-
-func (s *nodeDatastoreSACSuite) setupRocks() {
-	var err error
-
-	s.rocksEngine, err = rocksdb.NewTemp("nodeDatastoreSACTest")
-	s.Require().NoError(err)
-	s.bleveIndex, err = globalindex.MemOnlyIndex()
-	s.Require().NoError(err)
-	s.keyFence = dackboxConcurrency.NewKeyFence()
-	s.indexQ = queue.NewWaitableQueue()
-	s.dacky, err = dackbox.NewRocksDBDackBox(s.rocksEngine, s.indexQ, []byte("graph"), []byte("dirty"), []byte("valid"))
-	s.Require().NoError(err)
-
-	reg := indexer.NewWrapperRegistry()
-	indexer.NewLazy(s.indexQ, reg, s.bleveIndex, s.dacky.AckIndexed).Start()
-	reg.RegisterWrapper(nodeDackbox.Bucket, nodeIndex.Wrapper{})
-
-	s.datastore, err = GetTestRocksBleveDataStore(s.T(), s.rocksEngine, s.bleveIndex, s.dacky, s.keyFence)
-	s.Require().NoError(err)
-	s.optionsMap = mappings.OptionsMap
-}
-
-func (s *nodeDatastoreSACSuite) SetupSuite() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.setupPostgres()
-	} else {
-		s.setupRocks()
-	}
 
 	s.testContexts = testutils.GetNamespaceScopedTestContexts(context.Background(), s.T(), resources.Node)
 }
 
 func (s *nodeDatastoreSACSuite) TearDownSuite() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.pgtestbase.DB.Close()
-	} else {
-		s.Require().NoError(rocksdb.CloseAndRemove(s.rocksEngine))
-		s.Require().NoError(s.bleveIndex.Close())
-	}
+	s.pgtestbase.DB.Close()
 }
 
 func (s *nodeDatastoreSACSuite) SetupTest() {
@@ -134,14 +79,6 @@ func (s *nodeDatastoreSACSuite) addTestNode(clusterID string) string {
 	return nodeID
 }
 
-func (s *nodeDatastoreSACSuite) waitForIndexing() {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		indexingCompleted := concurrency.NewSignal()
-		s.indexQ.PushSignal(&indexingCompleted)
-		<-indexingCompleted.Done()
-	}
-}
-
 func (s *nodeDatastoreSACSuite) initTestResourceSet() {
 	clusters := []string{testconsts.Cluster1, testconsts.Cluster2, testconsts.Cluster3}
 
@@ -152,8 +89,6 @@ func (s *nodeDatastoreSACSuite) initTestResourceSet() {
 			s.addTestNode(clusterID)
 		}
 	}
-
-	s.waitForIndexing()
 }
 
 type sacMultiNodeTest struct {
@@ -222,7 +157,7 @@ func getSACMultiNodeTestCases(baseContext context.Context, _ *testing.T, validCl
 			ValidClusterScope:  true,
 			ExpectedClusterIds: validClusterIDs,
 		},
-		"read-write on the right cluster and partial namespace access cannot get": {
+		"read-write on the right cluster and partial namespace access can get": {
 			Context: sac.WithGlobalAccessScopeChecker(baseContext,
 				sac.AllowFixedScopes(
 					sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
@@ -230,7 +165,7 @@ func getSACMultiNodeTestCases(baseContext context.Context, _ *testing.T, validCl
 					sac.ClusterScopeKeys(validClusterIDs...),
 					sac.NamespaceScopeKeys("someNamespace"))),
 			ValidClusterScope:  true,
-			ExpectedClusterIds: []string{},
+			ExpectedClusterIds: validClusterIDs,
 		},
 	}
 }
@@ -262,11 +197,11 @@ func (s *nodeDatastoreSACSuite) TestGetNode() {
 			s.NoError(err)
 			if c.ExpectedFound {
 				s.True(found)
-				s.NotNil(fetchedNode)
+				s.Require().NotNil(fetchedNode)
 
 				// Priority can have updated value, and we want to ignore it.
 				fetchedNode.Priority = s.testNodes[nodeID].Priority
-				s.Equal(*s.testNodes[nodeID], *fetchedNode)
+				protoassert.Equal(s.T(), s.testNodes[nodeID], fetchedNode)
 			} else {
 				s.False(found)
 				s.Nil(fetchedNode)
@@ -279,7 +214,6 @@ func (s *nodeDatastoreSACSuite) TestCountNodes() {
 	clusterIDs := []string{testconsts.Cluster1, testconsts.Cluster3}
 
 	s.addTestNode(clusterIDs[0])
-	s.waitForIndexing()
 
 	cases := getSACMultiNodeTestCases(context.Background(), s.T(), clusterIDs, testconsts.WrongCluster, resources.Node)
 	for name, c := range cases {
@@ -316,7 +250,6 @@ func (s *nodeDatastoreSACSuite) TestCount() {
 	clusterIDs := []string{testconsts.Cluster1, testconsts.Cluster3}
 
 	s.addTestNode(clusterIDs[0])
-	s.waitForIndexing()
 
 	cases := getSACMultiNodeTestCases(context.Background(), s.T(), clusterIDs, testconsts.WrongCluster, resources.Node)
 	for name, c := range cases {
@@ -395,6 +328,30 @@ func (s *nodeDatastoreSACSuite) TestSearchNodes() {
 			}
 
 			s.ElementsMatch(expectedNodeIds, fetchedNodeIDs)
+		})
+	}
+}
+
+func (s *nodeDatastoreSACSuite) TestWalkByQuery() {
+	clusterIDs := []string{testconsts.Cluster1, testconsts.Cluster3}
+
+	cases := getSACMultiNodeTestCases(context.Background(), s.T(), clusterIDs, testconsts.WrongCluster, resources.Node)
+	for name, c := range cases {
+		s.Run(name, func() {
+			ctx := c.Context
+
+			var foundNodes []string
+			err := s.datastore.WalkByQuery(ctx, nil, func(node *storage.Node) error {
+				foundNodes = append(foundNodes, node.GetId())
+				return nil
+			})
+			s.NoError(err)
+
+			var expectedNodeIds []string
+			for _, expectedClusterID := range c.ExpectedClusterIds {
+				expectedNodeIds = append(expectedNodeIds, s.testNodeIDs[expectedClusterID]...)
+			}
+			s.ElementsMatch(expectedNodeIds, foundNodes)
 		})
 	}
 }
@@ -515,7 +472,6 @@ func (s *nodeDatastoreSACSuite) TestDeleteNodesSingle() {
 
 			targetClusterID := testconsts.Cluster1
 			delNodeID := s.addTestNode(targetClusterID)
-			s.waitForIndexing()
 
 			_, foundTestNode, err := s.datastore.GetNode(unrestrictedCtx, delNodeID)
 			s.Require().True(foundTestNode)
@@ -563,7 +519,6 @@ func (s *nodeDatastoreSACSuite) TestDeleteNodesMulti() {
 
 				delNodeIDs = append(delNodeIDs, testNodeID)
 			}
-			s.waitForIndexing()
 
 			for _, delNodeID := range delNodeIDs {
 				_, foundTestNode, err = s.datastore.GetNode(unrestrictedCtx, delNodeID)

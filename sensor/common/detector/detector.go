@@ -1,9 +1,10 @@
 package detector
 
 import (
+	"context"
 	"sort"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
@@ -15,21 +16,28 @@ import (
 	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/detection/deploytime"
+	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errorhelpers"
-	"github.com/stackrox/rox/pkg/expiringcache"
+	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/networkgraph"
 	"github.com/stackrox/rox/pkg/networkgraph/networkbaseline"
+	"github.com/stackrox/rox/pkg/protocompat"
+	queueScaler "github.com/stackrox/rox/pkg/sensor/queue"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/sensor/common"
 	"github.com/stackrox/rox/sensor/common/admissioncontroller"
 	"github.com/stackrox/rox/sensor/common/detector/baseline"
+	detectorMetrics "github.com/stackrox/rox/sensor/common/detector/metrics"
 	networkBaselineEval "github.com/stackrox/rox/sensor/common/detector/networkbaseline"
+	"github.com/stackrox/rox/sensor/common/detector/queue"
 	"github.com/stackrox/rox/sensor/common/detector/unified"
 	"github.com/stackrox/rox/sensor/common/enforcer"
 	"github.com/stackrox/rox/sensor/common/externalsrcs"
-	"github.com/stackrox/rox/sensor/common/imagecacheutils"
+	"github.com/stackrox/rox/sensor/common/image/cache"
+	"github.com/stackrox/rox/sensor/common/message"
+	"github.com/stackrox/rox/sensor/common/metrics"
 	"github.com/stackrox/rox/sensor/common/registry"
 	"github.com/stackrox/rox/sensor/common/scan"
 	"github.com/stackrox/rox/sensor/common/store"
@@ -40,6 +48,9 @@ import (
 var (
 	log                             = logging.LoggerForModule()
 	_   common.CentralGRPCConnAware = (*detectorImpl)(nil)
+
+	deploymentNotFoundErr     = errors.Wrap(errox.NotFound, "deployment entity")
+	externalEntityNotFoundErr = errors.Wrap(errox.NotFound, "external entity")
 )
 
 // Detector is the sensor component that syncs policies from Central and runs detection
@@ -49,24 +60,56 @@ type Detector interface {
 	common.SensorComponent
 	common.CentralGRPCConnAware
 
-	ProcessDeployment(deployment *storage.Deployment, action central.ResourceAction)
+	ProcessDeployment(ctx context.Context, deployment *storage.Deployment, action central.ResourceAction)
 	ReprocessDeployments(deploymentIDs ...string)
-	ProcessIndicator(indicator *storage.ProcessIndicator)
-	ProcessNetworkFlow(flow *storage.NetworkFlow)
-	ProcessPolicySync(sync *central.PolicySync) error
-	ProcessReassessPolicies() error
+	ProcessIndicator(ctx context.Context, indicator *storage.ProcessIndicator)
+	ProcessNetworkFlow(ctx context.Context, flow *storage.NetworkFlow)
+	ProcessPolicySync(ctx context.Context, sync *central.PolicySync) error
 	ProcessReprocessDeployments() error
 	ProcessUpdatedImage(image *storage.Image) error
 }
 
 // New returns a new detector
 func New(enforcer enforcer.Enforcer, admCtrlSettingsMgr admissioncontroller.SettingsManager,
-	deploymentStore store.DeploymentStore, serviceAccountStore store.ServiceAccountStore, cache expiringcache.Cache, auditLogEvents chan *sensor.AuditEvents,
+	deploymentStore store.DeploymentStore, serviceAccountStore store.ServiceAccountStore, cache cache.Image, auditLogEvents chan *sensor.AuditEvents,
 	auditLogUpdater updater.Component, networkPolicyStore store.NetworkPolicyStore, registryStore *registry.Store, localScan *scan.LocalScan) Detector {
+	detectorStopper := concurrency.NewStopper()
+	netFlowQueueSize := 0
+	piQueueSize := 0
+	deploymentQueueSize := 0
+	if features.SensorCapturesIntermediateEvents.Enabled() {
+		netFlowQueueSize = queueScaler.ScaleSizeOnNonDefault(env.DetectorNetworkFlowBufferSize)
+		piQueueSize = queueScaler.ScaleSizeOnNonDefault(env.DetectorProcessIndicatorBufferSize)
+	}
+	if env.DetectorDeploymentBufferSize.IntegerSetting() > 0 {
+		deploymentQueueSize = queueScaler.ScaleSizeOnNonDefault(env.DetectorDeploymentBufferSize)
+	}
+	netFlowQueue := queue.NewQueue[*queue.FlowQueueItem](
+		detectorStopper,
+		"FlowsQueue",
+		netFlowQueueSize,
+		detectorMetrics.DetectorNetworkFlowQueueOperations,
+		detectorMetrics.DetectorNetworkFlowDroppedCount,
+	)
+	piQueue := queue.NewQueue[*queue.IndicatorQueueItem](
+		detectorStopper,
+		"PIsQueue",
+		piQueueSize,
+		detectorMetrics.DetectorProcessIndicatorQueueOperations,
+		detectorMetrics.DetectorProcessIndicatorDroppedCount,
+	)
+	// We only need the SimpleQueue since the deploymentQueue will not be paused/resumed
+	deploymentQueue := queue.NewSimpleQueue[*queue.DeploymentQueueItem](
+		"DeploymentQueue",
+		deploymentQueueSize,
+		detectorMetrics.DetectorDeploymentQueueOperations,
+		detectorMetrics.DetectorDeploymentDroppedCount,
+	)
+
 	return &detectorImpl{
 		unifiedDetector: unified.NewDetector(),
 
-		output:                    make(chan *central.MsgFromSensor),
+		output:                    make(chan *message.ExpiringMessage),
 		auditEventsChan:           auditLogEvents,
 		deploymentAlertOutputChan: make(chan outputResult),
 		deploymentProcessingMap:   make(map[string]int64),
@@ -83,19 +126,23 @@ func New(enforcer enforcer.Enforcer, admCtrlSettingsMgr admissioncontroller.Sett
 		admCtrlSettingsMgr: admCtrlSettingsMgr,
 		auditLogUpdater:    auditLogUpdater,
 
-		detectorStopper:   concurrency.NewStopper(),
+		detectorStopper:   detectorStopper,
 		auditStopper:      concurrency.NewStopper(),
 		serializerStopper: concurrency.NewStopper(),
 		alertStopSig:      concurrency.NewSignal(),
 
 		networkPolicyStore: networkPolicyStore,
+
+		networkFlowsQueue: netFlowQueue,
+		indicatorsQueue:   piQueue,
+		deploymentsQueue:  deploymentQueue,
 	}
 }
 
 type detectorImpl struct {
 	unifiedDetector unified.Detector
 
-	output                    chan *central.MsgFromSensor
+	output                    chan *message.ExpiringMessage
 	auditEventsChan           chan *sensor.AuditEvents
 	deploymentAlertOutputChan chan outputResult
 
@@ -126,12 +173,21 @@ type detectorImpl struct {
 	admissionCacheNeedsFlush bool
 
 	networkPolicyStore store.NetworkPolicyStore
+
+	networkFlowsQueue *queue.Queue[*queue.FlowQueueItem]
+	indicatorsQueue   *queue.Queue[*queue.IndicatorQueueItem]
+	deploymentsQueue  queue.SimpleQueue[*queue.DeploymentQueueItem]
 }
 
 func (d *detectorImpl) Start() error {
 	go d.runDetector()
 	go d.runAuditLogEventDetector()
 	go d.serializeDeployTimeOutput()
+	go d.processAlertsForFlowOnEntity()
+	go d.processIndicator()
+	go d.processDeployment()
+	d.networkFlowsQueue.Start()
+	d.indicatorsQueue.Start()
 	return nil
 }
 
@@ -139,6 +195,7 @@ type outputResult struct {
 	results   *central.AlertResults
 	timestamp int64
 	action    central.ResourceAction
+	context   context.Context
 }
 
 // serializeDeployTimeOutput serializes all messages that are going to be output. This allows us to guarantee the ordering
@@ -164,8 +221,7 @@ func (d *detectorImpl) serializeDeployTimeOutput() {
 				d.enforcer.ProcessAlertResults(result.action, storage.LifecycleStage_DEPLOY, alertResults)
 				fallthrough
 			case central.ResourceAction_UPDATE_RESOURCE, central.ResourceAction_SYNC_RESOURCE:
-				var isMostRecentUpdate bool
-				concurrency.WithRLock(&d.deploymentProcessingLock, func() {
+				isMostRecentUpdate := concurrency.WithRLock1(&d.deploymentProcessingLock, func() bool {
 					value, exists := d.deploymentProcessingMap[alertResults.GetDeploymentId()]
 					if !exists {
 						// CREATE and UPDATE actions write a 0 timestamp into the map to signify that it is being processed
@@ -175,14 +231,13 @@ func (d *detectorImpl) serializeDeployTimeOutput() {
 						for _, alert := range alertResults.GetAlerts() {
 							alert.State = storage.ViolationState_RESOLVED
 						}
-						isMostRecentUpdate = true
-					} else {
-						isMostRecentUpdate = result.timestamp >= value
-						if isMostRecentUpdate {
-							d.deploymentProcessingMap[alertResults.GetDeploymentId()] = result.timestamp
-						}
+						return true
 					}
-
+					isMostRecentUpdate := result.timestamp >= value
+					if isMostRecentUpdate {
+						d.deploymentProcessingMap[alertResults.GetDeploymentId()] = result.timestamp
+					}
+					return isMostRecentUpdate
 				})
 				// If the deployment is not being marked as being processed, then it was already removed and don't push to the channel
 				// If the timestamp of the deployment is older than one that has already been processed then also ignore
@@ -193,7 +248,7 @@ func (d *detectorImpl) serializeDeployTimeOutput() {
 			select {
 			case <-d.serializerStopper.Flow().StopRequested():
 				return
-			case d.output <- createAlertResultsMsg(result.action, alertResults):
+			case d.output <- createAlertResultsMsg(result.context, result.action, alertResults):
 			}
 		}
 	}
@@ -214,14 +269,26 @@ func (d *detectorImpl) Stop(_ error) {
 	_ = d.serializerStopper.Client().Stopped().Wait()
 }
 
-func (d *detectorImpl) Notify(common.SensorComponentEvent) {}
+func (d *detectorImpl) Notify(e common.SensorComponentEvent) {
+	if !features.SensorCapturesIntermediateEvents.Enabled() {
+		return
+	}
+	switch e {
+	case common.SensorComponentEventCentralReachable:
+		d.indicatorsQueue.Resume()
+		d.networkFlowsQueue.Resume()
+	case common.SensorComponentEventOfflineMode:
+		d.indicatorsQueue.Pause()
+		d.networkFlowsQueue.Pause()
+	}
+}
 
 func (d *detectorImpl) Capabilities() []centralsensor.SensorCapability {
 	return []centralsensor.SensorCapability{centralsensor.SensorDetectionCap}
 }
 
 // ProcessPolicySync reconciles policies and flush all deployments through the detector
-func (d *detectorImpl) ProcessPolicySync(sync *central.PolicySync) error {
+func (d *detectorImpl) ProcessPolicySync(ctx context.Context, sync *central.PolicySync) error {
 	// Note: Assume the version of the policies received from central is never
 	// older than sensor's version. Convert to latest if this proves wrong.
 	d.unifiedDetector.ReconcilePolicies(sync.GetPolicies())
@@ -230,25 +297,13 @@ func (d *detectorImpl) ProcessPolicySync(sync *central.PolicySync) error {
 	// Take deployment lock and flush
 	concurrency.WithLock(&d.deploymentDetectionLock, func() {
 		for _, deployment := range d.deploymentStore.GetAll() {
-			d.processDeploymentNoLock(deployment, central.ResourceAction_UPDATE_RESOURCE)
+			d.processDeploymentNoLock(ctx, deployment, central.ResourceAction_UPDATE_RESOURCE)
 		}
 	})
 
 	if d.admCtrlSettingsMgr != nil {
 		d.admCtrlSettingsMgr.UpdatePolicies(sync.GetPolicies())
 	}
-	return nil
-}
-
-// ProcessReassessPolicies clears the image caches and resets the deduper
-func (d *detectorImpl) ProcessReassessPolicies() error {
-	log.Debugf("Reassess Policies triggered")
-	// Clear the image caches and make all the deployments flow back through by clearing out the hash
-	d.enricher.imageCache.RemoveAll()
-	if d.admCtrlSettingsMgr != nil {
-		d.admCtrlSettingsMgr.FlushCache()
-	}
-	d.deduper.reset()
 	return nil
 }
 
@@ -273,7 +328,7 @@ func (d *detectorImpl) processNetworkBaselineSync(sync *central.NetworkBaselineS
 
 // ProcessUpdatedImage updates the imageCache with a new value
 func (d *detectorImpl) ProcessUpdatedImage(image *storage.Image) error {
-	key := imagecacheutils.GetImageCacheKey(image)
+	key := cache.GetKey(image)
 	log.Debugf("Receiving update for image: %s from central. Updating cache", image.GetName().GetFullName())
 	newValue := &cacheValue{
 		image:     image,
@@ -287,7 +342,7 @@ func (d *detectorImpl) ProcessUpdatedImage(image *storage.Image) error {
 
 // ProcessReprocessDeployments marks all deployments to be reprocessed
 func (d *detectorImpl) ProcessReprocessDeployments() error {
-	log.Debugf("Reprocess deployments triggered. Clearing cache and deduper")
+	log.Debug("Reprocess deployments triggered. Clearing cache and deduper")
 	if d.admissionCacheNeedsFlush && d.admCtrlSettingsMgr != nil {
 		// Would prefer to do a targeted flush
 		d.admCtrlSettingsMgr.FlushCache()
@@ -307,7 +362,7 @@ func (d *detectorImpl) ProcessMessage(msg *central.MsgToSensor) error {
 	return nil
 }
 
-func (d *detectorImpl) ResponsesC() <-chan *central.MsgFromSensor {
+func (d *detectorImpl) ResponsesC() <-chan *message.ExpiringMessage {
 	return d.output
 }
 
@@ -319,11 +374,14 @@ func (d *detectorImpl) runDetector() {
 		case <-d.detectorStopper.Flow().StopRequested():
 			return
 		case scanOutput := <-d.enricher.outputChan():
+			detectorMetrics.RemoveBlockingScanCall()
 			alerts := d.unifiedDetector.DetectDeployment(deploytime.DetectionContext{}, booleanpolicy.EnhancedDeployment{
 				Deployment:             scanOutput.deployment,
 				Images:                 scanOutput.images,
 				NetworkPoliciesApplied: scanOutput.networkPoliciesApplied,
 			})
+
+			metrics.IncrementDetectorDeploymentProcessed()
 
 			sort.Slice(alerts, func(i, j int) bool {
 				return alerts[i].GetPolicy().GetId() < alerts[j].GetPolicy().GetId()
@@ -341,6 +399,7 @@ func (d *detectorImpl) runDetector() {
 				},
 				timestamp: scanOutput.deployment.GetStateTimestamp(),
 				action:    scanOutput.action,
+				context:   scanOutput.context,
 			}:
 			}
 		}
@@ -370,12 +429,8 @@ func (d *detectorImpl) runAuditLogEventDetector() {
 			sort.Slice(alerts, func(i, j int) bool {
 				return alerts[i].GetPolicy().GetId() < alerts[j].GetPolicy().GetId()
 			})
-			select {
-			case <-d.auditStopper.Flow().StopRequested():
-				return
-			case <-d.serializerStopper.Flow().StopRequested():
-				return
-			case d.output <- &central.MsgFromSensor{
+
+			msg := &central.MsgFromSensor{
 				Msg: &central.MsgFromSensor_Event{
 					Event: &central.SensorEvent{
 						Action: central.ResourceAction_CREATE_RESOURCE,
@@ -388,7 +443,18 @@ func (d *detectorImpl) runAuditLogEventDetector() {
 						},
 					},
 				},
-			}:
+			}
+
+			// These messages are coming from compliance, and since compliance supports offline mode as well
+			// it should be ok to leave these messages without expiration.
+			expiringMessage := message.New(msg)
+
+			select {
+			case <-d.auditStopper.Flow().StopRequested():
+				return
+			case <-d.serializerStopper.Flow().StopRequested():
+				return
+			case d.output <- expiringMessage:
 			}
 		}
 	}
@@ -403,11 +469,35 @@ func (d *detectorImpl) markDeploymentForProcessing(id string) {
 	}
 }
 
-func (d *detectorImpl) ProcessDeployment(deployment *storage.Deployment, action central.ResourceAction) {
-	d.deploymentDetectionLock.Lock()
-	defer d.deploymentDetectionLock.Unlock()
+func (d *detectorImpl) ProcessDeployment(ctx context.Context, deployment *storage.Deployment, action central.ResourceAction) {
+	// Don't  process the deployment if the context has already expired
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		d.deploymentsQueue.Push(&queue.DeploymentQueueItem{
+			Ctx:        ctx,
+			Deployment: deployment,
+			Action:     action,
+		})
+	}
+}
 
-	d.processDeploymentNoLock(deployment, action)
+func (d *detectorImpl) processDeployment() {
+	for {
+		select {
+		case <-d.detectorStopper.Flow().StopRequested():
+			return
+		default:
+			item := d.deploymentsQueue.PullBlocking(d.detectorStopper.LowLevel().GetStopRequestSignal())
+			if item == nil {
+				continue
+			}
+			concurrency.WithLock(&d.deploymentDetectionLock, func() {
+				d.processDeploymentNoLock(item.Ctx, item.Deployment, item.Action)
+			})
+		}
+	}
 }
 
 func (d *detectorImpl) ReprocessDeployments(deploymentIDs ...string) {
@@ -420,16 +510,11 @@ func (d *detectorImpl) ReprocessDeployments(deploymentIDs ...string) {
 }
 
 func (d *detectorImpl) getNetworkPoliciesApplied(deployment *storage.Deployment) *augmentedobjs.NetworkPoliciesApplied {
-	if !features.NetworkPolicySystemPolicy.Enabled() {
-		// If feature flag is disabled we simply don't do the calculation.
-		// It is fine (from the Matcher perspective) to use nil augmented objects
-		return nil
-	}
 	networkPolicies := d.networkPolicyStore.Find(deployment.GetNamespace(), deployment.GetPodLabels())
 	return networkpolicy.GenerateNetworkPoliciesAppliedObj(networkPolicies)
 }
 
-func (d *detectorImpl) processDeploymentNoLock(deployment *storage.Deployment, action central.ResourceAction) {
+func (d *detectorImpl) processDeploymentNoLock(ctx context.Context, deployment *storage.Deployment, action central.ResourceAction) {
 	switch action {
 	case central.ResourceAction_REMOVE_RESOURCE:
 		d.baselineEval.RemoveDeployment(deployment.GetId())
@@ -442,6 +527,7 @@ func (d *detectorImpl) processDeploymentNoLock(deployment *storage.Deployment, a
 			case <-d.alertStopSig.Done():
 				return
 			case d.deploymentAlertOutputChan <- outputResult{
+				context: ctx,
 				results: &central.AlertResults{DeploymentId: deployment.GetId()},
 				action:  action,
 			}:
@@ -450,15 +536,18 @@ func (d *detectorImpl) processDeploymentNoLock(deployment *storage.Deployment, a
 	case central.ResourceAction_CREATE_RESOURCE:
 		d.deduper.addDeployment(deployment)
 		d.markDeploymentForProcessing(deployment.GetId())
-		go d.enricher.blockingScan(deployment, d.getNetworkPoliciesApplied(deployment), action)
+		detectorMetrics.AddBlockingScanCall("deployment_create")
+		go d.enricher.blockingScan(ctx, deployment, d.getNetworkPoliciesApplied(deployment), action)
 	case central.ResourceAction_UPDATE_RESOURCE, central.ResourceAction_SYNC_RESOURCE:
 		// Check if the deployment has changes that require detection, which is more expensive than hashing
 		// If not, then just return
 		if !d.deduper.needsProcessing(deployment) {
+			metrics.IncrementDetectorCacheHit()
 			return
 		}
 		d.markDeploymentForProcessing(deployment.GetId())
-		go d.enricher.blockingScan(deployment, d.getNetworkPoliciesApplied(deployment), action)
+		detectorMetrics.AddBlockingScanCall("deployment_update")
+		go d.enricher.blockingScan(ctx, deployment, d.getNetworkPoliciesApplied(deployment), action)
 	}
 }
 
@@ -466,12 +555,12 @@ func (d *detectorImpl) SetCentralGRPCClient(cc grpc.ClientConnInterface) {
 	d.enricher.imageSvc = v1.NewImageServiceClient(cc)
 }
 
-func (d *detectorImpl) ProcessIndicator(pi *storage.ProcessIndicator) {
-	go d.processIndicator(pi)
+func (d *detectorImpl) ProcessIndicator(ctx context.Context, pi *storage.ProcessIndicator) {
+	go d.pushIndicator(ctx, pi)
 }
 
-func createAlertResultsMsg(action central.ResourceAction, alertResults *central.AlertResults) *central.MsgFromSensor {
-	return &central.MsgFromSensor{
+func createAlertResultsMsg(ctx context.Context, action central.ResourceAction, alertResults *central.AlertResults) *message.ExpiringMessage {
+	msgFromSensor := &central.MsgFromSensor{
 		Msg: &central.MsgFromSensor_Event{
 			Event: &central.SensorEvent{
 				Id:     alertResults.GetDeploymentId(),
@@ -486,43 +575,72 @@ func createAlertResultsMsg(action central.ResourceAction, alertResults *central.
 			},
 		},
 	}
+
+	return message.NewExpiring(ctx, msgFromSensor)
 }
 
-func (d *detectorImpl) processIndicator(pi *storage.ProcessIndicator) {
-	deployment := d.deploymentStore.Get(pi.GetDeploymentId())
+func (d *detectorImpl) pushIndicator(ctx context.Context, pi *storage.ProcessIndicator) {
+	deployment := d.deploymentStore.GetSnapshot(pi.GetDeploymentId())
 	if deployment == nil {
 		log.Debugf("Deployment has already been removed: %+v", pi)
 		// Because the indicator was already enriched with a deployment, this means the deployment is gone
 		return
 	}
-	images := d.enricher.getImages(deployment)
-
-	// Run detection now
-	alerts := d.unifiedDetector.DetectProcess(booleanpolicy.EnhancedDeployment{
-		Deployment: deployment,
-		Images:     images,
-	}, pi, d.baselineEval.IsOutsideLockedBaseline(pi))
-	if len(alerts) == 0 {
-		// No need to process runtime alerts that have no violations
-		return
+	item := &queue.IndicatorQueueItem{
+		Ctx:          ctx,
+		Deployment:   deployment,
+		Netpols:      d.getNetworkPoliciesApplied(deployment),
+		IsInBaseline: d.baselineEval.IsOutsideLockedBaseline(pi),
+		Indicator:    pi,
 	}
-	alertResults := &central.AlertResults{
-		DeploymentId: pi.GetDeploymentId(),
-		Alerts:       alerts,
-		Stage:        storage.LifecycleStage_RUNTIME,
-	}
+	d.indicatorsQueue.Push(item)
+}
 
-	d.enforcer.ProcessAlertResults(central.ResourceAction_CREATE_RESOURCE, storage.LifecycleStage_RUNTIME, alertResults)
+func (d *detectorImpl) processIndicator() {
+	for {
+		select {
+		case <-d.detectorStopper.Flow().StopRequested():
+			return
+		case item, ok := <-d.indicatorsQueue.Pull():
+			if !ok {
+				return
+			}
+			if item == nil {
+				continue
+			}
+			// If ROX_CAPTURE_INTERMEDIATE_EVENTS is enabled,
+			// the context will not be canceled with sensor disconnects
+			images := d.enricher.getImages(item.Ctx, item.Deployment)
 
-	select {
-	case <-d.alertStopSig.Done():
-		return
-	case d.output <- createAlertResultsMsg(central.ResourceAction_CREATE_RESOURCE, alertResults):
+			// Run detection now
+			alerts := d.unifiedDetector.DetectProcess(booleanpolicy.EnhancedDeployment{
+				Deployment:             item.Deployment,
+				Images:                 images,
+				NetworkPoliciesApplied: item.Netpols,
+			}, item.Indicator, item.IsInBaseline)
+			if len(alerts) == 0 {
+				// No need to process runtime alerts that have no violations
+				continue
+			}
+			alertResults := &central.AlertResults{
+				DeploymentId: item.Indicator.GetDeploymentId(),
+				Alerts:       alerts,
+				Stage:        storage.LifecycleStage_RUNTIME,
+			}
+
+			d.enforcer.ProcessAlertResults(central.ResourceAction_CREATE_RESOURCE, storage.LifecycleStage_RUNTIME, alertResults)
+
+			select {
+			case <-d.alertStopSig.Done():
+				continue
+			case d.output <- createAlertResultsMsg(item.Ctx, central.ResourceAction_CREATE_RESOURCE, alertResults):
+			}
+		}
 	}
 }
 
-func (d *detectorImpl) ProcessNetworkFlow(flow *storage.NetworkFlow) {
-	go d.processNetworkFlow(flow)
+func (d *detectorImpl) ProcessNetworkFlow(ctx context.Context, flow *storage.NetworkFlow) {
+	go d.processNetworkFlow(ctx, flow)
 }
 
 type networkEntityDetails struct {
@@ -534,10 +652,10 @@ type networkEntityDetails struct {
 func (d *detectorImpl) getNetworkFlowEntityDetails(info *storage.NetworkEntityInfo) (networkEntityDetails, error) {
 	switch info.GetType() {
 	case storage.NetworkEntityInfo_DEPLOYMENT:
-		deployment := d.deploymentStore.Get(info.GetId())
+		deployment := d.deploymentStore.GetSnapshot(info.GetId())
 		if deployment == nil {
 			// Maybe the deployment is already removed. Don't run the flow through policy anymore
-			return networkEntityDetails{}, errors.Errorf("Deployment with ID: %q not found while trying to run network flow policy", info.GetId())
+			return networkEntityDetails{}, errors.Wrapf(deploymentNotFoundErr, "Deployment with ID: %q not found while trying to run network flow policy", info.GetId())
 		}
 		return networkEntityDetails{
 			name:                deployment.GetName(),
@@ -547,7 +665,7 @@ func (d *detectorImpl) getNetworkFlowEntityDetails(info *storage.NetworkEntityIn
 	case storage.NetworkEntityInfo_EXTERNAL_SOURCE:
 		extsrc := d.extSrcsStore.LookupByID(info.GetId())
 		if extsrc == nil {
-			return networkEntityDetails{}, errors.Errorf("External source with ID: %q not found while trying to run network flow policy", info.GetId())
+			return networkEntityDetails{}, errors.Wrapf(externalEntityNotFoundErr, "External source with ID: %q not found while trying to run network flow policy", info.GetId())
 		}
 		return networkEntityDetails{
 			name: extsrc.GetExternalSource().GetName(),
@@ -556,50 +674,104 @@ func (d *detectorImpl) getNetworkFlowEntityDetails(info *storage.NetworkEntityIn
 		return networkEntityDetails{
 			name: networkgraph.InternetExternalSourceName,
 		}, nil
+	case storage.NetworkEntityInfo_INTERNAL_ENTITIES:
+		return networkEntityDetails{
+			name: networkgraph.InternalEntitiesName,
+		}, nil
 	default:
 		return networkEntityDetails{}, errors.Errorf("Unsupported network entity type: %q", info.GetType())
 	}
 }
 
-func (d *detectorImpl) processAlertsForFlowOnEntity(
+func (d *detectorImpl) pushFlowOnEntity(
+	ctx context.Context,
 	entity *storage.NetworkEntityInfo,
 	flowDetails *augmentedobjs.NetworkFlowDetails,
 ) {
 	if entity.GetType() != storage.NetworkEntityInfo_DEPLOYMENT {
 		return
 	}
-	deployment := d.deploymentStore.Get(entity.GetId())
+	deployment := d.deploymentStore.GetSnapshot(entity.GetId())
 	if deployment == nil {
 		// Probably the deployment was deleted just before we had fetched entity names.
 		log.Warnf("Stop processing alerts for network flow on deployment %q. No deployment was found", entity.GetId())
 		return
 	}
 
-	images := d.enricher.getImages(deployment)
-	alerts := d.unifiedDetector.DetectNetworkFlowForDeployment(booleanpolicy.EnhancedDeployment{
+	item := &queue.FlowQueueItem{
+		Ctx:        ctx,
 		Deployment: deployment,
-		Images:     images,
-	}, flowDetails)
-	if len(alerts) == 0 {
-		// No need to process runtime alerts that have no violations
-		return
-	}
-	alertResults := &central.AlertResults{
-		DeploymentId: deployment.GetId(),
-		Alerts:       alerts,
-		Stage:        storage.LifecycleStage_RUNTIME,
+		Flow:       flowDetails,
+		Netpols:    d.getNetworkPoliciesApplied(deployment),
 	}
 
-	d.enforcer.ProcessAlertResults(central.ResourceAction_CREATE_RESOURCE, storage.LifecycleStage_RUNTIME, alertResults)
+	d.networkFlowsQueue.Push(item)
+}
 
-	select {
-	case <-d.alertStopSig.Done():
-		return
-	case d.output <- createAlertResultsMsg(central.ResourceAction_CREATE_RESOURCE, alertResults):
+func (d *detectorImpl) processAlertsForFlowOnEntity() {
+	for {
+		select {
+		case <-d.detectorStopper.Flow().StopRequested():
+			return
+		case item, ok := <-d.networkFlowsQueue.Pull():
+			if !ok {
+				log.Debugf("network flow queue channel closed")
+				return
+			}
+			if item == nil {
+				log.Debugf("pulled nil item from the queue")
+				continue
+			}
+			log.Debugf("processing network flow for deployment %s with id %s", item.Deployment.GetName(), item.Deployment.GetId())
+
+			// If ROX_CAPTURE_INTERMEDIATE_EVENTS is enabled,
+			// the context will not be canceled with sensor disconnects
+			images := d.enricher.getImages(item.Ctx, item.Deployment)
+			alerts := d.unifiedDetector.DetectNetworkFlowForDeployment(booleanpolicy.EnhancedDeployment{
+				Deployment:             item.Deployment,
+				Images:                 images,
+				NetworkPoliciesApplied: item.Netpols,
+			}, item.Flow)
+			if len(alerts) == 0 {
+				// No need to process runtime alerts that have no violations
+				continue
+			}
+			alertResults := &central.AlertResults{
+				DeploymentId: item.Deployment.GetId(),
+				Alerts:       alerts,
+				Stage:        storage.LifecycleStage_RUNTIME,
+			}
+
+			d.enforcer.ProcessAlertResults(central.ResourceAction_CREATE_RESOURCE, storage.LifecycleStage_RUNTIME, alertResults)
+
+			select {
+			case <-d.alertStopSig.Done():
+				continue
+			case d.output <- createAlertResultsMsg(item.Ctx, central.ResourceAction_CREATE_RESOURCE, alertResults):
+			}
+		}
 	}
 }
 
-func (d *detectorImpl) processNetworkFlow(flow *storage.NetworkFlow) {
+func (d *detectorImpl) notFoundErrorToEntityKind(err error) string {
+	if errors.Is(err, deploymentNotFoundErr) {
+		return "deployment"
+	} else if errors.Is(err, externalEntityNotFoundErr) {
+		return "external_entity"
+	}
+	return ""
+}
+
+func (d *detectorImpl) handleEntityNotFound(err error, orientation string) {
+	if errors.Is(err, errox.NotFound) {
+		log.Debugf("Error looking up %s entity details while running network flow policy: %v", orientation, err)
+		metrics.IncrementEntityNotFound(d.notFoundErrorToEntityKind(err), orientation)
+		return
+	}
+	log.Errorf("Error looking up %s entity details while running network flow policy: %v", orientation, err)
+}
+
+func (d *detectorImpl) processNetworkFlow(ctx context.Context, flow *storage.NetworkFlow) {
 	// Only run the flows through policies if the entity types are supported
 	_, srcTypeSupported := networkbaseline.ValidBaselinePeerEntityTypes[flow.GetProps().GetSrcEntity().GetType()]
 	_, dstTypeSupported := networkbaseline.ValidBaselinePeerEntityTypes[flow.GetProps().GetDstEntity().GetType()]
@@ -610,16 +782,25 @@ func (d *detectorImpl) processNetworkFlow(flow *storage.NetworkFlow) {
 	// First extract more information of the flow. Mainly entity names
 	srcDetails, err := d.getNetworkFlowEntityDetails(flow.GetProps().GetSrcEntity())
 	if err != nil {
-		log.Errorf("Error looking up source entity details while running network flow policy: %v", err)
+		d.handleEntityNotFound(err, "source")
 		return
 	}
 	dstDetails, err := d.getNetworkFlowEntityDetails(flow.GetProps().GetDstEntity())
 	if err != nil {
-		log.Errorf("Error looking up destination entity details while running network flow policy: %v", err)
+		d.handleEntityNotFound(err, "destination")
 		return
 	}
 	// Check if flow is anomalous
 	flowIsNotInBaseline := d.networkbaselineEval.IsOutsideLockedBaseline(flow, srcDetails.name, dstDetails.name)
+	// Assume the flow is still active and use the current timestamp.
+	flowLastSeenTimestamp := time.Now()
+	if flow.GetLastSeenTimestamp() != nil {
+		// If the flow has terminated already, then use the last seen timestamp.
+		timestamp, err := protocompat.ConvertTimestampToTimeOrError(flow.GetLastSeenTimestamp())
+		if err == nil {
+			flowLastSeenTimestamp = timestamp
+		}
+	}
 	flowDetails := &augmentedobjs.NetworkFlowDetails{
 		SrcEntityName:          srcDetails.name,
 		SrcEntityType:          flow.GetProps().GetSrcEntity().GetType(),
@@ -628,22 +809,13 @@ func (d *detectorImpl) processNetworkFlow(flow *storage.NetworkFlow) {
 		DstPort:                flow.GetProps().GetDstPort(),
 		L4Protocol:             flow.GetProps().GetL4Protocol(),
 		NotInNetworkBaseline:   flowIsNotInBaseline,
-		LastSeenTimestamp:      extractTimestamp(flow),
+		LastSeenTimestamp:      flowLastSeenTimestamp,
 		SrcDeploymentNamespace: srcDetails.deploymentNamespace,
 		SrcDeploymentType:      srcDetails.deploymentType,
 		DstDeploymentNamespace: dstDetails.deploymentNamespace,
 		DstDeploymentType:      dstDetails.deploymentType,
 	}
 
-	d.processAlertsForFlowOnEntity(flow.GetProps().GetSrcEntity(), flowDetails)
-	d.processAlertsForFlowOnEntity(flow.GetProps().GetDstEntity(), flowDetails)
-}
-
-func extractTimestamp(flow *storage.NetworkFlow) *types.Timestamp {
-	// If the flow has terminated already, then use the last seen timestamp.
-	if timestamp := flow.GetLastSeenTimestamp(); timestamp != nil {
-		return timestamp
-	}
-	// If the flow is still active, use the current timestamp.
-	return types.TimestampNow()
+	d.pushFlowOnEntity(ctx, flow.GetProps().GetSrcEntity(), flowDetails)
+	d.pushFlowOnEntity(ctx, flow.GetProps().GetDstEntity(), flowDetails)
 }

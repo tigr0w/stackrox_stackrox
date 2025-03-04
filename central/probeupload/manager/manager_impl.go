@@ -8,10 +8,8 @@ import (
 	"path"
 	"strings"
 
-	timestamp "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	blobstore "github.com/stackrox/rox/central/blob/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/binenc"
@@ -21,11 +19,15 @@ import (
 	"github.com/stackrox/rox/pkg/postgres/pgadmin"
 	"github.com/stackrox/rox/pkg/postgres/pgconfig"
 	"github.com/stackrox/rox/pkg/probeupload"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+	"github.com/stackrox/rox/pkg/search"
 )
 
 const (
 	rootBlobPathPrefix = `/offline/probe-uploads/`
+	rootBlobPathRegex  = `/offline/probe-uploads/.+`
 
 	defaultFreeStorageThreshold = 1 << 30 // 1 GB
 	metadataSizeOverhead        = 16384   // 16KB of overhead for blob metadata and indexes etc.
@@ -57,16 +59,10 @@ func newManager(datastore blobstore.Datastore) *manager {
 }
 
 func (m *manager) getAllProbeBlobs() ([]string, error) {
-	ids, err := m.blobStore.GetIDs(blobReadAccessCtx)
+	q := search.NewQueryBuilder().AddRegexes(search.BlobName, rootBlobPathRegex).ProtoQuery()
+	blobs, err := m.blobStore.SearchIDs(blobReadAccessCtx, q)
 	if err != nil {
 		return nil, err
-	}
-	var blobs []string
-	// TODO(ROX-17285): Replace this with search
-	for _, id := range ids {
-		if strings.HasPrefix(id, rootBlobPathPrefix) {
-			blobs = append(blobs, id)
-		}
 	}
 	return blobs, nil
 }
@@ -127,7 +123,7 @@ func (m *manager) getFileInfo(ctx context.Context, file string) (*v1.ProbeUpload
 
 	return &v1.ProbeUploadManifest_File{
 		Name:  file,
-		Size_: blob.GetLength(),
+		Size:  blob.GetLength(),
 		Crc32: crc32,
 	}, nil
 }
@@ -161,9 +157,8 @@ func (m *manager) StoreFile(ctx context.Context, file string, data io.Reader, si
 		return errors.Errorf("invalid file name %q", file)
 	}
 
-	// When using managed services, Postgres space is not a concern.
-	// TODO(ROX-16407): Use flag to guard space calculating
-	if !env.ManagedCentral.BooleanSetting() {
+	// When using external databases, Postgres space cannot be calculated.
+	if !env.ManagedCentral.BooleanSetting() && !pgconfig.IsExternalDatabase() {
 		requiredBytes := uint64(size) + uint64(metadataSizeOverhead) + uint64(m.freeStorageThreshold)
 		if freeBytes, err := availableBytes(); err == nil && uint64(freeBytes) < requiredBytes {
 			return errors.Errorf("only %d bytes left on database, not storing probes to avoid impacting database health", freeBytes)
@@ -176,8 +171,8 @@ func (m *manager) StoreFile(ctx context.Context, file string, data io.Reader, si
 		Name:         path.Join(rootBlobPathPrefix, file),
 		Checksum:     string(checksumBytes),
 		Length:       size,
-		LastUpdated:  timestamp.TimestampNow(),
-		ModifiedTime: timestamp.TimestampNow(),
+		LastUpdated:  protocompat.TimestampNow(),
+		ModifiedTime: protocompat.TimestampNow(),
 	}
 
 	if err := m.blobStore.Upsert(ctx, b, verifyingReader); err != nil {

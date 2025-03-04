@@ -20,6 +20,7 @@ import spock.lang.Shared
 import spock.lang.Tag
 import spock.lang.Unroll
 
+@Tag("PZ")
 class Enforcement extends BaseSpecification {
 
     // Test labels - each test has its own unique label space. This is also used to name
@@ -262,7 +263,6 @@ class Enforcement extends BaseSpecification {
         }
     }
 
-    @Tag("BAT")
     @Tag("Integration")
     @Tag("PolicyEnforcement")
     def "Test Kill Enforcement - Integration"() {
@@ -462,8 +462,8 @@ class Enforcement extends BaseSpecification {
         and:
         "Request Image Scan"
         def scanResults = Services.requestBuildImageScan(
-                "docker.io",
-                "library/nginx",
+                "quay.io",
+                "rhacs-eng/qa",
                 "latest"
         )
 
@@ -698,6 +698,12 @@ class Enforcement extends BaseSpecification {
         assert lockProcessBaselines.size() ==  1
         assert  lockProcessBaselines.get(0).getElementsList().
                 find { it.element.processName.equalsIgnoreCase("/usr/sbin/nginx") } != null
+
+        // Wait for the baseline to be synced with Sensor.
+        // If this tests flakes again log statements were added in Central and Sensor to investigate if a
+        // baseline was synced with sensor at a specific point in time.
+        sleep 10000
+
         orchestrator.execInContainer(d, "pwd")
         assert waitForViolation(d.name, ALERT_AND_KILL_ENFORCEMENT_BASELINE_PROCESS, WAIT_FOR_VIOLATION_TIMEOUT)
 

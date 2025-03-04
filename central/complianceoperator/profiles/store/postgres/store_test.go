@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ComplianceOperatorProfilesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE compliance_operator_profiles CASCADE")
 	s.T().Log("compliance_operator_profiles", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ComplianceOperatorProfilesStoreSuite) TestStore() {
 	foundComplianceOperatorProfile, exists, err = store.Get(ctx, complianceOperatorProfile.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(complianceOperatorProfile, foundComplianceOperatorProfile)
+	protoassert.Equal(s.T(), complianceOperatorProfile, foundComplianceOperatorProfile)
 
-	complianceOperatorProfileCount, err := store.Count(ctx)
+	complianceOperatorProfileCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, complianceOperatorProfileCount)
-	complianceOperatorProfileCount, err = store.Count(withNoAccessCtx)
+	complianceOperatorProfileCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(complianceOperatorProfileCount)
 
@@ -75,11 +78,6 @@ func (s *ComplianceOperatorProfilesStoreSuite) TestStore() {
 	s.True(complianceOperatorProfileExists)
 	s.NoError(store.Upsert(ctx, complianceOperatorProfile))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, complianceOperatorProfile), sac.ErrResourceAccessDenied)
-
-	foundComplianceOperatorProfile, exists, err = store.Get(ctx, complianceOperatorProfile.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(complianceOperatorProfile, foundComplianceOperatorProfile)
 
 	s.NoError(store.Delete(ctx, complianceOperatorProfile.GetId()))
 	foundComplianceOperatorProfile, exists, err = store.Get(ctx, complianceOperatorProfile.GetId())
@@ -99,13 +97,13 @@ func (s *ComplianceOperatorProfilesStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, complianceOperatorProfiles))
 
-	complianceOperatorProfileCount, err = store.Count(ctx)
+	complianceOperatorProfileCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, complianceOperatorProfileCount)
 
 	s.NoError(store.DeleteMany(ctx, complianceOperatorProfileIDs))
 
-	complianceOperatorProfileCount, err = store.Count(ctx)
+	complianceOperatorProfileCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, complianceOperatorProfileCount)
 }

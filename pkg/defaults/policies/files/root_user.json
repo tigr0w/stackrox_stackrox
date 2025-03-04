@@ -2,7 +2,7 @@
   "id": "dce17697-1b72-49d2-b18a-05d893cd9368",
   "name": "Docker CIS 4.1: Ensure That a User for the Container Has Been Created",
   "description": "Containers should run as a non-root user",
-  "rationale": "It is good practice to run the container as a non-root user, where possible. This can be done via the USER directive in the Dockerfile.",
+  "rationale": "It is good practice to run the container as a non-root user, where possible. This can be done via the USER directive in the Dockerfile. You can exclude this policy from OpenShift clusters because they run containers using an arbitrarily assigned user ID by default.",
   "remediation": "Ensure that the Dockerfile for each container switches from the root user",
   "categories": [
     "Docker CIS"
@@ -12,6 +12,15 @@
     "DEPLOY"
   ],
   "exclusions": [
+    {
+      "name": "Don't alert on deployment gcp-cloud-controller-manager in openshift-cloud-controller-manager namespace",
+      "deployment": {
+        "name": "gcp-cloud-controller-manager",
+        "scope": {
+          "namespace": "openshift-cloud-controller-manager"
+        }
+      }
+    },
     {
       "name": "Don't alert on deployment haproxy-* in openshift-vsphere-infra namespace",
       "deployment": {
@@ -466,6 +475,149 @@
       "deployment": {
         "scope": {
           "namespace": "openshift-machine-config-operator"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment cluster-image-set-controller in namespace multicluster-engine",
+      "deployment": {
+        "name": "cluster-image-set-controller",
+        "scope": {
+          "namespace": "multicluster-engine"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment discovery-operator in namespace multicluster-engine",
+      "deployment": {
+        "name": "discovery-operator",
+        "scope": {
+          "namespace": "multicluster-engine"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment hive-clustersync in namespace hive",
+      "deployment": {
+        "name": "hive-clustersync",
+        "scope": {
+          "namespace": "hive"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment hive-controllers in namespace hive",
+      "deployment": {
+        "name": "hive-controllers",
+        "scope": {
+          "namespace": "hive"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment hive-operator in namespace multicluster-engine",
+      "deployment": {
+        "name": "hive-operator",
+        "scope": {
+          "namespace": "multicluster-engine"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment hiveadmission in namespace hive",
+      "deployment": {
+        "name": "hiveadmission",
+        "scope": {
+          "namespace": "hive"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment kube-controller-manager-operator in namespace openshift-kube-controller-manager-operator",
+      "deployment": {
+        "name": "kube-controller-manager-operator",
+        "scope": {
+          "namespace": "openshift-kube-controller-manager-operator"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment openshift-kube-scheduler-operator in namespace openshift-kube-scheduler-operator",
+      "deployment": {
+        "name": "openshift-kube-scheduler-operator",
+        "scope": {
+          "namespace": "openshift-kube-scheduler-operator"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on openshift-logging namespace",
+      "deployment": {
+        "scope": {
+          "namespace": "openshift-logging"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment osd-patch-subscription-source in namespace openshift-marketplace",
+      "deployment": {
+        "name": "osd-patch-subscription-source",
+        "scope": {
+          "namespace": "openshift-marketplace"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment osd-delete-ownerrefs-serviceaccounts in namespace openshift-backplane-srep",
+      "deployment": {
+        "name": "osd-delete-ownerrefs-serviceaccounts",
+        "scope": {
+          "namespace": "openshift-backplane-srep"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment builds-pruner in namespace openshift-sre-pruning",
+      "deployment": {
+        "name": "builds-pruner",
+        "scope": {
+          "namespace": "openshift-sre-pruning"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment deployments-pruner in namespace openshift-sre-pruning",
+      "deployment": {
+        "name": "deployments-pruner",
+        "scope": {
+          "namespace": "openshift-sre-pruning"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment osd-delete-backplane-script-resources in namespace openshift-backplane-managed-scripts",
+      "deployment": {
+        "name": "osd-delete-backplane-script-resources",
+        "scope": {
+          "namespace": "openshift-backplane-managed-scripts"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment network-node-identity in namespace openshift-network-node-identity",
+      "deployment": {
+        "name": "network-node-identity",
+        "scope": {
+          "namespace": "openshift-network-node-identity"
+        }
+      }
+    },
+    {
+      "name": "Don't alert on deployment aws-cloud-controller-manager in namespace openshift-cloud-controller-manager",
+      "deployment": {
+        "name": "aws-cloud-controller-manager",
+        "scope": {
+          "namespace": "openshift-cloud-controller-manager"
         }
       }
     }

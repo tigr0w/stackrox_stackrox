@@ -12,9 +12,10 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/fileutils"
+	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/mtls"
+	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/x509utils"
-	"go.uber.org/zap"
 )
 
 const (
@@ -33,13 +34,13 @@ func GetAdditionalCAFilePaths() ([]string, error) {
 	if err != nil {
 		// Ignore error if additional CAs do not exist on filesystem
 		if os.IsNotExist(err) {
-			log.Infof("Additional CA directory %q does not exist: skipping", additionalCADir)
+			log.Debugf("Additional CA directory %q does not exist: skipping", additionalCADir)
 			return nil, nil
 		}
 		return nil, errors.Wrap(err, fmt.Sprintf("Failed to read additional CAs directory %q", additionalCADir))
 	}
 
-	var files []string
+	var filePaths = set.NewStringSet()
 
 	for _, directoryEntry := range directoryEntries {
 
@@ -47,7 +48,7 @@ func GetAdditionalCAFilePaths() ([]string, error) {
 		filePath := path.Join(additionalCADir, entryName)
 
 		if directoryEntry.IsDir() {
-			log.Infof("Skipping additional CA directory entry %q because it is a directory", entryName)
+			log.Debugf("Skipping additional CA directory entry %q because it is a directory", entryName)
 			continue
 		}
 
@@ -69,30 +70,29 @@ func GetAdditionalCAFilePaths() ([]string, error) {
 				continue
 			}
 			if fileInfo.IsDir() {
-				log.Infof("Skipping additional CA file %q because it is a symlink that resolved to a directory", filePath)
+				log.Debugf("Skipping additional CA file %q because it is a symlink that resolved to a directory", filePath)
 				continue
 			}
 		}
 
-		if !isValidAdditionalCAFileName(entryName) {
-			log.Info(skipAdditionalCAFileMsg(entryName))
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			log.Warnf("Failed to read additional CA file %q: %s. Skipping", filePath, err)
 			continue
 		}
 
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("Failed to read additional CAs cert file %q", filePath))
+		if _, err = x509utils.ConvertPEMToDERs(content); err != nil {
+			log.Warnf("Failed to convert additional CA file %q from PEM to DER format: %s. Skipping", filePath, err)
+			continue
 		}
 
-		_, err = x509utils.ConvertPEMToDERs(content)
-		if err != nil {
-			return nil, errors.Wrap(err, fmt.Sprintf("Failed to convert additional CA cert file %q from PEM to DER format", filePath))
-		}
+		filePaths.Add(filePath)
 
-		files = append(files, filePath)
 	}
 
-	return files, nil
+	return filePaths.AsSortedSlice(func(i, j string) bool {
+		return strings.Compare(i, j) < 0
+	}), nil
 
 }
 
@@ -149,19 +149,19 @@ func MaybeGetDefaultTLSCertificateFromDirectory(dir string) (*tls.Certificate, e
 
 	if exists, err := fileutils.Exists(certFile); err != nil || !exists {
 		if err != nil {
-			log.Warnw("Error checking if default TLS certificate file exists", zap.Error(err))
+			log.Warnw("Error checking if default TLS certificate file exists", logging.Err(err))
 			return nil, err
 		}
-		log.Infof("Default TLS certificate file %q does not exist. Skipping", certFile)
+		log.Debugf("Default TLS certificate file %q does not exist. Skipping", certFile)
 		return nil, nil
 	}
 
 	if exists, err := fileutils.Exists(keyFile); err != nil || !exists {
 		if err != nil {
-			log.Warnw("Error checking if default TLS key file exists", zap.Error(err))
+			log.Warnw("Error checking if default TLS key file exists", logging.Err(err))
 			return nil, err
 		}
-		log.Infof("Default TLS key file %q does not exist. Skipping", keyFile)
+		log.Debugf("Default TLS key file %q does not exist. Skipping", keyFile)
 		return nil, nil
 	}
 
@@ -234,7 +234,7 @@ func getInternalCertificates(namespace string) ([]tls.Certificate, error) {
 
 	log.Warnw("Internal TLS certificates are not valid for all cluster-internal DNS names due to deployment in "+
 		"alternative namespace, issuing ephemeral certificate with adequate DNS names",
-		zap.String("namespace", namespace), zap.Strings("internalDNSNames", mtls.CentralSubject.AllHostnamesForNamespace(namespace)))
+		logging.String("namespace", namespace), logging.Strings("internalDNSNames", mtls.CentralSubject.AllHostnamesForNamespace(namespace)))
 	newInternalCert, err := issueInternalCertificate(namespace)
 	if err != nil {
 		return internalCerts, err
@@ -250,24 +250,4 @@ func validForAllDNSNames(cert *x509.Certificate, dnsNames ...string) bool {
 		}
 	}
 	return true
-}
-
-var (
-	allowedAdditionalCAExtensionList = []string{".crt", ".pem"}
-	allowedAdditionalCAExtensionMap  = map[string]struct{}{}
-)
-
-func init() {
-	for _, ext := range allowedAdditionalCAExtensionList {
-		allowedAdditionalCAExtensionMap[ext] = struct{}{}
-	}
-}
-
-func skipAdditionalCAFileMsg(fileName string) string {
-	return fmt.Sprintf("skipping additional-ca file %q because it has an invalid extension; allowed file extensions for additional ca certificates are %v", fileName, allowedAdditionalCAExtensionList)
-}
-
-func isValidAdditionalCAFileName(fileName string) bool {
-	_, ok := allowedAdditionalCAExtensionMap[path.Ext(fileName)]
-	return ok
 }

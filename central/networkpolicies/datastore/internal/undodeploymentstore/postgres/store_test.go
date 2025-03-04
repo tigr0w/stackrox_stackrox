@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *NetworkpoliciesundodeploymentsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE networkpoliciesundodeployments CASCADE")
 	s.T().Log("networkpoliciesundodeployments", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *NetworkpoliciesundodeploymentsStoreSuite) TestStore() {
 	foundNetworkPolicyApplicationUndoDeploymentRecord, exists, err = store.Get(ctx, networkPolicyApplicationUndoDeploymentRecord.GetDeploymentId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(networkPolicyApplicationUndoDeploymentRecord, foundNetworkPolicyApplicationUndoDeploymentRecord)
+	protoassert.Equal(s.T(), networkPolicyApplicationUndoDeploymentRecord, foundNetworkPolicyApplicationUndoDeploymentRecord)
 
-	networkPolicyApplicationUndoDeploymentRecordCount, err := store.Count(ctx)
+	networkPolicyApplicationUndoDeploymentRecordCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, networkPolicyApplicationUndoDeploymentRecordCount)
-	networkPolicyApplicationUndoDeploymentRecordCount, err = store.Count(withNoAccessCtx)
+	networkPolicyApplicationUndoDeploymentRecordCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(networkPolicyApplicationUndoDeploymentRecordCount)
 
@@ -75,11 +78,6 @@ func (s *NetworkpoliciesundodeploymentsStoreSuite) TestStore() {
 	s.True(networkPolicyApplicationUndoDeploymentRecordExists)
 	s.NoError(store.Upsert(ctx, networkPolicyApplicationUndoDeploymentRecord))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, networkPolicyApplicationUndoDeploymentRecord), sac.ErrResourceAccessDenied)
-
-	foundNetworkPolicyApplicationUndoDeploymentRecord, exists, err = store.Get(ctx, networkPolicyApplicationUndoDeploymentRecord.GetDeploymentId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(networkPolicyApplicationUndoDeploymentRecord, foundNetworkPolicyApplicationUndoDeploymentRecord)
 
 	s.NoError(store.Delete(ctx, networkPolicyApplicationUndoDeploymentRecord.GetDeploymentId()))
 	foundNetworkPolicyApplicationUndoDeploymentRecord, exists, err = store.Get(ctx, networkPolicyApplicationUndoDeploymentRecord.GetDeploymentId())
@@ -99,13 +97,13 @@ func (s *NetworkpoliciesundodeploymentsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, networkPolicyApplicationUndoDeploymentRecords))
 
-	networkPolicyApplicationUndoDeploymentRecordCount, err = store.Count(ctx)
+	networkPolicyApplicationUndoDeploymentRecordCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, networkPolicyApplicationUndoDeploymentRecordCount)
 
 	s.NoError(store.DeleteMany(ctx, networkPolicyApplicationUndoDeploymentRecordIDs))
 
-	networkPolicyApplicationUndoDeploymentRecordCount, err = store.Count(ctx)
+	networkPolicyApplicationUndoDeploymentRecordCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, networkPolicyApplicationUndoDeploymentRecordCount)
 }

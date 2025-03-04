@@ -37,9 +37,6 @@ func (s *imageFlavorTestSuite) TestGetImageFlavorFromEnv() {
 		"development_build": {
 			expectedFlavor: DevelopmentBuildImageFlavor(),
 		},
-		"stackrox.io": {
-			expectedFlavor: StackRoxIOReleaseImageFlavor(),
-		},
 		"rhacs": {
 			expectedFlavor: RHACSReleaseImageFlavor(),
 		},
@@ -120,19 +117,15 @@ func (s *imageFlavorTestSuite) TestOpenSourceImageFlavorDevReleaseTags() {
 		s.Equal(f.MainImageTag, "3.0.99.0")
 		s.Equal(f.CentralDBImageTag, "3.0.99.0")
 		s.Equal(f.CollectorImageTag, "3.0.99.0")
-		s.Equal(f.CollectorSlimImageTag, "3.0.99.0")
 		s.Equal(f.ScannerImageTag, "3.0.99.0")
 
-		s.Contains(f.CollectorSlimImageName, "-slim")
 	} else {
 		// Original tags are used
 		s.Equal(f.MainImageTag, "3.0.99.0")
 		s.Equal(f.CentralDBImageTag, "3.0.99.0")
-		s.Equal(f.CollectorImageTag, "99.9.9-latest")
-		s.Equal(f.CollectorSlimImageTag, "99.9.9-slim")
+		s.Equal(f.CollectorImageTag, "99.9.9")
 		s.Equal(f.ScannerImageTag, "99.9.9")
 
-		s.NotContains(f.CollectorSlimImageName, "-slim")
 	}
 }
 
@@ -143,9 +136,6 @@ func (s *imageFlavorTestSuite) TestGetImageFlavorByName() {
 	}{
 		"development_build": {
 			expectedFlavor: DevelopmentBuildImageFlavor(),
-		},
-		"stackrox.io": {
-			expectedFlavor: StackRoxIOReleaseImageFlavor(),
 		},
 		"rhacs": {
 			expectedFlavor: RHACSReleaseImageFlavor(),
@@ -185,7 +175,7 @@ func TestGetVisibleImageFlavorNames(t *testing.T) {
 		isRelease bool
 		want      []string
 	}{
-		{"development", false, []string{"development_build", "stackrox.io", "rhacs", "opensource"}},
+		{"development", false, []string{"development_build", "rhacs", "opensource"}},
 		{"release", true, []string{"rhacs", "opensource"}},
 	}
 	for _, tt := range tests {

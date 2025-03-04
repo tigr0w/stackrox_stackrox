@@ -1,5 +1,11 @@
 name: Build
 on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit SHA to build'
+        required: true
+        type: string
   workflow_call:
   push:
     tags:
@@ -12,6 +18,12 @@ on:
     - reopened
     - synchronize
 
+defaults:
+  run:
+    # This enables `-o pipefail` for all jobs as compared to when shell isn't set.
+    # See https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#defaultsrunshell
+    shell: bash
+
 jobs:
   define-job-matrix:
     outputs:
@@ -19,26 +31,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
       - name: Define the matrix for build jobs
         id: define-job-matrix
         run: |
           source './scripts/ci/lib.sh'
 
-          matrix='{"pre_build_go_binaries": {"name":[]}, "build_and_push_main": {"name":[]} }'
+          matrix='{
+            "pre_build_go_binaries": { "name":[], "arch":[] },
+            "build_and_push_main": { "name":[], "arch":[] },
+            "push_main_multiarch_manifests": { "name":[] },
+            "build_and_push_operator": { "name":[] },
+            "scan_images_with_roxctl": { "name":[], "image":[], "exclude":[] }
+          }'
 
           # The base matrix
           matrix="$(jq '.pre_build_go_binaries.name += ["default"]' <<< "$matrix")"
-          matrix="$(jq '.build_and_push_main.name += ["STACKROX_BRANDING", "RHACS_BRANDING"]' <<< "$matrix")"
+          matrix="$(jq '.pre_build_go_binaries.arch += ["amd64", "arm64"]' <<< "$matrix")"
+
+          matrix="$(jq '.build_and_push_main.name += ["RHACS_BRANDING", "STACKROX_BRANDING"]' <<< "$matrix")"
+          matrix="$(jq '.build_and_push_main.arch += ["amd64", "arm64"]' <<< "$matrix")"
+
+          matrix="$(jq '.push_main_multiarch_manifests.name += ["RHACS_BRANDING", "STACKROX_BRANDING"]' <<< "$matrix")"
+
+          matrix="$(jq '.build_and_push_operator.name += ["RHACS_BRANDING"]' <<< "$matrix")"
+
+          matrix="$(jq '.scan_images_with_roxctl.name += ["RHACS_BRANDING", "STACKROX_BRANDING"]' <<< "$matrix")"
+          matrix="$(jq '.scan_images_with_roxctl.image += ["central-db", "collector", "main", "roxctl", "scanner", "scanner-db", "scanner-db-slim", "scanner-slim", "stackrox-operator"]' <<< "$matrix")"
+          # TODO(ROX-27191): remove the exclusion once there's a community operator.
+          matrix="$(jq '.scan_images_with_roxctl.exclude += [{ "name": "STACKROX_BRANDING", "image": "stackrox-operator" }]' <<< "$matrix")"
+
+          if ! is_in_PR_context || pr_has_label ci-build-all-arch; then
+            matrix="$(jq '.pre_build_go_binaries.arch += ["ppc64le", "s390x"]' <<< "$matrix")"
+            matrix="$(jq '.build_and_push_main.arch += ["ppc64le", "s390x"]' <<< "$matrix")"
+          fi;
 
           # Conditionally add a prerelease build (binaries built with GOTAGS=release)
           if ! is_tagged; then
             if ! is_in_PR_context || pr_has_label ci-build-prerelease; then
               matrix="$(jq '.pre_build_go_binaries.name += ["prerelease"]' <<< "$matrix")"
               matrix="$(jq '.build_and_push_main.name += ["prerelease"]' <<< "$matrix")"
+              matrix="$(jq '.push_main_multiarch_manifests.name += ["prerelease"]' <<< "$matrix")"
             fi
           fi
 
@@ -46,6 +82,14 @@ jobs:
           if ! is_in_PR_context || pr_has_label ci-build-race-condition-debug; then
             matrix="$(jq '.pre_build_go_binaries.name += ["race-condition-debug"]' <<< "$matrix")"
             matrix="$(jq '.build_and_push_main.name += ["race-condition-debug"]' <<< "$matrix")"
+            matrix="$(jq '.push_main_multiarch_manifests.name += ["race-condition-debug"]' <<< "$matrix")"
+            # Exclude "arm64", "ppc64le", "s390x"
+            matrix="$(jq '.pre_build_go_binaries.exclude = [{ "name": "race-condition-debug", "arch": "arm64" }]' <<< "$matrix")"
+            matrix="$(jq '.pre_build_go_binaries.exclude += [{ "name": "race-condition-debug", "arch": "ppc64le" }]' <<< "$matrix")"
+            matrix="$(jq '.pre_build_go_binaries.exclude += [{ "name": "race-condition-debug", "arch": "s390x" }]' <<< "$matrix")"
+            matrix="$(jq '.build_and_push_main.exclude = [{ "name": "race-condition-debug", "arch": "arm64" }]' <<< "$matrix")"
+            matrix="$(jq '.build_and_push_main.exclude += [{ "name": "race-condition-debug", "arch": "ppc64le" }]' <<< "$matrix")"
+            matrix="$(jq '.build_and_push_main.exclude += [{ "name": "race-condition-debug", "arch": "s390x" }]' <<< "$matrix")"
           fi
 
           echo "Job matrix after conditionals:"
@@ -56,26 +100,26 @@ jobs:
 
   pre-build-ui:
     strategy:
+      fail-fast: false
       matrix:
         branding: [ RHACS_BRANDING, STACKROX_BRANDING ]
     env:
       ROX_PRODUCT_BRANDING: ${{ matrix.branding }}
+      # For consistency with `image/rhel/konflux.Dockerfile`, see comment there.
+      UI_PKG_INSTALL_EXTRA_ARGS: --ignore-scripts
     runs-on: ubuntu-latest
     container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-      - name: Ignore dubious repository ownership
-        run: |
-          # Prevent fatal error "detected dubious ownership in repository" from recent git.
-          git config --global --add safe.directory "$(pwd)"
-
-      - uses: ./.github/actions/create-concatenated-ui-monorepo-lock
+      - uses: ./.github/actions/job-preamble
+        with:
+          gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
       - uses: ./.github/actions/cache-ui-dependencies
 
@@ -87,28 +131,27 @@ jobs:
       - name: Build UI
         run: make -C ui build
 
-      - uses: actions/upload-artifact@v3
+      - uses: ./.github/actions/upload-artifact-with-retry
         with:
           name: ui-${{env.ROX_PRODUCT_BRANDING}}-build
           path: |
             ui/build
-            ui/monorepo.lock
+            ui/apps/platform/package-lock.json
 
   pre-build-cli:
     runs-on: ubuntu-latest
     container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-      - name: Ignore dubious repository ownership
-        run: |
-          # Prevent fatal error "detected dubious ownership in repository" from recent git.
-          git config --global --add safe.directory "$(pwd)"
+      - uses: ./.github/actions/job-preamble
+        with:
+          gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
       - name: Cache Go dependencies
         uses: ./.github/actions/cache-go-dependencies
@@ -121,7 +164,7 @@ jobs:
       - name: Bundle build to preserve permissions
         run: tar -cvzf cli-build.tgz bin
 
-      - uses: actions/upload-artifact@v3
+      - uses: ./.github/actions/upload-artifact-with-retry
         with:
           name: cli-build
           path: cli-build.tgz
@@ -136,18 +179,17 @@ jobs:
     needs: define-job-matrix
     runs-on: ubuntu-latest
     container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-      - name: Ignore dubious repository ownership
-        run: |
-          # Prevent fatal error "detected dubious ownership in repository" from recent git.
-          git config --global --add safe.directory "$(pwd)"
+      - uses: ./.github/actions/job-preamble
+        with:
+          gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
       - name: Cache Go dependencies
         uses: ./.github/actions/cache-go-dependencies
@@ -155,7 +197,13 @@ jobs:
       - uses: ./.github/actions/handle-tagged-build
 
       - name: PR labels
-        uses: joerick/pr-labels-action@v1.0.8
+        uses: joerick/pr-labels-action@v1.0.9
+
+      - name: Setup build env for debugging support
+        run: |
+          if [[ "${GITHUB_HEAD_REF:-}" =~ -debug ]]; then
+            echo "DEBUG_BUILD=yes" >> "${GITHUB_ENV}"
+          fi
 
       - name: Setup Go build environment for release
         if: |
@@ -166,37 +214,47 @@ jobs:
 
       - name: Setup Go build environment for -race
         if: |
-          contains(github.event.pull_request.labels.*.name, 'ci-race-tests')
-            ||
-          matrix.name == 'race-condition-debug'
+          matrix.arch == 'amd64'
+            &&
+          (
+            contains(github.event.pull_request.labels.*.name, 'ci-race-tests')
+              ||
+            matrix.name == 'race-condition-debug'
+          )
         run: echo "RACE=true" >> "$GITHUB_ENV"
 
       - name: Build Go Binaries
-        run: make build-prep main-build-nodeps
+        run: |
+          if [[ "${{ matrix.arch }}" != "amd64" ]]; then
+            echo "Building non-amd binary"
+            GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 make build-prep main-build-nodeps
+          else
+            echo "Building amd binary"
+            GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=1 make build-prep main-build-nodeps
+          fi
 
       - name: Bundle the build to preserve permissions
-        run: tar -cvzf go-binaries-build.tgz bin/linux_amd64
+        run: tar -cvzf go-binaries-build.tgz bin/linux_${{ matrix.arch }}
 
-      - uses: actions/upload-artifact@v3
+      - uses: ./.github/actions/upload-artifact-with-retry
         with:
-          name: go-binaries-build-${{ matrix.name }}
+          name: go-binaries-build-${{ matrix.arch }}-${{ matrix.name }}
           path: go-binaries-build.tgz
 
   pre-build-docs:
     runs-on: ubuntu-latest
     container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-      - name: Ignore dubious repository ownership
-        run: |
-          # Prevent fatal error "detected dubious ownership in repository" from recent git.
-          git config --global --add safe.directory "$(pwd)"
+      - uses: ./.github/actions/job-preamble
+        with:
+          gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
       - name: Cache Go dependencies
         uses: ./.github/actions/cache-go-dependencies
@@ -209,35 +267,90 @@ jobs:
       - name: Generate the swagger docs
         run: |
           make swagger-docs
-          # Workarround to handle https://github.com/actions/cache/issues/753
+          # Workaround to handle https://github.com/actions/cache/issues/753
           rm -rf .proto
 
-      - uses: actions/upload-artifact@v3
+      - uses: ./.github/actions/upload-artifact-with-retry
         with:
           name: docs-build
           path: |
-            image/docs
+            image/rhel/docs
+
+  check-collector-images-exist:
+    # This job ensures that COLLECTOR_VERSION cannot be updated to a version for which
+    # the image was not successfully built on Konflux.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tag_suffix: ["", "-fast"]
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Get COLLECTOR_VERSION
+      id: collector-version
+      run: |
+        echo "collector-version=$(make --quiet --no-print-directory collector-tag)" >> "${GITHUB_OUTPUT}"
+
+    - name: Check image exists
+      uses: stackrox/actions/release/wait-for-image@v1
+      with:
+        token: ${{ secrets.QUAY_RHACS_ENG_BEARER_TOKEN }}
+        image: rhacs-eng/collector:${{ steps.collector-version.outputs.collector-version }}${{ matrix.tag_suffix }}
+        limit: 300
+
+  check-scanner-images-exist:
+    # This job ensures that SCANNER_VERSION cannot be updated to a version for which
+    # the image was not successfully built on Konflux.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ["scanner", "scanner-slim", "scanner-db", "scanner-db-slim"]
+        tag_suffix: ["", "-fast"]
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Get SCANNER_VERSION
+      id: scanner-version
+      run: |
+        echo "scanner-version=$(make --quiet --no-print-directory scanner-tag)" >> "${GITHUB_OUTPUT}"
+
+    - name: Check image exists
+      uses: stackrox/actions/release/wait-for-image@v1
+      with:
+        token: ${{ secrets.QUAY_RHACS_ENG_BEARER_TOKEN }}
+        image: rhacs-eng/${{ matrix.image }}:${{ steps.scanner-version.outputs.scanner-version }}${{ matrix.tag_suffix }}
+        limit: 300
 
   build-and-push-main:
     runs-on: ubuntu-latest
     needs:
+      - check-collector-images-exist
+      - check-scanner-images-exist
       - define-job-matrix
       - pre-build-ui
       - pre-build-cli
       - pre-build-go-binaries
       - pre-build-docs
+    # This step will run even if required pre-* steps failed. By following this
+    # approach as much of the build matrix as possible is completed despite
+    # transient issues e.g. docker pull timeouts. In this way some e2e jobs that
+    # require some part of the build matrix can still proceed.
+    if: ${{ !cancelled() }}
     strategy:
       # Supports four image builds (see Setup build env):
       # STACKROX_BRANDING
       # RHACS_BRANDING
       # prerelease
       # race-condition-debug
+      fail-fast: false
       matrix: ${{ fromJson(needs.define-job-matrix.outputs.matrix).build_and_push_main }}
     env:
       GO_BINARIES_BUILD_ARTIFACT: ""
       ROX_PRODUCT_BRANDING: ""
     container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
       env:
         QUAY_RHACS_ENG_RO_USERNAME: ${{ secrets.QUAY_RHACS_ENG_RO_USERNAME }}
         QUAY_RHACS_ENG_RO_PASSWORD: ${{ secrets.QUAY_RHACS_ENG_RO_PASSWORD }}
@@ -245,8 +358,10 @@ jobs:
         QUAY_RHACS_ENG_RW_PASSWORD: ${{ secrets.QUAY_RHACS_ENG_RW_PASSWORD }}
         QUAY_STACKROX_IO_RW_USERNAME: ${{ secrets.QUAY_STACKROX_IO_RW_USERNAME }}
         QUAY_STACKROX_IO_RW_PASSWORD: ${{ secrets.QUAY_STACKROX_IO_RW_PASSWORD }}
+      volumes:
+        - /usr:/mnt/usr
+        - /opt:/mnt/opt
     steps:
-
       - name: Setup build env
         run: |
           case "${{ matrix.name }}" in
@@ -272,20 +387,50 @@ jobs:
           esac
 
           {
-            echo "GO_BINARIES_BUILD_ARTIFACT=go-binaries-build-${go_binaries}"
+            echo "GO_BINARIES_BUILD_ARTIFACT=go-binaries-build-${{ matrix.arch }}-${go_binaries}"
             echo "ROX_PRODUCT_BRANDING=${brand}"
           } >> "$GITHUB_ENV"
+          if [[ "${GITHUB_HEAD_REF:-}" =~ -debug ]]; then
+            echo "DEBUG_BUILD=yes" >> "${GITHUB_ENV}"
+          fi
+
+      - name: delete unused tools
+        shell: bash
+        run: |
+          set +e
+          set -x
+          df -h
+          for delete in /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/Ruby; do
+            du -hs "/mnt${delete:?}"
+            rm -rf "/mnt${delete:?}"
+          done
+          df -h
+          for path in /mnt/usr/share /mnt/usr/local/lib /mnt/opt /mnt/opt/hostedtoolcache; do
+            du --threshold=100 -ks "${path}"/* | sort -nr | tail -10
+          done
 
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-      - name: Ignore dubious repository ownership
-        run: |
-          # Prevent fatal error "detected dubious ownership in repository" from recent git.
-          git config --global --add safe.directory "$(pwd)"
+      - uses: ./.github/actions/job-preamble
+        with:
+          gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
+
+      - name: Login to docker.io to mitigate rate limiting on downloading images
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_CI_ACCOUNT_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_CI_ACCOUNT_PASSWORD }}
+
+      - name: Set up QEMU
+        if: matrix.arch != 'amd64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Checkout submodules
         run: |
@@ -293,12 +438,12 @@ jobs:
 
       - uses: ./.github/actions/handle-tagged-build
 
-      - uses: actions/download-artifact@v3
+      - uses: ./.github/actions/download-artifact-with-retry
         with:
           name: ui-${{ env.ROX_PRODUCT_BRANDING }}-build
           path: ui
 
-      - uses: actions/download-artifact@v3
+      - uses: ./.github/actions/download-artifact-with-retry
         with:
           name: cli-build
 
@@ -306,7 +451,7 @@ jobs:
         run: |
           tar xvzf cli-build.tgz
 
-      - uses: actions/download-artifact@v3
+      - uses: ./.github/actions/download-artifact-with-retry
         with:
           name: ${{ env.GO_BINARIES_BUILD_ARTIFACT }}
 
@@ -314,12 +459,10 @@ jobs:
         run: |
           tar xvzf go-binaries-build.tgz
 
-      - uses: actions/download-artifact@v3
+      - uses: ./.github/actions/download-artifact-with-retry
         with:
           name: docs-build
-          path: image/docs
-
-      - uses: ./.github/actions/create-concatenated-ui-monorepo-lock
+          path: image/rhel/docs
 
       # needed to restore node_modules for ossls-nostice
       - uses: ./.github/actions/cache-ui-dependencies
@@ -333,20 +476,22 @@ jobs:
 
       - name: Set build tag for prerelease images
         if: matrix.name == 'prerelease'
-        run: echo "BUILD_TAG=$(make --quiet tag)-prerelease" >> "$GITHUB_ENV"
+        run: echo "BUILD_TAG=$(make --quiet --no-print-directory tag)-prerelease" >> "$GITHUB_ENV"
 
       - name: Set build tag for race condition images
         if: matrix.name == 'race-condition-debug'
-        run: echo "BUILD_TAG=$(make --quiet tag)-rcd" >> "$GITHUB_ENV"
+        run: echo "BUILD_TAG=$(make --quiet --no-print-directory tag)-rcd" >> "$GITHUB_ENV"
 
       - name: Build main images
-        run: make docker-build-main-image
+        run: |
+          GOOS=linux GOARCH=${{ matrix.arch }} scripts/lib.sh retry 6 true make docker-build-main-image
 
       - name: Check debugger presence in the main image
         run: make check-debugger
 
       - name: Build roxctl image
-        run: make docker-build-roxctl-image
+        run: |
+          GOOS=linux GOARCH=${{ matrix.arch }} scripts/lib.sh retry 6 true make docker-build-roxctl-image
 
       # needed for docs ensure_image.sh initial pull with RHACS_BRANDING
       - name: Docker login
@@ -354,7 +499,7 @@ jobs:
         if: |
           github.event_name == 'push' || !github.event.pull_request.head.repo.fork
         run: |
-          docker login -u "${QUAY_RHACS_ENG_RO_USERNAME}" --password-stdin quay.io <<<"${QUAY_RHACS_ENG_RO_PASSWORD}"
+          ./scripts/ci/lib.sh registry_ro_login "quay.io/rhacs-eng"
 
       - name: Push images
         # Skip for external contributions.
@@ -362,54 +507,174 @@ jobs:
           github.event_name == 'push' || !github.event.pull_request.head.repo.fork
         run: |
             source ./scripts/ci/lib.sh
-            echo "Will determin context from: ${{ github.event_name }} & ${{ github.ref_name }}"
+            echo "Will determine context from: ${{ github.event_name }} & ${{ github.ref_name }}"
             push_context=""
             if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "master" ]]; then
               push_context="merge-to-master"
             fi
-            push_main_image_set "$push_context" "${{ env.ROX_PRODUCT_BRANDING }}"
+            push_main_image_set "$push_context" "${{ env.ROX_PRODUCT_BRANDING }}" "${{ matrix.arch }}"
 
       - name: Push matching collector and scanner images
         # Skip for external contributions.
         if: |
           github.event_name == 'push' || !github.event.pull_request.head.repo.fork
         run: |
+            # Need to free up some space before push_matching_collector_scanner_images() does its pull.
+            docker system prune --all --force
             source ./scripts/ci/lib.sh
-            push_matching_collector_scanner_images "${{ env.ROX_PRODUCT_BRANDING }}"
+            push_matching_collector_scanner_images "${{ env.ROX_PRODUCT_BRANDING }}" "${{ matrix.arch }}"
 
-      - name: Comment on the PR
-        # Skip for external contributions.
-        if: |
-          github.event_name == 'push' || !github.event.pull_request.head.repo.fork
-        env:
-          GITHUB_TOKEN: "${{ secrets.ROBOT_ROX_GITHUB_TOKEN }}"
-        run: |
-            source ./scripts/ci/lib.sh
-            add_build_comment_to_pr
+  push-main-manifests:
+    runs-on: ubuntu-latest
+    needs:
+    - define-job-matrix
+    - build-and-push-main
+    # This step will run even if some of the build-and-push-matrix steps failed.
+    # By following this approach as much of the build matrix as possible is
+    # completed despite transient issues e.g. docker pull timeouts. In this way
+    # some e2e jobs that require some part of the build matrix can still
+    # proceed.
+    if: ${{ !cancelled() }}
+    strategy:
+      # Supports four image builds (see Setup build env):
+      # STACKROX_BRANDING
+      # RHACS_BRANDING
+      # prerelease
+      # race-condition-debug
+      fail-fast: false
+      matrix: ${{ fromJson(needs.define-job-matrix.outputs.matrix).push_main_multiarch_manifests }}
+    env:
+      ROX_PRODUCT_BRANDING: ""
+    container:
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
+      env:
+        QUAY_RHACS_ENG_RO_USERNAME: ${{ secrets.QUAY_RHACS_ENG_RO_USERNAME }}
+        QUAY_RHACS_ENG_RO_PASSWORD: ${{ secrets.QUAY_RHACS_ENG_RO_PASSWORD }}
+        QUAY_RHACS_ENG_RW_USERNAME: ${{ secrets.QUAY_RHACS_ENG_RW_USERNAME }}
+        QUAY_RHACS_ENG_RW_PASSWORD: ${{ secrets.QUAY_RHACS_ENG_RW_PASSWORD }}
+        QUAY_STACKROX_IO_RW_USERNAME: ${{ secrets.QUAY_STACKROX_IO_RW_USERNAME }}
+        QUAY_STACKROX_IO_RW_PASSWORD: ${{ secrets.QUAY_STACKROX_IO_RW_PASSWORD }}
+    steps:
+    - name: Setup build env
+      run: |
+        case "${{ matrix.name }}" in
+          STACKROX_BRANDING)
+            brand="STACKROX_BRANDING"
+            ;;
+          RHACS_BRANDING)
+            brand="RHACS_BRANDING"
+            ;;
+          race-condition-debug)
+            brand="RHACS_BRANDING"
+            ;;
+          prerelease)
+            brand="RHACS_BRANDING"
+            ;;
+          *)
+            echo "Unsupported build: ${{ matrix.name }}"
+            exit 1
+        esac
+
+        {
+          echo "ROX_PRODUCT_BRANDING=${brand}"
+        } >> "$GITHUB_ENV"
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
+
+    - uses: ./.github/actions/job-preamble
+      with:
+        gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
+
+    - name: Checkout submodules
+      run: |
+        git submodule update --init
+
+    - uses: ./.github/actions/handle-tagged-build
+
+    - name: Set build tag for prerelease images
+      if: matrix.name == 'prerelease'
+      run: echo "BUILD_TAG=$(make --quiet --no-print-directory tag)-prerelease" >> "$GITHUB_ENV"
+
+    - name: Set build tag for race condition images
+      if: matrix.name == 'race-condition-debug'
+      run: echo "BUILD_TAG=$(make --quiet --no-print-directory tag)-rcd" >> "$GITHUB_ENV"
+
+    - name: Build and push manifest lists
+      # Skip for external contributions.
+      if: |
+        github.event_name == 'push' || !github.event.pull_request.head.repo.fork
+      run: |
+        source ./scripts/ci/lib.sh
+        echo "Will determine context from: ${{ github.event_name }} & ${{ github.ref_name }}"
+        push_context=""
+        if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "master" ]]; then
+          push_context="merge-to-master"
+        fi
+        architectures="amd64,arm64"
+        if ! is_in_PR_context || pr_has_label ci-build-all-arch; then
+          architectures="amd64,arm64,ppc64le,s390x"
+        fi
+        if [[ "${{ matrix.name }}" == "race-condition-debug" ]]; then
+          architectures="amd64"
+        fi
+        push_image_manifest_lists "$push_context" "${{ env.ROX_PRODUCT_BRANDING }}" "$architectures"
+
+    - name: Comment on the PR
+      # Skip for external contributions.
+      if: |
+        github.event_name == 'push' || !github.event.pull_request.head.repo.fork
+      env:
+        GITHUB_TOKEN: "${{ secrets.RHACS_BOT_GITHUB_TOKEN }}"
+      run: |
+        source ./scripts/ci/lib.sh
+        add_build_comment_to_pr
 
   build-and-push-operator:
     runs-on: ubuntu-latest
+    needs:
+      - define-job-matrix
     container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
       env:
         QUAY_RHACS_ENG_RW_USERNAME: ${{ secrets.QUAY_RHACS_ENG_RW_USERNAME }}
         QUAY_RHACS_ENG_RW_PASSWORD: ${{ secrets.QUAY_RHACS_ENG_RW_PASSWORD }}
+        QUAY_RHACS_ENG_BEARER_TOKEN: ${{ secrets.QUAY_RHACS_ENG_BEARER_TOKEN }}
+      volumes:
+        - /usr:/mnt/usr
+        - /opt:/mnt/opt
     strategy:
-      matrix:
-        branding: [ RHACS_BRANDING ]
+      matrix: ${{ fromJson(needs.define-job-matrix.outputs.matrix).build_and_push_operator }}
     env:
-      ROX_PRODUCT_BRANDING: ${{ matrix.branding }}
+      ROX_PRODUCT_BRANDING: ${{ matrix.name }}
     steps:
+      - name: delete unused tools
+        shell: bash
+        run: |
+          set +e
+          set -x
+          df -h
+          for delete in /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/Ruby; do
+            du -hs "/mnt${delete:?}"
+            rm -rf "/mnt${delete:?}"
+          done
+          df -h
+          for path in /mnt/usr/share /mnt/usr/local/lib /mnt/opt /mnt/opt/hostedtoolcache; do
+            du --threshold=100 -ks "${path}"/* | sort -nr | tail -10
+          done
+
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-      - name: Ignore dubious repository ownership
-        run: |
-          # Prevent fatal error "detected dubious ownership in repository" from recent git.
-          git config --global --add safe.directory "$(pwd)"
+      - uses: ./.github/actions/job-preamble
+        with:
+          gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
       - name: Cache Go dependencies
         uses: ./.github/actions/cache-go-dependencies
@@ -420,7 +685,7 @@ jobs:
         run: go mod tidy
 
       - name: PR labels
-        uses: joerick/pr-labels-action@v1.0.8
+        uses: joerick/pr-labels-action@v1.0.9
 
       - name: Setup Go build environment
         if: contains(github.event.pull_request.labels.*.name, 'ci-release-build')
@@ -431,17 +696,18 @@ jobs:
         if: |
           github.event_name == 'push' || !github.event.pull_request.head.repo.fork
         run: |
-            docker login -u "${QUAY_RHACS_ENG_RW_USERNAME}" --password-stdin quay.io <<<"${QUAY_RHACS_ENG_RW_PASSWORD}"
+          ./scripts/ci/lib.sh registry_rw_login "quay.io/rhacs-eng"
 
       - name: Build Operator Bundle image
         run: |
           make -C operator/ bundle bundle-build
 
       - name: Build Operator image
-        run: make -C operator/ build docker-build
+        run: |
+          scripts/lib.sh retry 6 true make -C operator/ build docker-build
 
       - name: Check that Operator image is runnable
-        run: docker run --rm "quay.io/rhacs-eng/stackrox-operator:$(make --quiet -C operator tag)" --help
+        run: docker run --rm "quay.io/rhacs-eng/stackrox-operator:$(make --quiet --no-print-directory -C operator tag)" --help
 
       - name: Push images
         # Skip for external contributions.
@@ -465,108 +731,133 @@ jobs:
         run: |
           make -C operator/ docker-push-index | cat
 
-  build-and-push-mock-grpc-server:
+  scan-go-binaries:
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'scan-go-binaries')
+    env:
+      ARTIFACT_DIR: junit-reports/
     runs-on: ubuntu-latest
     container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
+      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.4.6
+    needs:
+    - pre-build-cli
+    - pre-build-go-binaries
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
-        fetch-depth: 0
-        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 1
+        ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-    - name: Ignore dubious repository ownership
+    - uses: ./.github/actions/job-preamble
+      with:
+        gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
+
+    - uses: ./.github/actions/download-artifact-with-retry
+      with:
+        name: cli-build
+
+    - name: Unpack cli build
       run: |
-        # Prevent fatal error "detected dubious ownership in repository" from recent git.
-        git config --global --add safe.directory "$(pwd)"
+        tar xvzf cli-build.tgz
 
-    - name: Cache Go dependencies
-      uses: ./.github/actions/cache-go-dependencies
+    - uses: ./.github/actions/download-artifact-with-retry
+      with:
+        name: go-binaries-build-amd64-default
 
-    - uses: ./.github/actions/handle-tagged-build
-
-    - name: Get tag
-      id: tag
+    - name: Unpack Go binaries build
       run: |
-        echo "TAG=$(make --quiet tag)" >> "$GITHUB_OUTPUT"
+        tar xvzf go-binaries-build.tgz
 
-    - name: Build image
-      run: make mock-grpc-server-image
+    - name: Scan
+      run: |
+        ./scripts/ci/govulncheck.sh
 
-    - name: Set up Docker Buildx
-      # Skip for external contributions.
-      if: |
-        github.event_name == 'push' || !github.event.pull_request.head.repo.fork
-      uses: docker/setup-buildx-action@v2
-
-    - name: Login to quay.io/rhacs-eng
-      # Skip for external contributions.
-      if: |
-        github.event_name == 'push' || !github.event.pull_request.head.repo.fork
-      uses: docker/login-action@v2
+    - name: Publish Test Report
+      uses: test-summary/action@v2
+      if: always()
       with:
-        registry: quay.io
-        username: ${{ secrets.QUAY_RHACS_ENG_RW_USERNAME }}
-        password: ${{ secrets.QUAY_RHACS_ENG_RW_PASSWORD }}
+        paths: 'junit-reports/**/*.xml'
 
-    - name: Push to quay.io/rhacs-eng
-      uses: docker/build-push-action@v4
-      if: |
-        github.event_name == 'push' || !github.event.pull_request.head.repo.fork
+    - name: Report junit failures in jira
+      uses: ./.github/actions/junit2jira
+      if: always()
       with:
-        push: true
-        context: integration-tests/mock-grpc-server/image
-        tags: |
-          quay.io/rhacs-eng/grpc-server:${{ steps.tag.outputs.TAG }}
+        jira-token: ${{ secrets.JIRA_TOKEN }}
+        gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
+        directory: 'junit-reports'
 
   scan-images-with-roxctl:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'scan-images-with-roxctl')
     needs:
+      - define-job-matrix
       - build-and-push-main
-    container:
-      image: quay.io/stackrox-io/apollo-ci:stackrox-test-0.3.59
-      env:
-        STACKROX_CI_INSTANCE_API_KEY: ${{ secrets.STACKROX_CI_INSTANCE_API_KEY }}
-        STACKROX_CI_INSTANCE_CENTRAL_HOST: ${{ secrets.STACKROX_CI_INSTANCE_CENTRAL_HOST }}
+      - build-and-push-operator
+      - push-main-manifests
+    name: Check images for vulnerabilities
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed for stackrox/central-login to create the JWT token.
+      id-token: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.define-job-matrix.outputs.matrix).scan_images_with_roxctl }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha }}
 
-      - name: Ignore dubious repository ownership
-        run: |
-          # Prevent fatal error "detected dubious ownership in repository" from recent git.
-          git config --global --add safe.directory "$(pwd)"
-
-      - name: Checkout submodules
-        run: |
-            git submodule update --init
+      - uses: ./.github/actions/job-preamble
+        with:
+          gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
       - uses: ./.github/actions/handle-tagged-build
 
-      - uses: actions/download-artifact@v3
+      - name: Central login
+        uses: stackrox/central-login@v1
         with:
-          name: cli-build
-
-      - name: Unpack cli build
-        run: |
-          tar xvzf cli-build.tgz
+          endpoint: ${{ vars.ACS_DOGFOODING_CENTRAL_URL }}
 
       - name: Install roxctl
-        run: |
-          ./scripts/ci/lib.sh install_built_roxctl_in_gopath
-          roxctl version
+        uses: stackrox/roxctl-installer-action@v1
+        with:
+          central-endpoint: ${{ vars.ACS_DOGFOODING_CENTRAL_URL }}
+          central-token: ${{ env.ROX_API_TOKEN }}
 
-      - name: Scan images
+      - name: Scan images for vulnerabilities
         run: |
-          ./release/scripts/scan-images-with-roxctl.sh
+          release_tag="$(make --quiet --no-print-directory tag)"
+          if [[ "${{ matrix.image }}" =~ "operator" ]]; then
+            release_tag="$(make -C operator --quiet --no-print-directory tag)"
+          fi
+
+          registry="$(./scripts/ci/lib.sh registry_from_branding "${{ matrix.name }}")"
+
+          roxctl image scan --retries=10 --retry-delay=15 --force --severity=CRITICAL,IMPORTANT --output=sarif \
+            --image="${registry}/${{ matrix.image }}:${release_tag}" \
+            | tee results.sarif
+
+      # TODO: re-enable roxctl scan results upload once quota issue has been resolved
+      # - name: Upload roxctl scan results to GitHub Security tab
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   with:
+      #     category: ${{ matrix.image }}
+      #     sarif_file: results.sarif
 
   slack-on-build-failure:
-    if: github.event_name == 'push' && failure()
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SLACK_CI_INTEGRATION_TESTING_WEBHOOK: ${{ secrets.SLACK_CI_INTEGRATION_TESTING_WEBHOOK }}
+      TEST_FAILURES_NOTIFY_WEBHOOK: ${{ secrets.TEST_FAILURES_NOTIFY_WEBHOOK }}
+    if: |
+      failure() && (
+          github.event_name == 'push' ||
+          contains(github.event.pull_request.labels.*.name, 'ci-test-github-action-slack-messages')
+      )
     name: Post failure message to Slack
     runs-on: ubuntu-latest
     needs:
@@ -576,15 +867,17 @@ jobs:
       - pre-build-docs
       - build-and-push-main
       - build-and-push-operator
-      - build-and-push-mock-grpc-server
       - scan-images-with-roxctl
+      - scan-go-binaries
     permissions:
       actions: read
     steps:
-      - name: Slack Workflow Notification
-        uses: Gamesight/slack-workflow-status@26a36836c887f260477432e4314ec3490a84f309
-        with:
-          include_commit_message: true
-          include_jobs: on-failure
-          repo_token: ${{secrets.GITHUB_TOKEN}}
-          slack_webhook_url: ${{secrets.TEST_FAILURES_NOTIFY_WEBHOOK}}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Slack message
+        env:
+          GITHUB_CONTEXT: ${{ toJSON(github) }}
+        run: |
+          source scripts/ci/lib.sh
+          slack_workflow_failure

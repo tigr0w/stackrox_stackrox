@@ -4,7 +4,6 @@ import { useHistory, useLocation, useParams } from 'react-router-dom';
 import {
     Alert,
     AlertActionCloseButton,
-    AlertVariant,
     Bullseye,
     Button,
     PageSection,
@@ -33,15 +32,13 @@ import './AccessScopes.css';
 import AccessControlHeading from '../AccessControlHeading';
 import AccessControlBreadcrumbs from '../AccessControlBreadcrumbs';
 import AccessControlHeaderActionBar from '../AccessControlHeaderActionBar';
-import AccessControlNoPermission from '../AccessControlNoPermission';
 import usePermissions from '../../../hooks/usePermissions';
 import { isUserResource } from '../traits';
 
 const entityType = 'ACCESS_SCOPE';
 
 function AccessScopes(): ReactElement {
-    const { hasReadAccess, hasReadWriteAccess } = usePermissions();
-    const hasReadAccessToPage = hasReadAccess('Access');
+    const { hasReadWriteAccess } = usePermissions();
     const hasWriteAccessForPage = hasReadWriteAccess('Access');
     const history = useHistory();
     const { search } = useLocation();
@@ -69,7 +66,8 @@ function AccessScopes(): ReactElement {
                 setAlertAccessScopes(
                     <Alert
                         title="Fetch access scopes failed"
-                        variant={AlertVariant.danger}
+                        component="p"
+                        variant="danger"
                         isInline
                     >
                         {error.message}
@@ -93,7 +91,8 @@ function AccessScopes(): ReactElement {
                 setAlertRoles(
                     <Alert
                         title="Fetch roles failed"
-                        variant={AlertVariant.warning}
+                        component="p"
+                        variant="warning"
                         isInline
                         actionClose={actionClose}
                     >
@@ -105,15 +104,6 @@ function AccessScopes(): ReactElement {
                 setCounterFetching((counterPrev) => counterPrev - 1);
             });
     }, []);
-
-    // Return "no access" page immediately if user doesn't have enough permissions.
-    if (!hasReadAccessToPage) {
-        return (
-            <>
-                <AccessControlNoPermission subPage="access scopes" entityType={entityType} />
-            </>
-        );
-    }
 
     function handleCreate() {
         history.push(getEntityPath(entityType, undefined, { action: 'create' }));
@@ -198,7 +188,7 @@ function AccessScopes(): ReactElement {
             <PageSection variant={isList ? 'default' : 'light'}>
                 {counterFetching !== 0 ? (
                     <Bullseye>
-                        <Spinner isSVG />
+                        <Spinner />
                     </Bullseye>
                 ) : isList ? (
                     <AccessScopesList

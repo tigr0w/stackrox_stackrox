@@ -14,6 +14,7 @@ import {
     testIntegrationInFormWithStoredCredentials,
     testIntegrationInFormWithoutStoredCredentials,
     visitIntegrationsTable,
+    visitIntegrationsWithStaticResponseForCapabilities,
 } from './integrations.helpers';
 import { selectors } from './integrations.selectors';
 
@@ -129,19 +130,89 @@ describe('Image Integrations', () => {
 
         // Step 1, check empty fields
         getInputByLabel('Integration name').type(' ');
-        getInputByLabel('Registry ID').type(' ');
+        getInputByLabel('12-digit AWS ID').type(' ');
         getInputByLabel('Region').type(' ').blur();
 
         getHelperElementByLabel('Integration name').contains('An integration name is required');
-        getHelperElementByLabel('Registry ID').contains('A registry ID is required');
+        getHelperElementByLabel('12-digit AWS ID').contains('A 12-digit AWS ID is required');
         getHelperElementByLabel('Region').contains('An AWS region is required');
         cy.get(selectors.buttons.test).should('be.disabled');
         cy.get(selectors.buttons.save).should('be.disabled');
 
         // Step 2, check valid form and save
         getInputByLabel('Integration name').clear().type(integrationName);
-        getInputByLabel('Registry ID').clear().type('12345');
+        getInputByLabel('12-digit AWS ID').clear().type('12345789012');
         getInputByLabel('Region').clear().type('us-west-1');
+        cy.get('label:contains("Use container IAM role")').click(); // turn on Use IAM Role
+
+        testIntegrationInFormWithStoredCredentials(
+            integrationSource,
+            integrationType,
+            staticResponseForTest
+        );
+
+        saveCreatedIntegrationInForm(integrationSource, integrationType, staticResponseForPOST);
+
+        // Test does not delete, because it did not create.
+    });
+
+    it('should not render IAM Role on ECR form, when that capability is disabled', () => {
+        visitIntegrationsWithStaticResponseForCapabilities(
+            {
+                body: { centralScanningCanUseContainerIamRoleForEcr: 'CapabilityDisabled' },
+            },
+            'imageIntegrations',
+            'ecr',
+            '',
+            'create'
+        );
+
+        cy.get('label:contains("Use container IAM role")').should('not.exist');
+    });
+
+    it('should create a new Google Artifact Registry integration', () => {
+        const integrationName = generateNameWithDate('Google Artifact Registry Test');
+        const integrationType = 'artifactregistry';
+
+        visitIntegrationsTable(integrationSource, integrationType);
+        clickCreateNewIntegrationInTable(integrationSource, integrationType);
+
+        // Step 0, should start out with disabled Save and Test buttons
+        cy.get(selectors.buttons.test).should('be.disabled');
+        cy.get(selectors.buttons.save).should('be.disabled');
+
+        // Step 1, check empty fields
+        getInputByLabel('Integration name').type(' ');
+        getInputByLabel('Registry endpoint').type(' ');
+        getInputByLabel('Project').type(' ');
+        getInputByLabel('Service account key (JSON)').type(' ').blur();
+
+        getHelperElementByLabel('Integration name').contains('An integration name is required');
+        getHelperElementByLabel('Registry endpoint').contains('An endpoint is required');
+        getHelperElementByLabel('Project').contains('A project is required');
+        getHelperElementByLabel('Service account key (JSON)').contains(
+            'Valid JSON is required for service account key'
+        );
+        cy.get(selectors.buttons.test).should('be.disabled');
+        cy.get(selectors.buttons.save).should('be.disabled');
+
+        // Step 2, check conditional fields
+
+        // Step 2.1, enable workload identity, this should remove the service account field
+        getInputByLabel('Use workload identity').click();
+        getInputByLabel('Service account key (JSON)').should('be.disabled');
+        // Step 2.2, disable workload identity, this should render the service account field again
+        getInputByLabel('Use workload identity').click();
+        getInputByLabel('Service account key (JSON)').should('be.enabled');
+
+        // Step 3, check valid from and save
+        getInputByLabel('Integration name').clear().type(integrationName);
+
+        getInputByLabel('Registry endpoint').clear().type('test.endpoint');
+        getInputByLabel('Project').clear().type('test');
+        getInputByLabel('Service account key (JSON)').type('{"key":"value"}', {
+            parseSpecialCharSequences: false,
+        });
 
         testIntegrationInFormWithStoredCredentials(
             integrationSource,
@@ -175,12 +246,21 @@ describe('Image Integrations', () => {
         getHelperElementByLabel('Registry endpoint').contains('An endpoint is required');
         getHelperElementByLabel('Project').contains('A project is required');
         getHelperElementByLabel('Service account key (JSON)').contains(
-            'A service account key is required'
+            'Valid JSON is required for service account key'
         );
         cy.get(selectors.buttons.test).should('be.disabled');
         cy.get(selectors.buttons.save).should('be.disabled');
 
-        // Step 2, check valid from and save
+        // Step 2, check conditional fields
+
+        // Step 2.1, enable workload identity, this should remove the service account field
+        getInputByLabel('Use workload identity').click();
+        getInputByLabel('Service account key (JSON)').should('be.disabled');
+        // Step 2.2, disable workload identity, this should render the service account field again
+        getInputByLabel('Use workload identity').click();
+        getInputByLabel('Service account key (JSON)').should('be.enabled');
+
+        // Step 3, check valid from and save
         getInputByLabel('Integration name').clear().type(integrationName);
 
         const selected = 'pf-m-selected';
@@ -228,7 +308,18 @@ describe('Image Integrations', () => {
         cy.get(selectors.buttons.test).should('be.disabled');
         cy.get(selectors.buttons.save).should('be.disabled');
 
-        // Step 2, check valid from and save
+        // Step 2, check conditional fields.
+
+        // Step 2.1, enable workload identity, this should remove the credential fields.
+        getInputByLabel('Use workload identity').click();
+        getInputByLabel('Username').should('be.disabled');
+        getInputByLabel('Password').should('be.disabled');
+        // Step 2.2, disable workload identity, this should render the credential fields again.
+        getInputByLabel('Use workload identity').click();
+        getInputByLabel('Username').should('be.enabled');
+        getInputByLabel('Password').should('be.enabled');
+
+        // Step 3, test and save.
         getInputByLabel('Integration name').clear().type(integrationName);
         getInputByLabel('Endpoint').clear().type('test.endpoint');
         getInputByLabel('Username').clear().type('admin');
@@ -314,6 +405,9 @@ describe('Image Integrations', () => {
 
         getInputByLabel('Endpoint').clear().type('test.endpoint');
         getInputByLabel('OAuth token').clear().type('12345');
+
+        getInputByLabel('Username').clear().type('scoobydoo');
+        getInputByLabel('Password').clear().type('rutrohshaggy');
 
         testIntegrationInFormWithStoredCredentials(
             integrationSource,
@@ -473,5 +567,42 @@ describe('Image Integrations', () => {
         saveCreatedIntegrationInForm(integrationSource, integrationType, staticResponseForPOST);
 
         // Test does not delete, because it did not create.
+    });
+
+    it('should create a new GitHub container registry integration', () => {
+        const integrationName = generateNameWithDate('GitHub Container Registry Test');
+        const integrationType = 'ghcr';
+
+        visitIntegrationsTable(integrationSource, integrationType);
+        clickCreateNewIntegrationInTable(integrationSource, integrationType);
+
+        // Step 0, should start out with disabled Save and Test buttons
+        cy.get(selectors.buttons.test).should('be.disabled');
+        cy.get(selectors.buttons.save).should('be.disabled');
+
+        // Step 1, check empty fields
+        getInputByLabel('Integration name').clear().type(' ');
+        getInputByLabel('Endpoint').clear().type(' ');
+        getInputByLabel('User').clear().type(' ');
+        getInputByLabel('GitHub token').clear().type(' ').blur();
+
+        getHelperElementByLabel('Integration name').contains('An integration name is required');
+        getHelperElementByLabel('Endpoint').contains('An endpoint is required');
+        cy.get(selectors.buttons.test).should('be.disabled');
+        cy.get(selectors.buttons.save).should('be.disabled');
+
+        // Step 2, check valid from and save
+        getInputByLabel('Integration name').clear().type(integrationName);
+        getInputByLabel('Endpoint').clear().type('test.endpoint');
+        getInputByLabel('Username').clear().type('admin');
+        getInputByLabel('GitHub token').type('password');
+
+        testIntegrationInFormWithStoredCredentials(
+            integrationSource,
+            integrationType,
+            staticResponseForTest
+        );
+
+        saveCreatedIntegrationInForm(integrationSource, integrationType, staticResponseForPOST);
     });
 });

@@ -5,16 +5,16 @@ import (
 	"testing"
 	"time"
 
-	protoTypes "github.com/gogo/protobuf/types"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 	"github.com/stackrox/rox/central/cve/cluster/datastore/store"
 	"github.com/stackrox/rox/central/cve/converter/v2"
 	"github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/generated/storage"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres"
-	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
+	"github.com/stackrox/rox/pkg/protocompat"
+	pgSearch "github.com/stackrox/rox/pkg/search/postgres"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/uuid"
 )
@@ -70,7 +70,7 @@ func (s *fullStoreImpl) DeleteClusterCVEsForCluster(ctx context.Context, cluster
 }
 
 func (s *fullStoreImpl) ReconcileClusterCVEParts(ctx context.Context, cveType storage.CVE_CVEType, cvePartsArr ...converter.ClusterCVEParts) error {
-	iTime := protoTypes.TimestampNow()
+	iTime := time.Now()
 
 	cves := make([]*storage.ClusterCVE, 0, len(cvePartsArr))
 	var edges []*storage.ClusterCVEEdge
@@ -109,13 +109,17 @@ func (s *fullStoreImpl) ReconcileClusterCVEParts(ctx context.Context, cveType st
 	return tx.Commit(ctx)
 }
 
-func copyFromCVEs(ctx context.Context, tx *postgres.Tx, iTime *protoTypes.Timestamp, objs ...*storage.ClusterCVE) error {
-	inputRows := [][]interface{}{}
+func copyFromCVEs(ctx context.Context, tx *postgres.Tx, iTime time.Time, objs ...*storage.ClusterCVE) error {
+	batchSize := pgSearch.MaxBatchSize
+	if len(objs) < batchSize {
+		batchSize = len(objs)
+	}
+	inputRows := make([][]interface{}, 0, batchSize)
 
 	var err error
 
 	// This is a copy, so first we must delete the rows, and re-add them.
-	var deletes []string
+	deletes := make([]string, 0, batchSize)
 	copyCols := []string{
 		"id",
 		"type",
@@ -146,10 +150,10 @@ func copyFromCVEs(ctx context.Context, tx *postgres.Tx, iTime *protoTypes.Timest
 			obj.SnoozeStart = storedCVE.GetSnoozeStart()
 			obj.SnoozeExpiry = storedCVE.GetSnoozeExpiry()
 		} else {
-			obj.CveBaseInfo.CreatedAt = iTime
+			obj.CveBaseInfo.CreatedAt = protocompat.ConvertTimeToTimestampOrNil(&iTime)
 		}
 
-		serialized, marshalErr := obj.Marshal()
+		serialized, marshalErr := obj.MarshalVT()
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -158,13 +162,13 @@ func copyFromCVEs(ctx context.Context, tx *postgres.Tx, iTime *protoTypes.Timest
 			obj.GetId(),
 			obj.GetType(),
 			obj.GetCveBaseInfo().GetCve(),
-			pgutils.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
-			pgutils.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
+			protocompat.NilOrTime(obj.GetCveBaseInfo().GetPublishedOn()),
+			protocompat.NilOrTime(obj.GetCveBaseInfo().GetCreatedAt()),
 			obj.GetCvss(),
 			obj.GetSeverity(),
 			obj.GetImpactScore(),
 			obj.GetSnoozed(),
-			pgutils.NilOrTime(obj.GetSnoozeExpiry()),
+			protocompat.NilOrTime(obj.GetSnoozeExpiry()),
 			serialized,
 		})
 
@@ -195,7 +199,11 @@ func copyFromCVEs(ctx context.Context, tx *postgres.Tx, iTime *protoTypes.Timest
 }
 
 func copyFromClusterCVEEdges(ctx context.Context, tx *postgres.Tx, cveType storage.CVE_CVEType, clusters []string, objs ...*storage.ClusterCVEEdge) error {
-	inputRows := [][]interface{}{}
+	batchSize := pgSearch.MaxBatchSize
+	if len(objs) < batchSize {
+		batchSize = len(objs)
+	}
+	inputRows := make([][]interface{}, 0, batchSize)
 
 	var err error
 	copyCols := []string{
@@ -217,7 +225,7 @@ func copyFromClusterCVEEdges(ctx context.Context, tx *postgres.Tx, cveType stora
 	for idx, obj := range objs {
 		oldEdges.Remove(obj.GetId())
 
-		serialized, marshalErr := obj.Marshal()
+		serialized, marshalErr := obj.MarshalVT()
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -273,7 +281,7 @@ func getCVEs(ctx context.Context, tx *postgres.Tx, cveIDs []string) (map[string]
 			return nil, err
 		}
 		msg := &storage.ClusterCVE{}
-		if err := msg.Unmarshal(data); err != nil {
+		if err := msg.UnmarshalVTUnsafe(data); err != nil {
 			return nil, err
 		}
 		idToCVEMap[msg.GetId()] = msg

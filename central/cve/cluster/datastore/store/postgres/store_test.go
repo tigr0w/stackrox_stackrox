@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ClusterCvesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE cluster_cves CASCADE")
 	s.T().Log("cluster_cves", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ClusterCvesStoreSuite) TestStore() {
 	foundClusterCVE, exists, err = store.Get(ctx, clusterCVE.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(clusterCVE, foundClusterCVE)
+	protoassert.Equal(s.T(), clusterCVE, foundClusterCVE)
 
-	clusterCVECount, err := store.Count(ctx)
+	clusterCVECount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, clusterCVECount)
-	clusterCVECount, err = store.Count(withNoAccessCtx)
+	clusterCVECount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(clusterCVECount)
 
@@ -75,11 +78,6 @@ func (s *ClusterCvesStoreSuite) TestStore() {
 	s.True(clusterCVEExists)
 	s.NoError(store.Upsert(ctx, clusterCVE))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, clusterCVE), sac.ErrResourceAccessDenied)
-
-	foundClusterCVE, exists, err = store.Get(ctx, clusterCVE.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(clusterCVE, foundClusterCVE)
 
 	s.NoError(store.Delete(ctx, clusterCVE.GetId()))
 	foundClusterCVE, exists, err = store.Get(ctx, clusterCVE.GetId())
@@ -99,13 +97,13 @@ func (s *ClusterCvesStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, clusterCVEs))
 
-	clusterCVECount, err = store.Count(ctx)
+	clusterCVECount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, clusterCVECount)
 
 	s.NoError(store.DeleteMany(ctx, clusterCVEIDs))
 
-	clusterCVECount, err = store.Count(ctx)
+	clusterCVECount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, clusterCVECount)
 }

@@ -8,8 +8,8 @@ import {
     hasRelatedEntityFor,
     hasTabsFor,
     navigateToSingleEntityPage,
-    pageEntityCountMatchesTableRows,
-    sidePanelEntityCountMatchesTableRows,
+    verifyWidgetLinkToTableFromSidePanel,
+    verifyWidgetLinkToTableFromSinglePage,
     visitConfigurationManagementEntities,
     visitConfigurationManagementEntityInSidePanel,
 } from './ConfigurationManagement.helpers';
@@ -26,16 +26,10 @@ describe('Configuration Management Secrets', () => {
     it('should render the deployments link and open the side panel when a row is clicked', () => {
         visitConfigurationManagementEntities(entitiesKey);
 
-        cy.get('.rt-tbody .rt-tr')
-            .find(`.rt-td a[data-testid='deployment']`)
-            .eq(0)
-            .click()
-            .invoke('text')
-            .then((expectedText) => {
-                cy.get('[data-testid="side-panel"] [data-testid="panel-header"]').contains(
-                    expectedText.toLowerCase()
-                );
-            });
+        cy.get('.rt-tbody .rt-td')
+            .contains('a', new RegExp(/^\d+ Deployments?$/))
+            .click();
+        cy.get('[data-testid="side-panel"] [data-testid="panel-header"]:contains("deployment")');
     });
 
     it('should click on the cluster entity widget in the side panel and match the header ', () => {
@@ -73,18 +67,15 @@ describe('Configuration Management Secrets', () => {
         clickOnCountWidget('deployments', 'entityList');
     });
 
-    describe('should have same number in deployments table as in count widget', () => {
+    describe('should go to deployments table from widget link', () => {
         const entitiesKey2 = 'deployments';
 
-        it('of page', () => {
-            visitConfigurationManagementEntityInSidePanel(entitiesKey);
-            navigateToSingleEntityPage(entitiesKey);
-            pageEntityCountMatchesTableRows(entitiesKey, entitiesKey2);
+        it('in single page', () => {
+            verifyWidgetLinkToTableFromSinglePage(entitiesKey, entitiesKey2);
         });
 
-        it('of side panel', () => {
-            visitConfigurationManagementEntityInSidePanel(entitiesKey);
-            sidePanelEntityCountMatchesTableRows(entitiesKey, entitiesKey2);
+        it('in side panel', () => {
+            verifyWidgetLinkToTableFromSidePanel(entitiesKey, entitiesKey2);
         });
     });
 });

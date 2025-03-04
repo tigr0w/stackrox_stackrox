@@ -11,12 +11,13 @@ import (
 	"path"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stackrox/rox/migrator/migrations/m_180_to_m_181_move_to_blobstore/schema"
 	pghelper "github.com/stackrox/rox/migrator/migrations/postgreshelper"
 	"github.com/stackrox/rox/pkg/binenc"
 	"github.com/stackrox/rox/pkg/postgres/gorm/largeobject"
-	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -35,7 +36,7 @@ func TestMigration(t *testing.T) {
 }
 
 func (s *blobMigrationTestSuite) SetupTest() {
-	s.db = pghelper.ForT(s.T(), true)
+	s.db = pghelper.ForT(s.T(), false)
 }
 
 func (s *blobMigrationTestSuite) TearDownTest() {
@@ -79,8 +80,8 @@ func (s *blobMigrationTestSuite) TestScannerDefinitionMigration() {
 	s.Equal(scannerDefBlobName, blob.GetName())
 	s.EqualValues(size, blob.GetLength())
 
-	modTime := pgutils.NilOrTime(blob.GetModifiedTime())
-	s.Equal(fileInfo.ModTime().UTC(), modTime.UTC())
+	modTime := protocompat.NilOrTime(blob.GetModifiedTime())
+	s.Equal(fileInfo.ModTime().UTC().Round(time.Microsecond), modTime.UTC().Round(time.Microsecond))
 
 	// Verify Data
 	buf := bytes.NewBuffer(nil)

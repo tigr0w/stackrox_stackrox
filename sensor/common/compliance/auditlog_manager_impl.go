@@ -3,7 +3,6 @@ package compliance
 import (
 	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/generated/storage"
@@ -12,6 +11,7 @@ import (
 	"github.com/stackrox/rox/pkg/protoutils"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/sensor/common"
+	"github.com/stackrox/rox/sensor/common/message"
 )
 
 const (
@@ -26,14 +26,14 @@ type auditLogCollectionManagerImpl struct {
 	receivedInitialStateFromCentral concurrency.Flag
 	fileStates                      map[string]*storage.AuditLogFileState
 	eligibleComplianceNodes         map[string]sensor.ComplianceService_CommunicateServer
+	updaterTicker                   *time.Ticker
 
 	auditEventMsgs   chan *sensor.MsgFromCompliance
-	fileStateUpdates chan *central.MsgFromSensor
+	fileStateUpdates chan *message.ExpiringMessage
 
-	stopSig        concurrency.Signal
+	stopper        concurrency.Stopper
 	forceUpdateSig concurrency.Signal
-
-	updateInterval time.Duration
+	centralReady   concurrency.Signal
 
 	fileStateLock  sync.RWMutex
 	connectionLock sync.RWMutex
@@ -41,15 +41,28 @@ type auditLogCollectionManagerImpl struct {
 
 func (a *auditLogCollectionManagerImpl) Start() error {
 	go a.runStateSaver()
-	go a.runUpdater()
+	go a.runUpdater(a.updaterTicker.C)
 	return nil
 }
 
 func (a *auditLogCollectionManagerImpl) Stop(_ error) {
-	a.stopSig.Signal()
+	if !a.stopper.Client().Stopped().IsDone() {
+		defer func() {
+			_ = a.stopper.Client().Stopped().Wait()
+		}()
+	}
+	a.stopper.Client().Stop()
 }
 
-func (a *auditLogCollectionManagerImpl) Notify(common.SensorComponentEvent) {}
+func (a *auditLogCollectionManagerImpl) Notify(e common.SensorComponentEvent) {
+	log.Info(common.LogSensorComponentEvent(e))
+	switch e {
+	case common.SensorComponentEventCentralReachable:
+		a.centralReady.Signal()
+	case common.SensorComponentEventOfflineMode:
+		a.centralReady.Reset()
+	}
+}
 
 func (a *auditLogCollectionManagerImpl) Capabilities() []centralsensor.SensorCapability {
 	return []centralsensor.SensorCapability{centralsensor.AuditLogEventsCap}
@@ -63,7 +76,7 @@ func (a *auditLogCollectionManagerImpl) ProcessMessage(_ *central.MsgToSensor) e
 	return nil
 }
 
-func (a *auditLogCollectionManagerImpl) ResponsesC() <-chan *central.MsgFromSensor {
+func (a *auditLogCollectionManagerImpl) ResponsesC() <-chan *message.ExpiringMessage {
 	return a.fileStateUpdates
 }
 
@@ -77,7 +90,7 @@ func (a *auditLogCollectionManagerImpl) ForceUpdate() {
 func (a *auditLogCollectionManagerImpl) runStateSaver() {
 	for {
 		select {
-		case <-a.stopSig.Done():
+		case <-a.stopper.Flow().StopRequested():
 			return
 		case msg := <-a.auditEventMsgs:
 			node := msg.GetNode()
@@ -85,42 +98,40 @@ func (a *auditLogCollectionManagerImpl) runStateSaver() {
 				// Given how audit logs are always in chronological order, and given how compliance is parsing it in said order,
 				// we can make an assumption that the earliest event in this message is still later than the state before
 				// But we won't check it, in case there is a corner case where the time is out of order.
-				latestTime := events.GetEvents()[0].Timestamp
-				latestID := events.GetEvents()[0].GetId()
+				latestEvent := events.GetEvents()[0]
 				for _, e := range events.GetEvents()[1:] {
-					if protoutils.After(e.GetTimestamp(), latestTime) {
-						latestTime = e.GetTimestamp()
-						latestID = e.GetId()
+					if protoutils.After(e.GetTimestamp(), latestEvent.GetTimestamp()) {
+						latestEvent = e
 					}
 				}
-				a.updateFileState(node, latestTime, latestID)
+				a.updateFileState(node, latestEvent)
 			}
 		}
 	}
 }
 
-func (a *auditLogCollectionManagerImpl) updateFileState(node string, latestTime *types.Timestamp, latestID string) {
+func (a *auditLogCollectionManagerImpl) updateFileState(node string, latestEvent *storage.KubernetesEvent) {
 	a.fileStateLock.Lock()
 	defer a.fileStateLock.Unlock()
 
 	a.fileStates[node] = &storage.AuditLogFileState{
-		CollectLogsSince: latestTime,
-		LastAuditId:      latestID,
+		CollectLogsSince: latestEvent.GetTimestamp(),
+		LastAuditId:      latestEvent.GetId(),
 	}
 }
 
-func (a *auditLogCollectionManagerImpl) runUpdater() {
-	ticker := time.NewTicker(a.updateInterval)
-	defer ticker.Stop()
+func (a *auditLogCollectionManagerImpl) runUpdater(tickerC <-chan time.Time) {
+	defer a.stopper.Flow().ReportStopped()
+	defer a.updaterTicker.Stop()
 
-	for !a.stopSig.IsDone() {
+	for {
 		select {
-		case <-a.stopSig.Done():
+		case <-a.stopper.Flow().StopRequested():
 			return
 		case <-a.forceUpdateSig.Done():
 			a.sendUpdate()
 			a.forceUpdateSig.Reset()
-		case <-ticker.C:
+		case <-tickerC:
 			a.sendUpdate()
 		}
 	}
@@ -132,14 +143,14 @@ func (a *auditLogCollectionManagerImpl) sendUpdate() {
 	if a.shouldSendUpdateToCentral(fileStates) {
 		select {
 		case a.fileStateUpdates <- a.getCentralUpdateMsg(fileStates):
-		case <-a.stopSig.Done():
+		case <-a.stopper.Flow().StopRequested():
 		}
 	}
 }
 
 func (a *auditLogCollectionManagerImpl) shouldSendUpdateToCentral(fileStates map[string]*storage.AuditLogFileState) bool {
-	// No point in updating if the central communication hasn't started or there are no states
-	return a.receivedInitialStateFromCentral.Get() && len(fileStates) > 0
+	// No point in updating if the central communication hasn't started, isn't available, or there are no states
+	return a.receivedInitialStateFromCentral.Get() && a.centralReady.IsDone() && len(fileStates) > 0
 }
 
 // getLatestFileStates returns a copy of the latest state of audit log collection at each compliance node
@@ -155,23 +166,25 @@ func (a *auditLogCollectionManagerImpl) getLatestFileStates() map[string]*storag
 	return nodeStates
 }
 
-func (a *auditLogCollectionManagerImpl) getCentralUpdateMsg(fileStates map[string]*storage.AuditLogFileState) *central.MsgFromSensor {
-	return &central.MsgFromSensor{
+func (a *auditLogCollectionManagerImpl) getCentralUpdateMsg(fileStates map[string]*storage.AuditLogFileState) *message.ExpiringMessage {
+	return message.New(&central.MsgFromSensor{
+		HashKey:   a.clusterIDGetter(),
+		DedupeKey: a.clusterIDGetter(),
 		Msg: &central.MsgFromSensor_AuditLogStatusInfo{
 			AuditLogStatusInfo: &central.AuditLogStatusInfo{
 				NodeAuditLogFileStates: fileStates,
 			},
 		},
-	}
+	})
 }
 
 // AddEligibleComplianceNode adds the specified node and it's connection to the list of nodes whose audit log collection lifecycle will be managed
 // If the feature is enabled, then the node will automatically be sent a message to start collection upon a successful add
 func (a *auditLogCollectionManagerImpl) AddEligibleComplianceNode(node string, connection sensor.ComplianceService_CommunicateServer) {
 	log.Infof("Adding node `%s` as an eligible compliance node for audit log collection", node)
-	a.connectionLock.Lock()
-	a.eligibleComplianceNodes[node] = connection
-	a.connectionLock.Unlock()
+	concurrency.WithLock(&a.connectionLock, func() {
+		a.eligibleComplianceNodes[node] = connection
+	})
 
 	if a.enabled.Get() {
 		a.fileStateLock.RLock() // Will read the state when sending start message.
@@ -271,15 +284,15 @@ func (a *auditLogCollectionManagerImpl) stopAuditLogCollectionOnAllNodes() {
 // If the feature is already enabled and there are eligible nodes, then this will restart collection on those nodes from this state
 func (a *auditLogCollectionManagerImpl) SetAuditLogFileStateFromCentral(fileStates map[string]*storage.AuditLogFileState) {
 	a.receivedInitialStateFromCentral.Set(true)
-	a.fileStateLock.Lock()
-	a.fileStates = fileStates
 
-	// Ensure that the map is empty not nil if there is no saved state. The rest of the manager depends on it being _not nil_
-	if a.fileStates == nil {
-		a.fileStates = make(map[string]*storage.AuditLogFileState)
-	}
+	concurrency.WithLock(&a.fileStateLock, func() {
+		a.fileStates = fileStates
 
-	a.fileStateLock.Unlock()
+		// Ensure that the map is empty not nil if there is no saved state. The rest of the manager depends on it being _not nil_
+		if a.fileStates == nil {
+			a.fileStates = make(map[string]*storage.AuditLogFileState)
+		}
+	})
 
 	if a.enabled.Get() {
 		a.startAuditLogCollectionOnAllNodes()

@@ -2,7 +2,6 @@ package userpki
 
 import (
 	"context"
-	"time"
 
 	"github.com/stackrox/rox/pkg/auth/authproviders"
 	"github.com/stackrox/rox/pkg/auth/permissions"
@@ -13,14 +12,8 @@ import (
 	"github.com/stackrox/rox/pkg/sac"
 )
 
-const (
-	cacheSize          = 500
-	rateLimitFrequency = 5 * time.Minute
-	logBurstSize       = 5
-)
-
 var (
-	log = logging.NewRateLimitLogger(logging.LoggerForModule(), cacheSize, 1, rateLimitFrequency, logBurstSize)
+	log = logging.LoggerForModule()
 )
 
 // NewExtractor returns an IdentityExtractor that will map identities based
@@ -40,7 +33,11 @@ type extractor struct {
 	manager ProviderContainer
 }
 
-func (i extractor) IdentityForRequest(ctx context.Context, ri requestinfo.RequestInfo) (authn.Identity, error) {
+func getExtractorError(msg string, err error) *authn.ExtractorError {
+	return authn.NewExtractorError("userpki", msg, err)
+}
+
+func (i extractor) IdentityForRequest(ctx context.Context, ri requestinfo.RequestInfo) (authn.Identity, *authn.ExtractorError) {
 	// this auth identity provider is only relevant for API usage outside of the browser app. Inside the browser app,
 	// tokens are used (with validation to ensure continuity of access). So we ignore certs if the authorization
 	// header is set.
@@ -80,8 +77,7 @@ func (i extractor) IdentityForRequest(ctx context.Context, ri requestinfo.Reques
 			}
 			resolvedRoles, err := provider.RoleMapper().FromUserDescriptor(ctx, ud)
 			if err != nil {
-				log.WarnL(ri.Hostname, "Token validation failed for hostname %v: %v", ri.Hostname, err)
-				return nil, err
+				return nil, getExtractorError("failed to resolve user roles", err)
 			}
 			identity.resolvedRoles = resolvedRoles
 			return identity, nil

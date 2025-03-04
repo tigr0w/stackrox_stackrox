@@ -23,7 +23,7 @@ function getEntityPagePath(entitiesKey) {
 
 // opname
 
-const routeMatcherMapForComplianceDashboard = getRouteMatcherMapForGraphQL([
+const opnamesWithoutStandards = [
     'clustersCount',
     'namespacesCount',
     'nodesCount',
@@ -33,14 +33,23 @@ const routeMatcherMapForComplianceDashboard = getRouteMatcherMapForGraphQL([
     'getAggregatedResultsByEntity_CLUSTER',
     'getAggregatedResultsAcrossEntity_NAMESPACE',
     'getAggregatedResultsAcrossEntity_NODE',
-    'getComplianceStandards',
-    'complianceStandards_CIS_Docker_v1_2_0',
+];
+
+export const routeMatcherMapWithoutStandards =
+    getRouteMatcherMapForGraphQL(opnamesWithoutStandards);
+
+// TODO are these reliable after hideScanResults feature?
+/*
+const opnamesOfStandards = [
     'complianceStandards_CIS_Kubernetes_v1_5',
     'complianceStandards_HIPAA_164',
     'complianceStandards_NIST_800_190',
     'complianceStandards_NIST_SP_800_53_Rev_4',
     'complianceStandards_PCI_DSS_3_2',
-]);
+];
+*/
+
+const routeMatcherMapForComplianceDashboard = getRouteMatcherMapForGraphQL(opnamesWithoutStandards);
 
 const opnameForEntities = {
     clusters: 'clustersList', // just clusters would be even better, and so on
@@ -92,7 +101,7 @@ export function visitComplianceDashboard() {
 /*
  * Assume location is compliance dashboard.
  */
-export function scanCompliance() {
+function scanCompliance() {
     const routeMatcherMapForTriggerScan = getRouteMatcherMapForGraphQL(['triggerScan']);
     const routeMatcherMap = {
         ...routeMatcherMapForTriggerScan,
@@ -101,14 +110,20 @@ export function scanCompliance() {
 
     const scanButton = '[data-testid="scan-button"]';
 
-    cy.get(scanButton).should('not.have.attr', 'disabled');
+    interactAndWaitForResponses(
+        () => {
+            cy.get(scanButton).click();
+        },
+        routeMatcherMap,
+        undefined,
+        { timeout: 20000 }
+    );
 
-    interactAndWaitForResponses(() => {
-        cy.get(scanButton).click();
-        cy.get(scanButton).should('have.attr', 'disabled');
-    }, routeMatcherMap);
-
-    cy.get(scanButton).should('not.have.attr', 'disabled');
+    // Note: scan results are polled for every 10 seconds, this should give us plenty of time
+    // to await completion of the scan.
+    cy.get('div:contains("Compliance scanning complete")', {
+        timeout: 30000,
+    });
 }
 
 /*

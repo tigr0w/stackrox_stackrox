@@ -7,6 +7,14 @@ collectors:
 - type: pod
   selector: app=admission-control
   tail: -1
+- type: pod
+  selector: app=collector
+  tail: -1
+- command: retry-kubectl.sh describe pod -n $NAMESPACE -l app=sensor
+- command: retry-kubectl.sh describe pod -n $NAMESPACE -l app=admission-control
+- command: retry-kubectl.sh describe pod -n $NAMESPACE -l app=collector
+# Please keep the above lists in sync with pods-debug.yaml
+timeout: 1500
 ---
 apiVersion: platform.stackrox.io/v1alpha1
 kind: SecuredCluster

@@ -4,17 +4,18 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gogo/protobuf/types"
-	"github.com/golang/mock/gomock"
 	deploymentMocks "github.com/stackrox/rox/central/deployment/datastore/mocks"
 	"github.com/stackrox/rox/central/processbaseline/datastore/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/fixtures"
 	"github.com/stackrox/rox/pkg/grpc/testutils"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/mock/gomock"
 )
 
 func TestAuthz(t *testing.T) {
@@ -255,9 +256,9 @@ func TestIndicatorsToGroupedResponses(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			testResults := IndicatorsToGroupedResponses(c.indicators)
-			assert.Equal(t, c.nameGroups, testResults)
+			protoassert.SlicesEqual(t, c.nameGroups, testResults)
 			testResultsWithContainer := indicatorsToGroupedResponsesWithContainer(c.indicators)
-			assert.Equal(t, c.nameContainerGroups, testResultsWithContainer)
+			protoassert.SlicesEqual(t, c.nameContainerGroups, testResultsWithContainer)
 		})
 	}
 }
@@ -346,7 +347,7 @@ func TestBaselineCheck(t *testing.T) {
 	testClusterID := "Test"
 	testNamespace := "Test"
 	testDeploymentID := "Test"
-	testStart := types.TimestampNow()
+	testStart := protocompat.TimestampNow()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var baseline *storage.ProcessBaseline

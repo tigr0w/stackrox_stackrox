@@ -6,13 +6,14 @@ import (
 
 	"github.com/graph-gophers/graphql-go"
 	"github.com/pkg/errors"
+	"github.com/stackrox/rox/central/graphql/resolvers/common"
 	"github.com/stackrox/rox/central/graphql/resolvers/embeddedobjs"
 	"github.com/stackrox/rox/central/graphql/resolvers/loaders"
 	"github.com/stackrox/rox/central/metrics"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	pkgMetrics "github.com/stackrox/rox/pkg/metrics"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/scoped"
 	"github.com/stackrox/rox/pkg/utils"
@@ -53,9 +54,6 @@ type NodeVulnerabilityResolver interface {
 func (resolver *Resolver) NodeVulnerability(ctx context.Context, args IDQuery) (NodeVulnerabilityResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "NodeVulnerability")
 
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return resolver.nodeVulnerabilityV2(ctx, args)
-	}
 	if err := readNodes(ctx); err != nil {
 		return nil, err
 	}
@@ -72,10 +70,6 @@ func (resolver *Resolver) NodeVulnerability(ctx context.Context, args IDQuery) (
 func (resolver *Resolver) NodeVulnerabilities(ctx context.Context, args PaginatedQuery) ([]NodeVulnerabilityResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "NodeVulnerabilities")
 
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		query := withNodeCveTypeFiltering(args.String())
-		return resolver.nodeVulnerabilitiesV2(ctx, PaginatedQuery{Query: &query, Pagination: args.Pagination})
-	}
 	if err := readNodes(ctx); err != nil {
 		return nil, err
 	}
@@ -90,6 +84,8 @@ func (resolver *Resolver) NodeVulnerabilities(ctx context.Context, args Paginate
 	}
 
 	query = tryUnsuppressedQuery(query)
+	query = common.WithoutOrphanedNodeCVEsQuery(query)
+
 	vulns, err := vulnLoader.FromQuery(ctx, query)
 	vulnResolvers, err := resolver.wrapNodeCVEsWithContext(ctx, vulns, err)
 
@@ -108,10 +104,6 @@ func (resolver *Resolver) NodeVulnerabilities(ctx context.Context, args Paginate
 func (resolver *Resolver) NodeVulnerabilityCount(ctx context.Context, args RawQuery) (int32, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "NodeVulnerabilityCount")
 
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		query := withNodeCveTypeFiltering(args.String())
-		return resolver.vulnerabilityCountV2(ctx, RawQuery{Query: &query})
-	}
 	if err := readNodes(ctx); err != nil {
 		return 0, err
 	}
@@ -126,6 +118,8 @@ func (resolver *Resolver) NodeVulnerabilityCount(ctx context.Context, args RawQu
 	}
 
 	query = tryUnsuppressedQuery(query)
+	query = common.WithoutOrphanedNodeCVEsQuery(query)
+
 	return vulnLoader.CountFromQuery(ctx, query)
 }
 
@@ -133,10 +127,6 @@ func (resolver *Resolver) NodeVulnerabilityCount(ctx context.Context, args RawQu
 func (resolver *Resolver) NodeVulnerabilityCounter(ctx context.Context, args RawQuery) (*VulnerabilityCounterResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "NodeVulnerabilityCounter")
 
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		query := withNodeCveTypeFiltering(args.String())
-		return resolver.vulnCounterV2(ctx, RawQuery{Query: &query})
-	}
 	if err := readNodes(ctx); err != nil {
 		return nil, err
 	}
@@ -152,6 +142,8 @@ func (resolver *Resolver) NodeVulnerabilityCounter(ctx context.Context, args Raw
 		return nil, err
 	}
 	query = tryUnsuppressedQuery(query)
+	query = common.WithoutOrphanedNodeCVEsQuery(query)
+
 	fixableQuery := search.ConjunctionQuery(query, search.NewQueryBuilder().AddBools(search.Fixable, true).ProtoQuery())
 	fixableVulns, err := vulnLoader.FromQuery(ctx, fixableQuery)
 	if err != nil {
@@ -208,6 +200,8 @@ func (resolver *Resolver) TopNodeVulnerability(ctx context.Context, args RawQuer
 		return nil, err
 	}
 	query = tryUnsuppressedQuery(query)
+	query = common.WithoutOrphanedNodeCVEsQuery(query)
+
 	vulns, err := vulnLoader.FromQuery(ctx, query)
 	if err != nil || len(vulns) == 0 {
 		return nil, err
@@ -230,22 +224,12 @@ func (resolver *nodeCVEResolver) getNodeCVEQuery() *v1.Query {
 	return search.NewQueryBuilder().AddExactMatches(search.CVEID, resolver.data.GetId()).ProtoQuery()
 }
 
-func (resolver *nodeCVEResolver) getNodeCVERawQuery() string {
-	return search.NewQueryBuilder().AddExactMatches(search.CVEID, resolver.data.GetId()).Query()
-}
-
 func nodeCveToVulnerabilityWithSeverity(in []*storage.NodeCVE) []VulnerabilityWithSeverity {
 	ret := make([]VulnerabilityWithSeverity, 0, len(in))
 	for _, vuln := range in {
 		ret = append(ret, vuln)
 	}
 	return ret
-}
-
-// withNodeCveTypeFiltering adds a conjunction as a raw query to filter vulns by CVEType Node
-func withNodeCveTypeFiltering(q string) string {
-	return search.AddRawQueriesAsConjunction(q,
-		search.NewQueryBuilder().AddExactMatches(search.CVEType, storage.CVE_NODE_CVE.String()).Query())
 }
 
 func (resolver *nodeCVEResolver) nodeVulnerabilityScopeContext(ctx context.Context) context.Context {
@@ -358,7 +342,7 @@ func (resolver *nodeCVEResolver) LastScanned(ctx context.Context) (*graphql.Time
 
 	// Short path. Full node is embedded when node scan resolver is called.
 	if scanTime := embeddedobjs.NodeComponentLastScannedFromContext(resolver.ctx); scanTime != nil {
-		return timestamp(scanTime)
+		return &graphql.Time{Time: *scanTime}, nil
 	}
 
 	nodeLoader, err := loaders.GetNodeLoader(resolver.ctx)
@@ -385,7 +369,7 @@ func (resolver *nodeCVEResolver) LastScanned(ctx context.Context) (*graphql.Time
 		return nil, errors.New("multiple nodes matched for last scanned node vulnerability query")
 	}
 
-	return timestamp(nodes[0].GetScan().GetScanTime())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(nodes[0].GetScan().GetScanTime())
 }
 
 // UnusedVarSink represents a query sink
@@ -443,7 +427,7 @@ func (resolver *nodeCVEResolver) ID(_ context.Context) graphql.ID {
 // CreatedAt is the time a node CVE first seen in the system
 func (resolver *nodeCVEResolver) CreatedAt(_ context.Context) (*graphql.Time, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.NodeCVEs, "CreatedAt")
-	return timestamp(resolver.data.GetCveBaseInfo().GetCreatedAt())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(resolver.data.GetCveBaseInfo().GetCreatedAt())
 }
 
 // CVE name of the node CVE
@@ -455,7 +439,7 @@ func (resolver *nodeCVEResolver) CVE(_ context.Context) string {
 // LastModified is the time this node CVE was last modified in the system
 func (resolver *nodeCVEResolver) LastModified(_ context.Context) (*graphql.Time, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.NodeCVEs, "LastModified")
-	return timestamp(resolver.data.GetCveBaseInfo().GetLastModified())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(resolver.data.GetCveBaseInfo().GetLastModified())
 }
 
 // Link to the node CVE
@@ -467,7 +451,7 @@ func (resolver *nodeCVEResolver) Link(_ context.Context) string {
 // PublishedOn is date and time when this node CVE was first published in the cve feeds
 func (resolver *nodeCVEResolver) PublishedOn(_ context.Context) (*graphql.Time, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.NodeCVEs, "PublishedOn")
-	return timestamp(resolver.data.GetCveBaseInfo().GetPublishedOn())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(resolver.data.GetCveBaseInfo().GetPublishedOn())
 }
 
 // ScoreVersion of the node CVE
@@ -485,13 +469,13 @@ func (resolver *nodeCVEResolver) Summary(_ context.Context) string {
 // SuppressActivation returns the snooze start timestamp of the node CVE
 func (resolver *nodeCVEResolver) SuppressActivation(_ context.Context) (*graphql.Time, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.NodeCVEs, "SuppressActivation")
-	return timestamp(resolver.data.GetSnoozeStart())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(resolver.data.GetSnoozeStart())
 }
 
 // SuppressExpiry returns the snooze expiration timestamp of the node CVE
 func (resolver *nodeCVEResolver) SuppressExpiry(_ context.Context) (*graphql.Time, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.NodeCVEs, "SuppressExpiry")
-	return timestamp(resolver.data.GetSnoozeExpiry())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(resolver.data.GetSnoozeExpiry())
 }
 
 // Suppressed returns true if the node CVE is snoozed

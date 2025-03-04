@@ -357,39 +357,6 @@ func logErrorOnQueryContainingField(query *v1.Query, label search.FieldLabel, re
 	})
 }
 
-func imageComponentToNodeComponent(comp *storage.ImageComponent) (*storage.NodeComponent, error) {
-	if comp == nil {
-		return nil, nil
-	}
-	if comp.GetSource() != storage.SourceType_INFRASTRUCTURE {
-		return nil, errors.Errorf("incorrect component source type '%s', should be '%s'", comp.GetSource().String(), storage.SourceType_INFRASTRUCTURE)
-	}
-	nodeComp := &storage.NodeComponent{
-		Id:              comp.GetId(),
-		Name:            comp.GetName(),
-		Version:         comp.GetVersion(),
-		Priority:        comp.GetPriority(),
-		RiskScore:       comp.GetRiskScore(),
-		OperatingSystem: comp.GetOperatingSystem(),
-	}
-	if comp.GetSetTopCvss() != nil {
-		nodeComp.SetTopCvss = &storage.NodeComponent_TopCvss{TopCvss: comp.GetTopCvss()}
-	}
-	return nodeComp, nil
-}
-
-func imageComponentsToNodeComponents(comps []*storage.ImageComponent) ([]*storage.NodeComponent, error) {
-	ret := make([]*storage.NodeComponent, 0, len(comps))
-	for _, comp := range comps {
-		nodeComp, err := imageComponentToNodeComponent(comp)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, nodeComp)
-	}
-	return ret, nil
-}
-
 // FilterFieldFromRawQuery removes the given field from RawQuery
 func FilterFieldFromRawQuery(rq RawQuery, label search.FieldLabel) RawQuery {
 	return RawQuery{
@@ -411,4 +378,23 @@ func (resolver *Resolver) processWithAuditLog(ctx context.Context, req interface
 		go resolver.AuditLogger.SendAuditMessage(ctx, req, method, interceptor.AuthStatus{}, err)
 	}
 	return resp, err
+}
+
+func getImageIDFromQuery(q *v1.Query) string {
+	if q == nil {
+		return ""
+	}
+	var imageID string
+	search.ApplyFnToAllBaseQueries(q, func(bq *v1.BaseQuery) {
+		matchFieldQuery, ok := bq.GetQuery().(*v1.BaseQuery_MatchFieldQuery)
+		if !ok {
+			return
+		}
+		if strings.EqualFold(matchFieldQuery.MatchFieldQuery.GetField(), search.ImageSHA.String()) {
+			imageID = matchFieldQuery.MatchFieldQuery.Value
+			imageID = strings.TrimRight(imageID, `"`)
+			imageID = strings.TrimLeft(imageID, `"`)
+		}
+	})
+	return imageID
 }

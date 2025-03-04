@@ -5,16 +5,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	deploymentDS "github.com/stackrox/rox/central/deployment/datastore"
-	reportConfigDS "github.com/stackrox/rox/central/reportconfigurations/datastore"
+	reportConfigDS "github.com/stackrox/rox/central/reports/config/datastore"
 	"github.com/stackrox/rox/central/resourcecollection/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/grpc/authn"
 	"github.com/stackrox/rox/pkg/grpc/authz"
@@ -22,6 +20,7 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/protoconv"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/paginated"
 	"google.golang.org/grpc"
@@ -32,19 +31,19 @@ const (
 )
 
 var (
-	authorizer = or.SensorOrAuthorizer(perrpc.FromMap(map[authz.Authorizer][]string{
+	authorizer = or.SensorOr(perrpc.FromMap(map[authz.Authorizer][]string{
 		user.With(permissions.View(resources.WorkflowAdministration)): {
-			"/v1.CollectionService/GetCollection",
-			"/v1.CollectionService/GetCollectionCount",
-			"/v1.CollectionService/ListCollections",
-			"/v1.CollectionService/ListCollectionSelectors",
+			v1.CollectionService_GetCollection_FullMethodName,
+			v1.CollectionService_GetCollectionCount_FullMethodName,
+			v1.CollectionService_ListCollections_FullMethodName,
+			v1.CollectionService_ListCollectionSelectors_FullMethodName,
 		},
 		user.With(permissions.Modify(resources.WorkflowAdministration)): {
-			// "/v1.CollectionService/AutoCompleteCollection", TODO ROX-12616
-			"/v1.CollectionService/CreateCollection",
-			"/v1.CollectionService/DeleteCollection",
-			"/v1.CollectionService/UpdateCollection",
-			"/v1.CollectionService/DryRunCollection",
+			// v1.CollectionService_AutoCompleteCollection_FullMethodName, TODO ROX-12616
+			v1.CollectionService_CreateCollection_FullMethodName,
+			v1.CollectionService_DeleteCollection_FullMethodName,
+			v1.CollectionService_UpdateCollection_FullMethodName,
+			v1.CollectionService_DryRunCollection_FullMethodName,
 		},
 	}))
 	defaultCollectionSortOption = &v1.QuerySortOption{
@@ -91,9 +90,6 @@ func (s *serviceImpl) AuthFuncOverride(ctx context.Context, fullMethodName strin
 
 // ListCollectionSelectors returns all supported selectors
 func (s *serviceImpl) ListCollectionSelectors(_ context.Context, _ *v1.Empty) (*v1.ListCollectionSelectorsResponse, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
-	}
 	selectors := datastore.GetSupportedFieldLabels()
 	selectorStrings := make([]string, 0, len(selectors))
 	for _, selector := range selectors {
@@ -106,9 +102,6 @@ func (s *serviceImpl) ListCollectionSelectors(_ context.Context, _ *v1.Empty) (*
 
 // GetCollection returns a collection for the given request
 func (s *serviceImpl) GetCollection(ctx context.Context, request *v1.GetCollectionRequest) (*v1.GetCollectionResponse, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
-	}
 	if request.GetId() == "" {
 		return nil, errors.Wrap(errox.InvalidArgs, "Id should be set when requesting a collection")
 	}
@@ -134,10 +127,6 @@ func (s *serviceImpl) GetCollection(ctx context.Context, request *v1.GetCollecti
 
 // GetCollectionCount returns count of collections matching the query in the request
 func (s *serviceImpl) GetCollectionCount(ctx context.Context, request *v1.GetCollectionCountRequest) (*v1.GetCollectionCountResponse, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
-	}
-
 	query, err := resolveQuery(request.GetQuery(), false)
 	if err != nil {
 		return nil, err
@@ -152,21 +141,16 @@ func (s *serviceImpl) GetCollectionCount(ctx context.Context, request *v1.GetCol
 
 // DeleteCollection deletes the collection with the given ID
 func (s *serviceImpl) DeleteCollection(ctx context.Context, request *v1.ResourceByID) (*v1.Empty, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
-	}
 	if request.GetId() == "" {
 		return nil, errors.Wrap(errox.InvalidArgs, "Non empty collection id must be specified to delete a collection")
 	}
 
-	// error out if collection is in use by a report config
-	query := search.NewQueryBuilder().AddExactMatches(search.EmbeddedCollectionID, request.GetId()).ProtoQuery()
-	reportConfigCount, err := s.reportConfigDatastore.Count(ctx, query)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to check for Report Configuration usages")
+	if err := s.checkVulnerabilityReportReferences(ctx, request); err != nil {
+		return nil, err
 	}
-	if reportConfigCount != 0 {
-		return nil, errors.Wrap(errox.ReferencedByAnotherObject, "Collection is in use by one or more report configurations")
+
+	if err := s.checkCollectionReferences(ctx, request); err != nil {
+		return nil, err
 	}
 
 	if err := s.datastore.DeleteCollection(ctx, request.GetId()); err != nil {
@@ -175,18 +159,50 @@ func (s *serviceImpl) DeleteCollection(ctx context.Context, request *v1.Resource
 	return &v1.Empty{}, nil
 }
 
-// CreateCollection creates a new collection from the given request
-func (s *serviceImpl) CreateCollection(ctx context.Context, request *v1.CreateCollectionRequest) (*v1.CreateCollectionResponse, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
+func (s *serviceImpl) checkCollectionReferences(ctx context.Context, request *v1.ResourceByID) error {
+	parentCollectionsQuery := search.NewQueryBuilder().AddExactMatches(search.EmbeddedCollectionID, request.GetId()).ProtoQuery()
+	referencedCollections, err := s.datastore.SearchCollections(ctx, parentCollectionsQuery)
+	if err != nil {
+		return errors.Wrap(err, "Failed to check for collection references")
 	}
 
+	if len(referencedCollections) != 0 {
+		var names []string
+		for _, referencedCollection := range referencedCollections {
+			names = append(names, referencedCollection.GetName())
+		}
+		return errors.Wrapf(errox.ReferencedByAnotherObject, "Collection is in use by the following collections: %q.", strings.Join(names, ", "))
+	}
+	return nil
+}
+
+func (s *serviceImpl) checkVulnerabilityReportReferences(ctx context.Context, request *v1.ResourceByID) error {
+	query := search.DisjunctionQuery(
+		search.NewQueryBuilder().AddExactMatches(search.EmbeddedCollectionID, request.GetId()).ProtoQuery(),
+		search.NewQueryBuilder().AddExactMatches(search.CollectionID, request.GetId()).ProtoQuery(),
+	)
+	reportConfigurations, err := s.reportConfigDatastore.GetReportConfigurations(ctx, query)
+	if err != nil {
+		return errors.Wrap(err, "Failed to check for Report Configuration usages")
+	}
+	if len(reportConfigurations) != 0 {
+		var names []string
+		for _, reportConfigurations := range reportConfigurations {
+			names = append(names, reportConfigurations.GetName())
+		}
+		return errors.Wrapf(errox.ReferencedByAnotherObject, "Collection is in use by the following report configuratios: %q.", strings.Join(names, ", "))
+	}
+	return nil
+}
+
+// CreateCollection creates a new collection from the given request
+func (s *serviceImpl) CreateCollection(ctx context.Context, request *v1.CreateCollectionRequest) (*v1.CreateCollectionResponse, error) {
 	collection, err := collectionRequestToCollection(ctx, request, "")
 	if err != nil {
 		return nil, err
 	}
 
-	err = s.datastore.AddCollection(ctx, collection)
+	_, err = s.datastore.AddCollection(ctx, collection)
 	if err != nil {
 		return nil, err
 	}
@@ -195,10 +211,6 @@ func (s *serviceImpl) CreateCollection(ctx context.Context, request *v1.CreateCo
 }
 
 func (s *serviceImpl) UpdateCollection(ctx context.Context, request *v1.UpdateCollectionRequest) (*v1.UpdateCollectionResponse, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
-	}
-
 	if request.GetId() == "" {
 		return nil, errors.Wrap(errox.InvalidArgs, "Non empty collection id must be specified to update a collection")
 	}
@@ -266,16 +278,12 @@ func resolveQuery(rawQuery *v1.RawQuery, withPagination bool) (*v1.Query, error)
 	}
 	if withPagination {
 		paginated.FillPagination(query, rawQuery.GetPagination(), defaultPageSize)
-		paginated.FillDefaultSortOption(query, defaultCollectionSortOption)
+		query = paginated.FillDefaultSortOption(query, defaultCollectionSortOption)
 	}
 	return query, nil
 }
 
 func (s *serviceImpl) ListCollections(ctx context.Context, request *v1.ListCollectionsRequest) (*v1.ListCollectionsResponse, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
-	}
-
 	query, err := resolveQuery(request.GetQuery(), true)
 	if err != nil {
 		return nil, err
@@ -292,10 +300,6 @@ func (s *serviceImpl) ListCollections(ctx context.Context, request *v1.ListColle
 }
 
 func (s *serviceImpl) DryRunCollection(ctx context.Context, request *v1.DryRunCollectionRequest) (*v1.DryRunCollectionResponse, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.Errorf("%s env var is not enabled", env.PostgresDatastoreEnabled.EnvVar())
-	}
-
 	collection, err := collectionRequestToCollection(ctx, request, request.GetId())
 	if err != nil {
 		return nil, err
@@ -335,6 +339,6 @@ func (s *serviceImpl) tryDeploymentMatching(ctx context.Context, collection *sto
 	}
 	query := search.ConjunctionQuery(collectionQuery, filterQuery)
 	paginated.FillPagination(query, matchOptions.GetFilterQuery().GetPagination(), defaultPageSize)
-	paginated.FillDefaultSortOption(query, defaultDeploymentSortOption)
+	query = paginated.FillDefaultSortOption(query, defaultDeploymentSortOption)
 	return s.deploymentDS.SearchListDeployments(ctx, query)
 }

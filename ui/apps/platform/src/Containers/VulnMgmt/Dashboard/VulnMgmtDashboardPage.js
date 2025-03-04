@@ -1,19 +1,16 @@
-import React, { useContext, useState } from 'react';
-import { withRouter } from 'react-router-dom';
-import ReactRouterPropTypes from 'react-router-prop-types';
+import React, { useContext } from 'react';
+import { useHistory } from 'react-router-dom';
 
+import usePermissions from 'hooks/usePermissions';
 import entityTypes from 'constants/entityTypes';
 import { createOptions } from 'utils/workflowUtils';
 import DashboardLayout from 'Components/DashboardLayout';
-import ExportButton from 'Components/ExportButton';
-import BackdropExporting from 'Components/PatternFly/BackdropExporting';
 import PageTitle from 'Components/PageTitle';
 import RadioButtonGroup from 'Components/RadioButtonGroup';
 import workflowStateContext from 'Containers/workflowStateContext';
+import ScannerV4IntegrationBanner from 'Components/ScannerV4IntegrationBanner';
 import { DASHBOARD_LIMIT } from 'constants/workflowPages.constants';
 import DashboardMenu from 'Components/DashboardMenu';
-import useFeatureFlags from 'hooks/useFeatureFlags';
-import CvesCountTile from '../Components/CvesCountTile';
 import ImagesCountTile from '../Components/ImagesCountTile';
 import NodesCountTile from '../Components/NodesCountTile';
 import TopRiskyEntitiesByVulnerabilities from '../widgets/TopRiskyEntitiesByVulnerabilities';
@@ -23,23 +20,20 @@ import MostCommonVulnerabilities from '../widgets/MostCommonVulnerabilities';
 import ClustersWithMostClusterVulnerabilities from '../widgets/ClustersWithMostClusterVulnerabilities';
 import CvesMenu from './CvesMenu';
 
-const baseEntityMenuTypes = [entityTypes.CLUSTER, entityTypes.NAMESPACE, entityTypes.DEPLOYMENT];
-const componentMenuType = [entityTypes.COMPONENT];
-const splitComponentMenuTypes = [entityTypes.NODE_COMPONENT, entityTypes.IMAGE_COMPONENT];
+const entityMenuTypes = [
+    entityTypes.CLUSTER,
+    entityTypes.NAMESPACE,
+    entityTypes.DEPLOYMENT,
+    entityTypes.NODE_COMPONENT,
+    entityTypes.IMAGE_COMPONENT,
+];
 
-const VulnDashboardPage = ({ history }) => {
-    const [isExporting, setIsExporting] = useState(false);
+const VulnDashboardPage = () => {
+    const history = useHistory();
+    const { hasReadAccess } = usePermissions();
+    const hasReadAccessForIntegration = hasReadAccess('Integration');
     const workflowState = useContext(workflowStateContext);
     const searchState = workflowState.getCurrentSearchState();
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVmUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-
-    let entityMenuTypes = [...baseEntityMenuTypes];
-    if (showVmUpdates) {
-        entityMenuTypes = [...baseEntityMenuTypes, ...splitComponentMenuTypes];
-    } else {
-        entityMenuTypes = [...baseEntityMenuTypes, ...componentMenuType];
-    }
 
     const cveFilterButtons = [
         {
@@ -78,12 +72,14 @@ const VulnDashboardPage = ({ history }) => {
             <PageTitle title="Vulnerability Management - Dashboard" />
             <div className="flex items-center">
                 <div className="flex h-full mr-3 pr-3 border-r-2 border-base-400">
-                    {showVmUpdates && (
-                        <div className="flex mr-2">
-                            <CvesMenu />
-                        </div>
-                    )}
-                    {!showVmUpdates && <CvesCountTile entityType={entityTypes.CVE} />}
+                    <div
+                        className="flex mr-2"
+                        style={{
+                            backgroundColor: 'var(--pf-v5-global--palette--red-50)',
+                        }}
+                    >
+                        <CvesMenu />
+                    </div>
                     <NodesCountTile />
                     <ImagesCountTile />
                     <div className="flex w-32">
@@ -99,19 +95,13 @@ const VulnDashboardPage = ({ history }) => {
                     onClick={handleCveFilterToggle}
                     selected={cveFilter}
                 />
-                <ExportButton
-                    fileName="Vulnerability Management Dashboard Report"
-                    page={workflowState.useCase}
-                    pdfId="capture-dashboard"
-                    isExporting={isExporting}
-                    setIsExporting={setIsExporting}
-                />
             </div>
         </>
     );
     return (
         <>
             <DashboardLayout
+                banner={hasReadAccessForIntegration && <ScannerV4IntegrationBanner />}
                 headerText="Vulnerability Management"
                 headerComponents={headerComponents}
             >
@@ -137,13 +127,8 @@ const VulnDashboardPage = ({ history }) => {
                     <ClustersWithMostClusterVulnerabilities />
                 </div>
             </DashboardLayout>
-            {isExporting && <BackdropExporting />}
         </>
     );
 };
 
-VulnDashboardPage.propTypes = {
-    history: ReactRouterPropTypes.history.isRequired,
-};
-
-export default withRouter(VulnDashboardPage);
+export default VulnDashboardPage;

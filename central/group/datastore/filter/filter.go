@@ -5,13 +5,19 @@ import (
 
 	"github.com/stackrox/rox/central/globaldb"
 	"github.com/stackrox/rox/central/group/datastore/internal/store"
-	"github.com/stackrox/rox/central/group/datastore/internal/store/bolt"
 	"github.com/stackrox/rox/central/group/datastore/internal/store/postgres"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/sync"
 )
+
+// Filter is a function that, given an input group, tells whether it should be
+// filtered in (true) or out (false).
+type Filter = func(group *storage.Group) bool
+
+// Retriever is a function that, given a filter, will return the list
+// of groups that match the filter.
+type Retriever = func(ctx context.Context, filter Filter) ([]*storage.Group, error)
 
 // GetFiltered returns groups from the store filtered using filter function.
 func GetFiltered(ctx context.Context, filter func(*storage.Group) bool) ([]*storage.Group, error) {
@@ -30,7 +36,7 @@ func GetFilteredWithStore(ctx context.Context, filter func(*storage.Group) bool,
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 	return groups, nil
@@ -42,11 +48,7 @@ var (
 )
 
 func initialize() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		groupStore = postgres.New(globaldb.GetPostgres())
-	} else {
-		groupStore = bolt.New(globaldb.GetGlobalDB())
-	}
+	groupStore = postgres.New(globaldb.GetPostgres())
 }
 
 // GroupStoreSingleton returns the singleton providing access to the roles store.

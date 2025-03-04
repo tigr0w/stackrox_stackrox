@@ -26,7 +26,7 @@ There are a number of required steps to get access to vault:
 1. Log in to the secrets collection manager at
 https://selfservice.vault.ci.openshift.org/secretcollection?ui=true (This is a
 Red Hat-ism and will require SSO)
-2. Ask in #epic-ci-improvement to be added to the collections required for this test:
+2. Ask in #proj-acs-ci-improvement to be added to the collections required for this test:
 stackrox-stackrox-initial and stackrox-stackrox-e2e-tests.
 3. Login to the vault at: https://vault.ci.openshift.org/ui/vault/secrets (Use
 *OIDC*) You should see these secret collections under kv/
@@ -71,6 +71,12 @@ Run tests repeatedly:
 ```
 # Hammer on the IntegrationsSplunkViolationsTest
 run-e2e-tests.sh --spin-cycle=100 qa IntegrationsSplunkViolationsTest
+```
+
+Run a gradle task (assumes a prior config step was executed):
+```
+# Run all @Tag("Parallel") tests
+run-e2e-tests.sh qa testParallel
 ```
 
 ### Non groovy tests - 'e2e' flavor

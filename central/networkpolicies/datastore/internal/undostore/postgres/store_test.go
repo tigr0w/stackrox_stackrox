@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *NetworkpolicyapplicationundorecordsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE networkpolicyapplicationundorecords CASCADE")
 	s.T().Log("networkpolicyapplicationundorecords", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *NetworkpolicyapplicationundorecordsStoreSuite) TestStore() {
 	foundNetworkPolicyApplicationUndoRecord, exists, err = store.Get(ctx, networkPolicyApplicationUndoRecord.GetClusterId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(networkPolicyApplicationUndoRecord, foundNetworkPolicyApplicationUndoRecord)
+	protoassert.Equal(s.T(), networkPolicyApplicationUndoRecord, foundNetworkPolicyApplicationUndoRecord)
 
-	networkPolicyApplicationUndoRecordCount, err := store.Count(ctx)
+	networkPolicyApplicationUndoRecordCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, networkPolicyApplicationUndoRecordCount)
-	networkPolicyApplicationUndoRecordCount, err = store.Count(withNoAccessCtx)
+	networkPolicyApplicationUndoRecordCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(networkPolicyApplicationUndoRecordCount)
 
@@ -75,11 +78,6 @@ func (s *NetworkpolicyapplicationundorecordsStoreSuite) TestStore() {
 	s.True(networkPolicyApplicationUndoRecordExists)
 	s.NoError(store.Upsert(ctx, networkPolicyApplicationUndoRecord))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, networkPolicyApplicationUndoRecord), sac.ErrResourceAccessDenied)
-
-	foundNetworkPolicyApplicationUndoRecord, exists, err = store.Get(ctx, networkPolicyApplicationUndoRecord.GetClusterId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(networkPolicyApplicationUndoRecord, foundNetworkPolicyApplicationUndoRecord)
 
 	s.NoError(store.Delete(ctx, networkPolicyApplicationUndoRecord.GetClusterId()))
 	foundNetworkPolicyApplicationUndoRecord, exists, err = store.Get(ctx, networkPolicyApplicationUndoRecord.GetClusterId())
@@ -99,13 +97,13 @@ func (s *NetworkpolicyapplicationundorecordsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, networkPolicyApplicationUndoRecords))
 
-	networkPolicyApplicationUndoRecordCount, err = store.Count(ctx)
+	networkPolicyApplicationUndoRecordCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, networkPolicyApplicationUndoRecordCount)
 
 	s.NoError(store.DeleteMany(ctx, networkPolicyApplicationUndoRecordIDs))
 
-	networkPolicyApplicationUndoRecordCount, err = store.Count(ctx)
+	networkPolicyApplicationUndoRecordCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, networkPolicyApplicationUndoRecordCount)
 }

@@ -10,6 +10,7 @@ import { Alert, Button, Title, TitleSizes } from '@patternfly/react-core';
 import { AUTH_STATUS } from 'reducers/auth';
 import { selectors } from 'reducers';
 import { ThemeContext } from 'Containers/ThemeProvider';
+import ExternalLink from 'Components/PatternFly/IconText/ExternalLink';
 import LoadingSection from 'Components/PatternFly/LoadingSection';
 import ReduxSelectField from 'Components/forms/ReduxSelectField';
 import ReduxTextField from 'Components/forms/ReduxTextField';
@@ -38,7 +39,7 @@ class LoginPage extends Component {
     static propTypes = {
         authStatus: PropTypes.oneOf(Object.keys(AUTH_STATUS).map((key) => AUTH_STATUS[key]))
             .isRequired,
-        authProviders: PropTypes.arrayOf(PropTypes.object).isRequired,
+        authProviders: PropTypes.arrayOf(PropTypes.object),
         authProviderResponse: PropTypes.shape({
             error: PropTypes.string,
             error_description: PropTypes.string,
@@ -57,6 +58,7 @@ class LoginPage extends Component {
 
     static defaultProps = {
         authorizeRoxctlMode: false,
+        authProviders: [],
     };
 
     constructor(props) {
@@ -143,14 +145,24 @@ class LoginPage extends Component {
             const errorMsg = authProviderResponse.error_description || '';
             const errorLink = ((url) =>
                 url ? (
-                    <span>
-                        (<a href={url}>more info</a>)
-                    </span>
+                    <ExternalLink>
+                        (
+                        <a href={url} target="_blank" rel="noopener noreferrer">
+                            more info
+                        </a>
+                        )
+                    </ExternalLink>
                 ) : (
                     []
                 ))(authProviderResponse.error_uri);
             return (
-                <Alert variant="danger" isInline title={errorKey} className="pf-u-mb-md">
+                <Alert
+                    variant="danger"
+                    isInline
+                    title={errorKey}
+                    component="p"
+                    className="pf-v5-u-mb-md"
+                >
                     {errorMsg} {errorLink}
                 </Alert>
             );
@@ -174,6 +186,20 @@ class LoginPage extends Component {
         if (authorizeRoxctlMode) {
             authProviders = authProviders.filter((provider) => provider.type !== 'basic');
             title = 'Authorize roxctl';
+            if (authProviders.length === 0) {
+                return (
+                    <Alert
+                        variant="danger"
+                        isInline
+                        title="roxct-authorize-error"
+                        component="p"
+                        className="pf-v5-u-mb-md"
+                    >
+                        Only basic auth provider given. Authorizing roxctl only works with non-basic
+                        auth provider. Configure an auth provider and try again.
+                    </Alert>
+                );
+            }
         }
 
         const options = authProvidersToSelectOptions(authProviders);
@@ -258,7 +284,7 @@ class LoginPage extends Component {
                 <main className="flex h-full items-center justify-center">
                     <div className="flex items-start">
                         <form
-                            className="pf-u-background-color-100 w-128 theme-light"
+                            className="pf-v5-u-background-color-100 w-128 theme-light"
                             onSubmit={this.props.handleSubmit(this.login)}
                         >
                             <div className="flex flex-col p-12 w-full">
@@ -268,7 +294,7 @@ class LoginPage extends Component {
                                 {this.renderLoginButton()}
                             </div>
                         </form>
-                        <BrandLogo className="pf-u-p-2xl" />
+                        <BrandLogo className="pf-v5-u-p-2xl" />
                     </div>
                 </main>
             </>
@@ -295,7 +321,7 @@ const Form = reduxForm({
 // which are based on the Redux state. Yet because initialValues matter only when
 // component is mounted, we cannot mount a component until we have everything to populate
 // initial values (in this case the list of auth providers)
-const LoadingOrForm = ({ authProviders, authorizeRoxctlMode = false }) => {
+const LoadingOrForm = ({ authProviders = [], authorizeRoxctlMode = false }) => {
     if (!authProviders.length) {
         return <LoadingSection message="Loading..." />;
     }
@@ -306,7 +332,10 @@ const LoadingOrForm = ({ authProviders, authorizeRoxctlMode = false }) => {
     }
 
     const options = authProvidersToSelectOptions(availableAuthProviders);
-    const initialValues = { authProvider: options[0].value };
+    // In case of roxctl authorize mode, we filter out the basic auth provider. This could lead
+    // to us having no auth provider within the initial values, hence we need to be able to handle
+    // the empty list of auth providers here.
+    const initialValues = { authProvider: options[0]?.value };
     return <Form initialValues={initialValues} authorizeRoxctlMode={authorizeRoxctlMode} />;
 };
 

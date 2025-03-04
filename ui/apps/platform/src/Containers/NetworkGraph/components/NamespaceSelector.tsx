@@ -8,21 +8,42 @@ import {
     Menu,
     MenuContent,
     MenuFooter,
-    MenuInput,
+    MenuSearch,
     MenuItem,
     MenuList,
     SearchInput,
-    Select,
+    MenuSearchInput,
 } from '@patternfly/react-core';
+import { Select } from '@patternfly/react-core/deprecated';
 
 import useSelectToggle from 'hooks/patternfly/useSelectToggle';
-import { Namespace } from 'hooks/useFetchClusterNamespacesForPermissions';
 import { NamespaceWithDeployments } from 'hooks/useFetchNamespaceDeployments';
+import { NamespaceScopeObject } from 'services/RolesService';
 import { NamespaceIcon } from '../common/NetworkGraphIcons';
-import { getDeploymentLookupMap, getDeploymentsAllowedByNamespaces } from '../utils/hierarchyUtils';
+
+export function getDeploymentLookupMap(
+    deploymentsByNamespace: NamespaceWithDeployments[]
+): Record<string, string[]> {
+    return deploymentsByNamespace.reduce<Record<string, string[]>>((acc, ns) => {
+        const deployments = ns.deployments.map((deployment) => deployment.name);
+        return { ...acc, [ns.metadata.name]: deployments };
+    }, {});
+}
+
+export function getDeploymentsAllowedByNamespaces(
+    deploymentLookupMap: Record<string, string[]>,
+    namespaceSelection: string[]
+) {
+    const newDeploymentLookup = Object.fromEntries(
+        Object.entries(deploymentLookupMap).filter(([key]) => namespaceSelection.includes(key))
+    );
+    const allowedDeployments = Object.values(newDeploymentLookup).flat(1);
+
+    return allowedDeployments;
+}
 
 type NamespaceSelectorProps = {
-    namespaces?: Namespace[];
+    namespaces?: NamespaceScopeObject[];
     selectedNamespaces?: string[];
     selectedDeployments?: string[];
     deploymentsByNamespace?: NamespaceWithDeployments[];
@@ -59,13 +80,13 @@ function NamespaceSelector({
                 return (
                     <MenuItem
                         key={namespace.id}
-                        hasCheck
+                        hasCheckbox
                         itemId={namespace.name}
                         isSelected={selectedNamespaces.includes(namespace.name)}
                     >
                         <span>
                             <NamespaceIcon />
-                            <span className="pf-u-mx-xs" data-testid="namespace-name">
+                            <span className="pf-v5-u-mx-xs" data-testid="namespace-name">
                                 {namespace.name}
                             </span>
                         </span>
@@ -105,16 +126,18 @@ function NamespaceSelector({
 
     const namespaceSelectMenu = (
         <Menu onSelect={onNamespaceSelect} selected={selectedNamespaces} isScrollable>
-            <MenuInput className="pf-u-p-md">
-                <SearchInput
-                    value={input}
-                    aria-label="Filter namespaces"
-                    type="search"
-                    placeholder="Filter namespaces..."
-                    onChange={(_event, value) => handleTextInputChange(value)}
-                />
-            </MenuInput>
-            <Divider className="pf-u-m-0" />
+            <MenuSearch>
+                <MenuSearchInput>
+                    <SearchInput
+                        value={input}
+                        aria-label="Filter namespaces"
+                        type="search"
+                        placeholder="Filter namespaces..."
+                        onChange={(_event, value) => handleTextInputChange(value)}
+                    />
+                </MenuSearchInput>
+            </MenuSearch>
+            <Divider className="pf-v5-u-m-0" />
             <MenuContent>
                 <MenuList>
                     {filteredDeploymentSelectMenuItems.length === 0 && (
@@ -141,7 +164,7 @@ function NamespaceSelector({
     return (
         <Select
             isOpen={isNamespaceOpen}
-            onToggle={toggleIsNamespaceOpen}
+            onToggle={(_e, v) => toggleIsNamespaceOpen(v)}
             className="namespace-select"
             placeholderText={
                 <Flex alignSelf={{ default: 'alignSelfCenter' }}>

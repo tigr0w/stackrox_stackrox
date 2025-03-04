@@ -16,6 +16,8 @@ import (
     "github.com/stackrox/rox/pkg/features"{{- end }}
     "github.com/stackrox/rox/pkg/postgres"
     "github.com/stackrox/rox/pkg/postgres/walker"
+    "github.com/stackrox/rox/pkg/sac"
+    "github.com/stackrox/rox/pkg/sac/resources"
     "github.com/stackrox/rox/pkg/search"
     "github.com/stackrox/rox/pkg/search/postgres/mapping"
     "github.com/stackrox/rox/pkg/uuid"
@@ -71,6 +73,12 @@ var (
             }...)
             {{- end }}
         {{- end }}
+
+        {{- if or (.Obj.IsGloballyScoped) (.Obj.IsDirectlyScoped) (.Obj.IsIndirectlyScoped) }}
+            schema.ScopingResource = resources.{{.Type | storageToResource}}
+        {{- else if .PermissionChecker }}
+            schema.PermissionChecker = {{ .PermissionChecker }}
+        {{- end }}
         {{- if .RegisterSchema }}
         RegisterTable(schema, {{template "createTableStmtVar" .Schema }}{{ if .FeatureFlag }}, features.{{.FeatureFlag}}.Enabled {{ end }})
             {{- if .SearchCategory }}
@@ -90,9 +98,12 @@ var (
         {{$field.ColumnName|upperCamelCase}} {{$field.ModelType}} `gorm:"{{- /**/ -}}
         column:{{$field.ColumnName|lowerCase}};{{- /**/ -}}
         type:{{$field.SQLType}}{{if $field.Options.Unique}};unique{{end}}{{if $field.Options.PrimaryKey}};primaryKey{{end}}{{- /**/ -}}
-        {{if $field.Options.Index}};{{- /**/ -}}
-            index:{{$schema.Table|lowerCamelCase|lowerCase}}_{{$field.ColumnName|lowerCase}},{{- /**/ -}}
-            type:{{$field.Options.Index}}{{- /**/ -}}
+        {{if $field.Options.Index}}
+            {{- range $subindex, $indexconfig := $field.Options.Index -}};{{- /**/ -}}
+                {{- if eq $indexconfig.IndexCategory "unique"}}uniqueIndex{{else}}index{{end -}}:{{- /**/ -}}
+                    {{if gt (len $indexconfig.IndexName) 0}}{{$indexconfig.IndexName}}{{else}}{{$schema.Table|lowerCamelCase|lowerCase}}_{{$field.ColumnName|lowerCase}}{{end}}{{- /**/ -}}
+                {{- if ne $indexconfig.IndexCategory "unique"}},type:{{$indexconfig.IndexType}}{{end -}}{{- /**/ -}}
+            {{- end -}}
         {{end}}{{- /**/ -}}
         {{if $field|isSacScoping }};{{- /**/ -}}
             index:{{$schema.Table|lowerCamelCase|lowerCase}}_sac_filter,type:{{- if $obj.IsClusterScope }}hash{{else}}btree{{end}}{{- /**/ -}}
@@ -112,6 +123,7 @@ var (
     {{- end }}
 {{- end}}
 {{- define "createTableNames" }}
+    // {{.Table|upperCamelCase}}TableName specifies the name of the table in postgres.
     {{.Table|upperCamelCase}}TableName = "{{.Table|lowerCase}}"
 	{{- range $index, $child := .Children }}
 	   {{- template "createTableNames" $child }}

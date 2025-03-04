@@ -29,7 +29,20 @@ export function getCredentialExpiryVariant(
     return 'success';
 }
 
+export function getBannerVariant(type: CredentialExpiryVariant) {
+    switch (type) {
+        case 'danger':
+            return 'red';
+        case 'warning':
+            return 'gold';
+        default:
+            return 'green';
+    }
+}
+
 export const nameOfComponent: Record<CertExpiryComponent, string> = {
     CENTRAL: 'Central',
-    SCANNER: 'Scanner',
+    SCANNER: 'StackRox Scanner',
+    SCANNER_V4: 'Scanner V4',
+    CENTRAL_DB: 'Central Database',
 };

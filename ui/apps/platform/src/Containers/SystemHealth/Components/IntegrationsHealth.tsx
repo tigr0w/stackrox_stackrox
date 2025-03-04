@@ -1,7 +1,7 @@
 import React, { ReactElement } from 'react';
 import { getDateTime } from 'utils/dateUtils';
 
-import { TableComposable, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { IntegrationMergedItem } from '../utils/integrations';
 
 type Props = {
@@ -10,7 +10,7 @@ type Props = {
 
 const IntegrationsHealth = ({ integrations }: Props): ReactElement => {
     return (
-        <TableComposable variant="compact">
+        <Table variant="compact">
             <Thead>
                 <Tr>
                     <Th width={20}>Name</Th>
@@ -28,14 +28,14 @@ const IntegrationsHealth = ({ integrations }: Props): ReactElement => {
                         <Td dataLabel="Label" modifier="breakWord" data-testid="label">
                             {label}
                         </Td>
-                        <Td dataLabel="Error" modifier="breakWord" data-testid="error-message">
+                        <Td dataLabel="Error message" modifier="breakWord">
                             {errorMessage.length === 0 ? '-' : errorMessage}
                         </Td>
                         <Td dataLabel="Date">{getDateTime(lastTimestamp)}</Td>
                     </Tr>
                 ))}
             </Tbody>
-        </TableComposable>
+        </Table>
     );
 };
 

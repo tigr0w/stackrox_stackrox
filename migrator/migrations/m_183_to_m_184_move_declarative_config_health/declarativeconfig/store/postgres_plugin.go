@@ -4,17 +4,15 @@ import (
 	"context"
 
 	"github.com/hashicorp/go-multierror"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	migrationSchema "github.com/stackrox/rox/migrator/migrations/m_183_to_m_184_move_declarative_config_health/declarativeconfig/schema"
-	"github.com/stackrox/rox/pkg/logging"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/search"
 	pgSearch "github.com/stackrox/rox/pkg/search/postgres"
-	"github.com/stackrox/rox/pkg/sync"
 )
 
 // Store is the interface to the config health data layer
@@ -30,13 +28,11 @@ const (
 )
 
 var (
-	log    = logging.LoggerForModule()
 	schema = migrationSchema.DeclarativeConfigHealthsSchema
 )
 
 type storeImpl struct {
-	db    postgres.DB
-	mutex sync.RWMutex
+	db postgres.DB
 }
 
 // New returns a new Store instance using the provided sql instance.
@@ -49,7 +45,7 @@ func New(db postgres.DB) Store {
 //// Helper functions
 
 func insertIntoDeclarativeConfigHealths(_ context.Context, batch *pgx.Batch, obj *storage.DeclarativeConfigHealth) error {
-	serialized, marshalErr := obj.Marshal()
+	serialized, marshalErr := obj.MarshalVT()
 	if marshalErr != nil {
 		return marshalErr
 	}
@@ -108,7 +104,7 @@ func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.DeclarativeConf
 
 // Upsert saves the current state of an object in storage.
 func (s *storeImpl) Upsert(ctx context.Context, obj *storage.DeclarativeConfigHealth) error {
-	return pgutils.Retry(func() error {
+	return pgutils.Retry(ctx, func() error {
 		return s.upsert(ctx, obj)
 	})
 }

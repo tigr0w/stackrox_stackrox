@@ -3,13 +3,12 @@ package service
 import (
 	"context"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	deploymentStore "github.com/stackrox/rox/central/deployment/datastore"
 	"github.com/stackrox/rox/central/detection/lifecycle"
 	"github.com/stackrox/rox/central/processbaseline/datastore"
 	"github.com/stackrox/rox/central/reprocessor"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
@@ -19,6 +18,7 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/stringutils"
@@ -28,12 +28,12 @@ import (
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
 		user.With(permissions.View(resources.DeploymentExtension)): {
-			"/v1.ProcessBaselineService/GetProcessBaseline",
+			v1.ProcessBaselineService_GetProcessBaseline_FullMethodName,
 		},
 		user.With(permissions.Modify(resources.DeploymentExtension)): {
-			"/v1.ProcessBaselineService/UpdateProcessBaselines",
-			"/v1.ProcessBaselineService/LockProcessBaselines",
-			"/v1.ProcessBaselineService/DeleteProcessBaselines",
+			v1.ProcessBaselineService_UpdateProcessBaselines_FullMethodName,
+			v1.ProcessBaselineService_LockProcessBaselines_FullMethodName,
+			v1.ProcessBaselineService_DeleteProcessBaselines_FullMethodName,
 		},
 	})
 )
@@ -131,6 +131,7 @@ func (s *serviceImpl) sendBaselineToSensor(pw *storage.ProcessBaseline) {
 	if err != nil {
 		log.Errorf("Error sending process baseline to cluster %q: %v", pw.GetKey().GetClusterId(), err)
 	}
+	log.Infof("Successfully sent process baseline to cluster %q: %s", pw.GetKey().GetClusterId(), pw.GetId())
 }
 
 func (s *serviceImpl) reprocessDeploymentRisks(keys []*storage.ProcessBaselineKey) {
@@ -195,7 +196,7 @@ func (s *serviceImpl) DeleteProcessBaselines(ctx context.Context, request *v1.De
 		return response, nil
 	}
 
-	toClear := make([]string, len(results))
+	toClear := make([]string, 0, len(results))
 	var toDelete []string
 	// go through list of IDs returned from the search results; clear the baseline and remove deployments from observation.
 	for _, r := range results {

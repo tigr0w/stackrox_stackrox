@@ -1,11 +1,15 @@
 package manager
 
 import (
-	"errors"
+	"context"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/gogo/protobuf/types"
+	"github.com/hashicorp/go-multierror"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
@@ -13,18 +17,27 @@ import (
 	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/net"
 	"github.com/stackrox/rox/pkg/netutil"
 	"github.com/stackrox/rox/pkg/networkgraph"
 	"github.com/stackrox/rox/pkg/process/normalize"
+	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/protoconv"
+	"github.com/stackrox/rox/pkg/sensor/queue"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/timestamp"
 	"github.com/stackrox/rox/sensor/common"
+	"github.com/stackrox/rox/sensor/common/centralcaps"
 	"github.com/stackrox/rox/sensor/common/clusterentities"
 	"github.com/stackrox/rox/sensor/common/detector"
 	"github.com/stackrox/rox/sensor/common/externalsrcs"
+	"github.com/stackrox/rox/sensor/common/internalmessage"
+	"github.com/stackrox/rox/sensor/common/message"
 	"github.com/stackrox/rox/sensor/common/metrics"
 	flowMetrics "github.com/stackrox/rox/sensor/common/networkflow/metrics"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -37,11 +50,8 @@ const (
 )
 
 var (
-	// these are "canonical" external addresses sent by collector when we don't care about the precise IP address.
-	externalIPv4Addr = net.ParseIP("255.255.255.255")
-	externalIPv6Addr = net.ParseIP("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
-
 	emptyProcessInfo = processInfo{}
+	tickerTime       = time.Second * 30
 )
 
 type hostConnections struct {
@@ -63,12 +73,12 @@ type hostConnections struct {
 type connStatus struct {
 	firstSeen timestamp.MicroTS
 	lastSeen  timestamp.MicroTS
-	// used keeps track of if an endpoint has been used by the the networkgraph path.
+	// used keeps track of if an endpoint has been used by the networkgraph path.
+	used bool
 	// usedProcess keeps track of if an endpoint has been used by the processes listening on
 	// ports path. If processes listening on ports is used, both must be true to delete the
 	// endpoint. Otherwise the endpoint will not be available to process listening on ports
 	// and it won't report endpoints that it doesn't have access to.
-	used        bool
 	usedProcess bool
 	// rotten implies we expected to correlate the flow with a container, but were unable to
 	rotten bool
@@ -92,7 +102,7 @@ func (i *networkConnIndicator) toProto(ts timestamp.MicroTS) *storage.NetworkFlo
 	}
 
 	if ts != timestamp.InfiniteFuture {
-		proto.LastSeenTimestamp = ts.GogoProtobuf()
+		proto.LastSeenTimestamp = protoconv.ConvertMicroTSToProtobufTS(ts)
 	}
 	return proto
 }
@@ -113,7 +123,7 @@ func (i *containerEndpointIndicator) toProto(ts timestamp.MicroTS) *storage.Netw
 	}
 
 	if ts != timestamp.InfiniteFuture {
-		proto.LastActiveTimestamp = ts.GogoProtobuf()
+		proto.LastActiveTimestamp = protoconv.ConvertMicroTSToProtobufTS(ts)
 	}
 	return proto
 }
@@ -126,9 +136,11 @@ type processUniqueKey struct {
 }
 
 type processListeningIndicator struct {
-	key      processUniqueKey
-	port     uint16
-	protocol storage.L4Protocol
+	key       processUniqueKey
+	port      uint16
+	protocol  storage.L4Protocol
+	podUID    string
+	namespace string
 }
 
 func (i *processListeningIndicator) toProto(ts timestamp.MicroTS) *storage.ProcessListeningOnPortFromSensor {
@@ -143,10 +155,12 @@ func (i *processListeningIndicator) toProto(ts timestamp.MicroTS) *storage.Proce
 			ProcessArgs:         i.key.process.processArgs,
 		},
 		DeploymentId: i.key.deploymentID,
+		PodUid:       i.podUID,
+		Namespace:    i.namespace,
 	}
 
 	if ts != timestamp.InfiniteFuture {
-		proto.CloseTimestamp = ts.GogoProtobuf()
+		proto.CloseTimestamp = protoconv.ConvertMicroTSToProtobufTS(ts)
 	}
 
 	return proto
@@ -168,6 +182,36 @@ func (c *connection) String() string {
 		arrow = "->"
 	}
 	return fmt.Sprintf("%s: %s %s %s", c.containerID, c.local, arrow, c.remote)
+}
+
+// IsExternal returns true when IPv4 does not belong to the private IP addresses; false otherwise.
+// Error is returned when IP address is malformed
+func (c *connection) IsExternal() (bool, error) {
+	addr, err := c.getRemoteIPAddress()
+	if err != nil {
+		return true, errors.Wrap(err, "unable to determine if flow is external or internal")
+	}
+	if addr.IsLoopback() {
+		return false, errors.New("connection with localhost")
+	}
+	return addr.IsPublic(), nil
+}
+
+// getIPAddress returns the IP address of the connection remote.
+// If that IP is unset, it returns the address of the IP Network to which the remote belongs.
+// If both are unavaliable, an error is returned.
+// This check of both is required, because Collector reports the IP addresses
+// either as IPAndPort.Address, or IPAndPort.IPNetwork. The former is used in most cases, but sometimes
+// (usually on OCP) the latter is provided. Analyzing only one of those two sources may lead to incorrectly reporting
+// a connection as external on the network graph.
+func (c *connection) getRemoteIPAddress() (net.IPAddress, error) {
+	if c.remote.IPAndPort.IsAddressValid() {
+		return c.remote.IPAndPort.Address, nil
+	}
+	if c.remote.IPAndPort.IPNetwork.IsValid() {
+		return c.remote.IPAndPort.IPNetwork.IP(), nil
+	}
+	return net.IPAddress{}, fmt.Errorf("remote has invalid IP address %q", c.remote.IPAndPort.String())
 }
 
 type processInfo struct {
@@ -192,18 +236,42 @@ func (e *containerEndpoint) String() string {
 
 // NewManager creates a new instance of network flow manager
 func NewManager(
-	clusterEntities *clusterentities.Store,
+	clusterEntities EntityStore,
 	externalSrcs externalsrcs.Store,
 	policyDetector detector.Detector,
+	pubSub *internalmessage.MessageSubscriber,
 ) Manager {
+	enricherTicker := time.NewTicker(tickerTime)
 	mgr := &networkFlowManager{
-		done:              concurrency.NewSignal(),
 		connectionsByHost: make(map[string]*hostConnections),
 		clusterEntities:   clusterEntities,
-		sensorUpdates:     make(chan *central.MsgFromSensor),
 		publicIPs:         newPublicIPsManager(),
 		externalSrcs:      externalSrcs,
 		policyDetector:    policyDetector,
+		enricherTicker:    enricherTicker,
+		initialSync:       &atomic.Bool{},
+		activeConnections: make(map[connection]*networkConnIndicator),
+		activeEndpoints:   make(map[containerEndpoint]*containerEndpointIndicator),
+		stopper:           concurrency.NewStopper(),
+		pubSub:            pubSub,
+	}
+
+	enricherTicker.Stop()
+	if features.SensorCapturesIntermediateEvents.Enabled() {
+		mgr.sensorUpdates = make(chan *message.ExpiringMessage, queue.ScaleSizeOnNonDefault(env.NetworkFlowBufferSize))
+	} else {
+		mgr.sensorUpdates = make(chan *message.ExpiringMessage)
+	}
+
+	if err := mgr.pubSub.Subscribe(internalmessage.SensorMessageResourceSyncFinished, func(msg *internalmessage.SensorInternalMessage) {
+		if msg.IsExpired() {
+			return
+		}
+		// Since we need to have the logic to transition to offline mode if `SensorCapturesIntermediateEvents` is disabled.
+		// We call `Notify` here to keep the logic to transition offline/online in the same place.
+		mgr.Notify(common.SensorComponentEventResourceSyncFinished)
+	}); err != nil {
+		log.Errorf("unable to subscribe to %s: %+v", internalmessage.SensorMessageResourceSyncFinished, err)
 	}
 
 	return mgr
@@ -213,19 +281,33 @@ type networkFlowManager struct {
 	connectionsByHost      map[string]*hostConnections
 	connectionsByHostMutex sync.Mutex
 
-	clusterEntities *clusterentities.Store
+	clusterEntities EntityStore
 	externalSrcs    externalsrcs.Store
 
+	lastSentStateMutex             sync.RWMutex
 	enrichedConnsLastSentState     map[networkConnIndicator]timestamp.MicroTS
 	enrichedEndpointsLastSentState map[containerEndpointIndicator]timestamp.MicroTS
 	enrichedProcessesLastSentState map[processListeningIndicator]timestamp.MicroTS
 
-	done          concurrency.Signal
-	sensorUpdates chan *central.MsgFromSensor
+	activeConnections map[connection]*networkConnIndicator
+	activeEndpoints   map[containerEndpoint]*containerEndpointIndicator
+
+	sensorUpdates chan *message.ExpiringMessage
+	centralReady  concurrency.Signal
+
+	ctxMutex    sync.Mutex
+	cancelCtx   context.CancelFunc
+	pipelineCtx context.Context
+	initialSync *atomic.Bool
+
+	enricherTicker *time.Ticker
 
 	publicIPs *publicIPsManager
 
 	policyDetector detector.Detector
+
+	stopper concurrency.Stopper
+	pubSub  *internalmessage.MessageSubscriber
 }
 
 func (m *networkFlowManager) ProcessMessage(_ *central.MsgToSensor) error {
@@ -233,35 +315,120 @@ func (m *networkFlowManager) ProcessMessage(_ *central.MsgToSensor) error {
 }
 
 func (m *networkFlowManager) Start() error {
-	go m.enrichConnections()
-	go m.publicIPs.Run(&m.done, m.clusterEntities)
+	go m.enrichConnections(m.enricherTicker.C)
+	go m.publicIPs.Run(m.stopper.LowLevel().GetStopRequestSignal(), m.clusterEntities)
 	return nil
 }
 
 func (m *networkFlowManager) Stop(_ error) {
-	m.done.Signal()
+	if !m.stopper.Client().Stopped().IsDone() {
+		defer func() {
+			_ = m.stopper.Client().Stopped().Wait()
+		}()
+	}
+	m.stopper.Client().Stop()
 }
 
 func (m *networkFlowManager) Capabilities() []centralsensor.SensorCapability {
 	return nil
 }
 
-func (m *networkFlowManager) Notify(common.SensorComponentEvent) {}
+func (m *networkFlowManager) Notify(e common.SensorComponentEvent) {
+	log.Info(common.LogSensorComponentEvent(e))
+	switch e {
+	case common.SensorComponentEventResourceSyncFinished:
+		if features.SensorCapturesIntermediateEvents.Enabled() {
+			if m.initialSync.CompareAndSwap(false, true) {
+				m.enricherTicker.Reset(tickerTime)
+			}
+			return
+		}
+		m.resetContext()
+		m.resetLastSentState()
+		m.centralReady.Signal()
+		m.enricherTicker.Reset(tickerTime)
+	case common.SensorComponentEventOfflineMode:
+		if features.SensorCapturesIntermediateEvents.Enabled() {
+			return
+		}
+		m.centralReady.Reset()
+		m.enricherTicker.Stop()
+	}
+}
 
-func (m *networkFlowManager) ResponsesC() <-chan *central.MsgFromSensor {
+func (m *networkFlowManager) ResponsesC() <-chan *message.ExpiringMessage {
 	return m.sensorUpdates
 }
 
-func (m *networkFlowManager) enrichConnections() {
-	ticker := time.NewTicker(time.Second * 30)
+func (m *networkFlowManager) resetContext() {
+	m.ctxMutex.Lock()
+	defer m.ctxMutex.Unlock()
+	if m.cancelCtx != nil {
+		m.cancelCtx()
+	}
+	m.pipelineCtx, m.cancelCtx = context.WithCancel(context.Background())
+}
 
+func (m *networkFlowManager) sendToCentral(msg *central.MsgFromSensor) bool {
+	if features.SensorCapturesIntermediateEvents.Enabled() {
+		select {
+		case <-m.stopper.Flow().StopRequested():
+			return false
+		case m.sensorUpdates <- message.New(msg):
+			return true
+		default:
+			// If the m.sensorUpdates queue is full, we bounce the Network Flow update.
+			// They will still be processed by the detection engine for newer entities, but
+			// sensor will not keep ordered updates indefinitely in memory.
+			return false
+		}
+	} else {
+		ctx := m.getCurrentContext()
+		select {
+		case <-m.stopper.Flow().StopRequested():
+			return false
+		case m.sensorUpdates <- message.NewExpiring(ctx, msg):
+			return true
+		}
+	}
+
+}
+
+func (m *networkFlowManager) resetLastSentState() {
+	m.lastSentStateMutex.Lock()
+	defer m.lastSentStateMutex.Unlock()
+	m.enrichedConnsLastSentState = nil
+	m.enrichedEndpointsLastSentState = nil
+	m.enrichedProcessesLastSentState = nil
+}
+
+func (m *networkFlowManager) updateConnectionStates(newConns map[networkConnIndicator]timestamp.MicroTS, newEndpoints map[containerEndpointIndicator]timestamp.MicroTS) {
+	m.lastSentStateMutex.Lock()
+	defer m.lastSentStateMutex.Unlock()
+	m.enrichedConnsLastSentState = newConns
+	m.enrichedEndpointsLastSentState = newEndpoints
+}
+
+func (m *networkFlowManager) updateProcessesState(newProcesses map[processListeningIndicator]timestamp.MicroTS) {
+	m.lastSentStateMutex.Lock()
+	defer m.lastSentStateMutex.Unlock()
+	m.enrichedProcessesLastSentState = newProcesses
+}
+
+func (m *networkFlowManager) enrichConnections(tickerC <-chan time.Time) {
+	defer m.stopper.Flow().ReportStopped()
 	for {
 		select {
-		case <-m.done.WaitC():
+		case <-m.stopper.Flow().StopRequested():
 			return
-		case <-ticker.C:
+		case <-tickerC:
+			if !features.SensorCapturesIntermediateEvents.Enabled() && !m.centralReady.IsDone() {
+				log.Info("Sensor is in offline mode: skipping enriching until connection is back up")
+				continue
+			}
 			m.enrichAndSend()
-
+			// Measuring number of calls to `enrichAndSend` (ticks) for remembering historical endpoints
+			m.clusterEntities.RecordTick()
 			if env.ProcessesListeningOnPort.BooleanSetting() {
 				m.enrichAndSendProcesses()
 			}
@@ -269,14 +436,17 @@ func (m *networkFlowManager) enrichConnections() {
 	}
 }
 
+func (m *networkFlowManager) getCurrentContext() context.Context {
+	m.ctxMutex.Lock()
+	defer m.ctxMutex.Unlock()
+	return m.pipelineCtx
+}
+
 func (m *networkFlowManager) enrichAndSend() {
 	currentConns, currentEndpoints := m.currentEnrichedConnsAndEndpoints()
 
-	updatedConns := computeUpdatedConns(currentConns, m.enrichedConnsLastSentState)
-	updatedEndpoints := computeUpdatedEndpoints(currentEndpoints, m.enrichedEndpointsLastSentState)
-
-	m.enrichedConnsLastSentState = currentConns
-	m.enrichedEndpointsLastSentState = currentEndpoints
+	updatedConns := computeUpdatedConns(currentConns, m.enrichedConnsLastSentState, &m.lastSentStateMutex)
+	updatedEndpoints := computeUpdatedEndpoints(currentEndpoints, m.enrichedEndpointsLastSentState, &m.lastSentStateMutex)
 
 	if len(updatedConns)+len(updatedEndpoints) == 0 {
 		return
@@ -285,35 +455,37 @@ func (m *networkFlowManager) enrichAndSend() {
 	protoToSend := &central.NetworkFlowUpdate{
 		Updated:          updatedConns,
 		UpdatedEndpoints: updatedEndpoints,
-		Time:             types.TimestampNow(),
+		Time:             protocompat.TimestampNow(),
 	}
 
-	// Before sending, run the flows through policies asynchronously
+	var detectionContext context.Context
+	if features.SensorCapturesIntermediateEvents.Enabled() {
+		detectionContext = context.Background()
+	} else {
+		detectionContext = m.getCurrentContext()
+	}
+	// Before sending, run the flows through policies asynchronously (ProcessNetworkFlow creates a new goroutine for each call)
 	for _, flow := range updatedConns {
-		m.policyDetector.ProcessNetworkFlow(flow)
+		m.policyDetector.ProcessNetworkFlow(detectionContext, flow)
 	}
 
-	metrics.IncrementTotalNetworkFlowsSentCounter(len(protoToSend.Updated))
-	metrics.IncrementTotalNetworkEndpointsSentCounter(len(protoToSend.UpdatedEndpoints))
 	log.Debugf("Flow update : %v", protoToSend)
-	select {
-	case <-m.done.Done():
-		return
-	case m.sensorUpdates <- &central.MsgFromSensor{
+	if m.sendToCentral(&central.MsgFromSensor{
 		Msg: &central.MsgFromSensor_NetworkFlowUpdate{
 			NetworkFlowUpdate: protoToSend,
 		},
-	}:
-		return
+	}) {
+		m.updateConnectionStates(currentConns, currentEndpoints)
+		metrics.IncrementTotalNetworkFlowsSentCounter(len(protoToSend.Updated))
+		metrics.IncrementTotalNetworkEndpointsSentCounter(len(protoToSend.UpdatedEndpoints))
 	}
+	metrics.SetNetworkFlowBufferSizeGauge(len(m.sensorUpdates))
 }
 
 func (m *networkFlowManager) enrichAndSendProcesses() {
 	currentProcesses := m.currentEnrichedProcesses()
 
-	updatedProcesses := computeUpdatedProcesses(currentProcesses, m.enrichedProcessesLastSentState)
-
-	m.enrichedProcessesLastSentState = currentProcesses
+	updatedProcesses := computeUpdatedProcesses(currentProcesses, m.enrichedProcessesLastSentState, &m.lastSentStateMutex)
 
 	if len(updatedProcesses) == 0 {
 		return
@@ -321,49 +493,123 @@ func (m *networkFlowManager) enrichAndSendProcesses() {
 
 	processesToSend := &central.ProcessListeningOnPortsUpdate{
 		ProcessesListeningOnPorts: updatedProcesses,
-		Time:                      types.TimestampNow(),
+		Time:                      protocompat.TimestampNow(),
 	}
 
-	metrics.IncrementTotalProcessesSentCounter(len(processesToSend.ProcessesListeningOnPorts))
-	select {
-	case <-m.done.Done():
-		return
-	case m.sensorUpdates <- &central.MsgFromSensor{
+	if m.sendToCentral(&central.MsgFromSensor{
 		Msg: &central.MsgFromSensor_ProcessListeningOnPortUpdate{
 			ProcessListeningOnPortUpdate: processesToSend,
 		},
-	}:
-		return
+	}) {
+		m.updateProcessesState(currentProcesses)
+		metrics.IncrementTotalProcessesSentCounter(len(processesToSend.ProcessesListeningOnPorts))
+	}
+}
+
+func (m *networkFlowManager) handleContainerNotFound(conn *connection, status *connStatus, enrichedConnections map[networkConnIndicator]timestamp.MicroTS) error {
+	timeElapsedSinceFirstSeen := timestamp.Now().ElapsedSince(status.firstSeen)
+	failReason := fmt.Errorf("ContainerID %s unknown", conn.containerID)
+	if timeElapsedSinceFirstSeen <= maxContainerResolutionWaitPeriod {
+		return multierror.Append(failReason, fmt.Errorf("time for container resolution (%s) not elapsed yet", maxContainerResolutionWaitPeriod))
+	}
+
+	activeConn, found := m.activeConnections[*conn]
+	if !found {
+		// Expire the connection if the container cannot be found within the clusterEntityResolutionWaitPeriod
+		status.rotten = true
+		// Only increment metric once the connection is marked rotten
+		flowMetrics.ContainerIDMisses.Inc()
+		log.Debugf("Can't find deployment information for container %s", conn.containerID)
+		return failReason
+	}
+	// Active connection found - enrichment can be done.
+	enrichedConnections[*activeConn] = timestamp.Now()
+	delete(m.activeConnections, *conn)
+	flowMetrics.SetActiveFlowsTotalGauge(len(m.activeConnections))
+	return nil
+}
+
+func formatMultiErrorOneline(errs []error) string {
+	elems := make([]string, len(errs))
+	for i, err := range errs {
+		// The error is used in debug logs and is much nicer to read with the first letter capitalized.
+		// Writing the error message with first capital in the code raises a style warning.
+		msg := cases.Title(language.English, cases.NoLower).String(err.Error())
+		elems[i] = fmt.Sprintf("(%d) %s", i+1, msg)
+	}
+	return strings.Join(elems, ", ")
+}
+
+func logReasonForAggregatingNetGraphFlow(conn *connection, contNs, contName, entitiesName string, port uint16, failReason *multierror.Error) {
+	reasonStr := ""
+	if failReason != nil {
+		failReason.ErrorFormat = formatMultiErrorOneline
+		reasonStr = failReason.Error()
+	}
+	// No need to produce complex chain of reasons, if there is one simple explanation
+	if conn.remote.IsConsideredExternal() {
+		reasonStr = "Collector did not report the IP address to Sensor - the remote part is the Internet"
+	}
+	if conn.incoming {
+		// Keep internal wording even if central lacks `NetworkGraphInternalEntitiesSupported` capability.
+		log.Debugf("Marking incoming connection to container %s/%s from %s:%s as '%s' in the network graph: %s.",
+			contNs, contName, conn.remote.IPAndPort.String(),
+			strconv.Itoa(int(port)), entitiesName, reasonStr)
+	} else {
+		log.Debugf("Marking outgoing connection from container %s/%s to %s as '%s' in the network graph: %s.",
+			contNs, contName, conn.remote.IPAndPort.String(),
+			entitiesName, reasonStr)
 	}
 }
 
 func (m *networkFlowManager) enrichConnection(conn *connection, status *connStatus, enrichedConnections map[networkConnIndicator]timestamp.MicroTS) {
 	timeElapsedSinceFirstSeen := timestamp.Now().ElapsedSince(status.firstSeen)
 	isFresh := timeElapsedSinceFirstSeen < clusterEntityResolutionWaitPeriod
+	var netGraphFailReason *multierror.Error
 
 	container, ok := m.clusterEntities.LookupByContainerID(conn.containerID)
 	if !ok {
-		// Expire the connection if the container cannot be found within the clusterEntityResolutionWaitPeriod
-		if timeElapsedSinceFirstSeen > maxContainerResolutionWaitPeriod {
-			status.rotten = true
-			// Only increment metric once the connection is marked rotten
-			flowMetrics.ContainerIDMisses.Inc()
-			log.Debugf("Unable to fetch deployment information for container %s: no deployment found", conn.containerID)
+		// There is an incoming connection to a container that Sensor does not recognize.
+		// 90% of the cases that container is Sensor itself before being restarted.
+		if err := m.handleContainerNotFound(conn, status, enrichedConnections); err != nil {
+			log.Debugf("Enrichment failed: %v", err)
 		}
 		return
 	}
+	netGraphFailReason = multierror.Append(netGraphFailReason, errors.New("ContainerID lookup successful"))
 
 	var lookupResults []clusterentities.LookupResult
+	var isInternet = false
 
 	// Check if the remote address represents the de-facto INTERNET entity.
-	if conn.remote.IPAndPort.Address == externalIPv4Addr || conn.remote.IPAndPort.Address == externalIPv6Addr {
+	if conn.remote.IsConsideredExternal() {
 		isFresh = false
+		isInternet = true
+		netGraphFailReason = multierror.Append(netGraphFailReason,
+			errors.New("Remote part of the connection is the Internet"))
 	} else {
 		// Otherwise, check if the remote entity is actually a cluster entity.
 		lookupResults = m.clusterEntities.LookupByEndpoint(conn.remote)
 	}
 
+	var port uint16
+	var direction string
+	if conn.incoming {
+		direction = "ingress"
+		port = conn.local.Port
+	} else {
+		direction = "egress"
+		port = conn.remote.IPAndPort.Port
+	}
+
+	metricDirection := prometheus.Labels{
+		"direction": direction,
+		"namespace": container.Namespace,
+	}
+
 	if len(lookupResults) == 0 {
+		netGraphFailReason = multierror.Append(netGraphFailReason,
+			fmt.Errorf("lookup in clusterEntitiesStore failed for endpoint %s", conn.remote.String()))
 		// If the address is set and is not resolvable, we want to we wait for `clusterEntityResolutionWaitPeriod` time
 		// before associating it to a known network or INTERNET.
 		if isFresh && conn.remote.IPAndPort.Address.IsValid() {
@@ -376,28 +622,66 @@ func (m *networkFlowManager) enrichConnection(conn *connection, status *connStat
 		}
 
 		if isFresh {
+			log.Debugf("Enrichment aborted: Connection is fresh")
 			return
 		}
-		status.used = true
 
-		flowMetrics.ExternalFlowCounter.Inc()
-
-		var port uint16
-		if conn.incoming {
-			port = conn.local.Port
-		} else {
-			port = conn.remote.IPAndPort.Port
-		}
+		defer func() {
+			status.used = true
+		}()
 
 		if extSrc == nil {
-			// Fake a lookup result.
+			netGraphFailReason = multierror.Append(netGraphFailReason,
+				fmt.Errorf("lookup by network in externalSrcsStore failed for network %+v", conn.remote.IPAndPort))
+			entityType := networkgraph.InternetEntity()
+			isExternal, err := conn.IsExternal()
+			if err != nil {
+				// IP is malformed or unknown - do not show on the graph and log the info
+				// TODO(ROX-22388): Change log level back to warning when potential Collector issue is fixed
+				log.Debugf("Enrichment aborted: Not showing flow on the network graph: %v", err)
+				return
+			}
+			if isExternal {
+				// If Central does not handle DiscoveredExternalEntities, report an Internet entity as it used to be.
+				if !isInternet && centralcaps.Has(centralsensor.NetworkGraphDiscoveredExternalEntitiesSupported) {
+					entityType = networkgraph.DiscoveredExternalEntity(net.IPNetworkFromNetworkPeerID(conn.remote.IPAndPort))
+				} else {
+					netGraphFailReason = multierror.Append(netGraphFailReason,
+						errors.New("Central lacks capability to display discovered external entities"))
+				}
+			} else if centralcaps.Has(centralsensor.NetworkGraphInternalEntitiesSupported) {
+				// Central without the capability would crash the UI if we make it display "Internal Entities".
+				entityType = networkgraph.InternalEntities()
+			} else {
+				netGraphFailReason = multierror.Append(netGraphFailReason,
+					errors.New("Central lacks capability to display 'Internal Entities' in the UI"))
+			}
+
+			// Fake a lookup result. This shows "External Entities" or "Internal Entities" in the network graph
 			lookupResults = []clusterentities.LookupResult{
 				{
-					Entity:         networkgraph.InternetEntity(),
+					Entity:         entityType,
 					ContainerPorts: []uint16{port},
 				},
 			}
+			entitiesName := "Internal Entities"
+			if isExternal {
+				entitiesName = "External Entities"
+			}
+			logReasonForAggregatingNetGraphFlow(conn, container.Namespace, container.ContainerName, entitiesName, port, netGraphFailReason)
+
+			if !status.used {
+				// Count internal metrics even if central lacks `NetworkGraphInternalEntitiesSupported` capability.
+				if isExternal {
+					flowMetrics.ExternalFlowCounter.With(metricDirection).Inc()
+				} else {
+					flowMetrics.InternalFlowCounter.With(metricDirection).Inc()
+				}
+			}
 		} else {
+			if !status.used {
+				flowMetrics.NetworkEntityFlowCounter.With(metricDirection).Inc()
+			}
 			lookupResults = []clusterentities.LookupResult{
 				{
 					Entity:         networkgraph.EntityFromProto(extSrc),
@@ -406,9 +690,12 @@ func (m *networkFlowManager) enrichConnection(conn *connection, status *connStat
 			}
 		}
 	} else {
+		if !status.used {
+			flowMetrics.NetworkEntityFlowCounter.With(metricDirection).Inc()
+		}
 		status.used = true
 		if conn.incoming {
-			// Only report incoming connections from outside of the cluster. These are already taken care of by the
+			// Only report incoming connections from outside the cluster. These are already taken care of by the
 			// corresponding outgoing connection from the other end.
 			return
 		}
@@ -433,6 +720,15 @@ func (m *networkFlowManager) enrichConnection(conn *connection, status *connStat
 			// hence update the timestamp only if we have a more recent connection than the one we have already enriched.
 			if oldTS, found := enrichedConnections[indicator]; !found || oldTS < status.lastSeen {
 				enrichedConnections[indicator] = status.lastSeen
+				if features.SensorCapturesIntermediateEvents.Enabled() {
+					if status.lastSeen == timestamp.InfiniteFuture {
+						m.activeConnections[*conn] = &indicator
+						flowMetrics.SetActiveFlowsTotalGauge(len(m.activeConnections))
+					} else {
+						delete(m.activeConnections, *conn)
+						flowMetrics.SetActiveFlowsTotalGauge(len(m.activeConnections))
+					}
+				}
 			}
 		}
 	}
@@ -449,6 +745,12 @@ func (m *networkFlowManager) enrichContainerEndpoint(ep *containerEndpoint, stat
 	if !ok {
 		// Expire the connection if the container cannot be found within the clusterEntityResolutionWaitPeriod
 		if timeElapsedSinceFirstSeen > maxContainerResolutionWaitPeriod {
+			if activeEp, found := m.activeEndpoints[*ep]; found {
+				enrichedEndpoints[*activeEp] = timestamp.Now()
+				delete(m.activeEndpoints, *ep)
+				flowMetrics.SetActiveEndpointsTotalGauge(len(m.activeEndpoints))
+				return
+			}
 			status.rotten = true
 			// Only increment metric once the connection is marked rotten
 			flowMetrics.ContainerIDMisses.Inc()
@@ -469,6 +771,15 @@ func (m *networkFlowManager) enrichContainerEndpoint(ep *containerEndpoint, stat
 	// hence update the timestamp only if we have a more recent endpoint than the one we have already enriched.
 	if oldTS, found := enrichedEndpoints[indicator]; !found || oldTS < status.lastSeen {
 		enrichedEndpoints[indicator] = status.lastSeen
+		if features.SensorCapturesIntermediateEvents.Enabled() {
+			if status.lastSeen == timestamp.InfiniteFuture {
+				m.activeEndpoints[*ep] = &indicator
+				flowMetrics.SetActiveEndpointsTotalGauge(len(m.activeEndpoints))
+			} else {
+				delete(m.activeEndpoints, *ep)
+				flowMetrics.SetActiveEndpointsTotalGauge(len(m.activeEndpoints))
+			}
+		}
 	}
 }
 
@@ -500,8 +811,10 @@ func (m *networkFlowManager) enrichProcessListening(ep *containerEndpoint, statu
 			deploymentID:  container.DeploymentID,
 			process:       ep.processKey,
 		},
-		port:     ep.endpoint.IPAndPort.Port,
-		protocol: ep.endpoint.L4Proto.ToProtobuf(),
+		port:      ep.endpoint.IPAndPort.Port,
+		protocol:  ep.endpoint.L4Proto.ToProtobuf(),
+		podUID:    container.PodUID,
+		namespace: container.Namespace,
 	}
 
 	processesListening[indicator] = status.lastSeen
@@ -584,7 +897,9 @@ func (m *networkFlowManager) currentEnrichedProcesses() map[processListeningIndi
 	return enrichedProcesses
 }
 
-func computeUpdatedConns(current map[networkConnIndicator]timestamp.MicroTS, previous map[networkConnIndicator]timestamp.MicroTS) []*storage.NetworkFlow {
+func computeUpdatedConns(current map[networkConnIndicator]timestamp.MicroTS, previous map[networkConnIndicator]timestamp.MicroTS, previousMutex *sync.RWMutex) []*storage.NetworkFlow {
+	previousMutex.RLock()
+	defer previousMutex.RUnlock()
 	var updates []*storage.NetworkFlow
 
 	for conn, currTS := range current {
@@ -603,7 +918,9 @@ func computeUpdatedConns(current map[networkConnIndicator]timestamp.MicroTS, pre
 	return updates
 }
 
-func computeUpdatedEndpoints(current map[containerEndpointIndicator]timestamp.MicroTS, previous map[containerEndpointIndicator]timestamp.MicroTS) []*storage.NetworkEndpoint {
+func computeUpdatedEndpoints(current map[containerEndpointIndicator]timestamp.MicroTS, previous map[containerEndpointIndicator]timestamp.MicroTS, previousMutex *sync.RWMutex) []*storage.NetworkEndpoint {
+	previousMutex.RLock()
+	defer previousMutex.RUnlock()
 	var updates []*storage.NetworkEndpoint
 
 	for ep, currTS := range current {
@@ -622,7 +939,9 @@ func computeUpdatedEndpoints(current map[containerEndpointIndicator]timestamp.Mi
 	return updates
 }
 
-func computeUpdatedProcesses(current map[processListeningIndicator]timestamp.MicroTS, previous map[processListeningIndicator]timestamp.MicroTS) []*storage.ProcessListeningOnPortFromSensor {
+func computeUpdatedProcesses(current map[processListeningIndicator]timestamp.MicroTS, previous map[processListeningIndicator]timestamp.MicroTS, previousMutex *sync.RWMutex) []*storage.ProcessListeningOnPortFromSensor {
+	previousMutex.RLock()
+	defer previousMutex.RUnlock()
 	var updates []*storage.ProcessListeningOnPortFromSensor
 
 	for pl, currTS := range current {
@@ -836,49 +1155,64 @@ func getIPAndPort(address *sensor.NetworkAddress) net.NetworkPeerID {
 	return tuple
 }
 
+func processConnection(conn *sensor.NetworkConnection) (*connection, error) {
+	var incoming bool
+	switch conn.Role {
+	case sensor.ClientServerRole_ROLE_SERVER:
+		incoming = true
+	case sensor.ClientServerRole_ROLE_CLIENT:
+		incoming = false
+	default:
+		return nil, errors.New("Received connection that was not marked as server or client")
+	}
+
+	remote := net.NumericEndpoint{
+		IPAndPort: getIPAndPort(conn.GetRemoteAddress()),
+		L4Proto:   net.L4ProtoFromProtobuf(conn.GetProtocol()),
+	}
+	local := getIPAndPort(conn.GetLocalAddress())
+
+	// Special handling for UDP ports - role reported by collector may be unreliable, so look at which port is more
+	// likely to be ephemeral. In case a port is set to 0, collector couldn't retrieve this value, we assume the
+	// connection works in the direction opposite of this port.
+	if remote.L4Proto == net.UDP {
+		incoming = netutil.IsEphemeralPort(remote.IPAndPort.Port) > netutil.IsEphemeralPort(local.Port)
+	}
+
+	c := &connection{
+		local:       local,
+		remote:      remote,
+		containerID: conn.GetContainerId(),
+		incoming:    incoming,
+	}
+	return c, nil
+}
+
 func getUpdatedConnections(hostname string, networkInfo *sensor.NetworkConnectionInfo) map[connection]timestamp.MicroTS {
 	updatedConnections := make(map[connection]timestamp.MicroTS)
 
 	flowMetrics.NetworkFlowMessagesPerNode.With(prometheus.Labels{"Hostname": hostname}).Inc()
 
 	for _, conn := range networkInfo.GetUpdatedConnections() {
-		var incoming bool
-		switch conn.Role {
-		case sensor.ClientServerRole_ROLE_SERVER:
-			flowMetrics.NetworkFlowsPerNodeByType.With(prometheus.Labels{"Hostname": hostname, "Type": "incoming", "Protocol": conn.Protocol.String()}).Inc()
-			incoming = true
-		case sensor.ClientServerRole_ROLE_CLIENT:
-			flowMetrics.NetworkFlowsPerNodeByType.With(prometheus.Labels{"Hostname": hostname, "Type": "outgoing", "Protocol": conn.Protocol.String()}).Inc()
-			incoming = false
-		default:
+		c, err := processConnection(conn)
+		if err != nil {
+			log.Warnf("Failed to process connection: %s", err)
 			continue
 		}
 
-		remote := net.NumericEndpoint{
-			IPAndPort: getIPAndPort(conn.GetRemoteAddress()),
-			L4Proto:   net.L4ProtoFromProtobuf(conn.GetProtocol()),
-		}
-		local := getIPAndPort(conn.GetLocalAddress())
-
-		// Special handling for UDP ports - role reported by collector may be unreliable, so look at which port is more
-		// likely to be ephemeral.
-		if remote.L4Proto == net.UDP {
-			incoming = netutil.IsEphemeralPort(remote.IPAndPort.Port) > netutil.IsEphemeralPort(local.Port)
+		connType := "outgoing"
+		if c.incoming {
+			connType = "incoming"
 		}
 
-		c := connection{
-			local:       local,
-			remote:      remote,
-			containerID: conn.GetContainerId(),
-			incoming:    incoming,
-		}
+		flowMetrics.NetworkFlowsPerNodeByType.With(prometheus.Labels{"Hostname": hostname, "Type": connType, "Protocol": conn.Protocol.String()}).Inc()
 
 		// timestamp will be set to close timestamp for closed connections, and zero for newly added connection.
 		ts := timestamp.FromProtobuf(conn.CloseTimestamp)
 		if ts == 0 {
 			ts = timestamp.InfiniteFuture
 		}
-		updatedConnections[c] = ts
+		updatedConnections[*c] = ts
 	}
 
 	return updatedConnections

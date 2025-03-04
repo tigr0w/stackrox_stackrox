@@ -12,9 +12,10 @@ import {
 import { IntegrationSource, IntegrationType } from 'Containers/Integrations/utils/integrationUtils';
 import { generateAPIToken } from 'services/APITokensService';
 import { generateClusterInitBundle } from 'services/ClustersService';
-import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
+import { getAxiosErrorMessage, isTimeoutError } from 'utils/responseErrorUtils';
 
 import { FormResponseMessage } from 'Components/PatternFly/FormMessage';
+import { createMachineAccessConfig } from 'services/MachineAccessService';
 import useFetchIntegrations from './useFetchIntegrations';
 import usePageState from './usePageState';
 
@@ -52,6 +53,9 @@ function useIntegrationActions(): UseIntegrationActionsResult {
                 responseData = await generateAPIToken(data);
             } else if (type === 'clusterInitBundle') {
                 responseData = await generateClusterInitBundle(data);
+            } else if (type === 'machineAccess') {
+                responseData = await createMachineAccessConfig(data);
+                history.goBack();
             } else {
                 responseData = await createIntegration(source, data);
                 // we only want to redirect when creating a new (non-apitoken and non-clusterinitbundle) integration
@@ -74,6 +78,9 @@ function useIntegrationActions(): UseIntegrationActionsResult {
             }
             return { message: `The test was successful`, isError: false };
         } catch (error) {
+            if (source === 'cloudSources' && isTimeoutError(error)) {
+                return { message: 'Could not reach the cloud source endpoint.', isError: true };
+            }
             return { message: getAxiosErrorMessage(error), isError: true };
         }
     }

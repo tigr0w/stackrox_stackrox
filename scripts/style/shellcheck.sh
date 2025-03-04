@@ -12,6 +12,10 @@ fi
 
 known_failures_file="scripts/style/shellcheck_skip.txt"
 
+retrieve_shell_scripts() {
+    git ls-files | grep -E '.(sh|bats)$'
+}
+
 run_shellcheck() {
     info "Running shellcheck on all .sh files (excluding ${known_failures_file})"
 
@@ -22,13 +26,13 @@ run_shellcheck() {
 
     rm -f "${output}/*" "${flag_failure}"
 
-    for shell in $(git ls-files | grep -E '.sh$' | grep -v -x -f "${known_failures_file}"); do
-        if ! shellcheck -P SCRIPTDIR -x "$shell"; then
+    for shell in $(retrieve_shell_scripts | grep -v -x -f "${known_failures_file}"); do
+        if ! shellcheck --norc -P SCRIPTDIR -x "$shell"; then
             if [[ "${CI:-}" == "true" ]]; then
                 mkdir -p "${output}"
                 local xmlout="${shell//.sh/.xml}"
                 xmlout="${xmlout//\//_}"
-                shellcheck -f checkstyle -x "$shell" | xmlstarlet tr scripts/style/checkstyle2junit.xslt > \
+                shellcheck -f checkstyle --norc -P SCRIPTDIR -x "$shell" | xmlstarlet tr scripts/style/checkstyle2junit.xslt > \
                     "${output}/${xmlout}" || true
             fi
             touch "${flag_failure}"
@@ -52,8 +56,8 @@ update_failing_list() {
 
     pushd "$ROOT" > /dev/null
 
-    for shell in $(git ls-files | grep -E '.sh$'); do
-        if ! shellcheck -x "$shell" > /dev/null; then
+    for shell in $(retrieve_shell_scripts); do
+        if ! shellcheck --norc -P SCRIPTDIR -x "$shell" > /dev/null; then
             echo "$shell" >> "$known_failures_file"
         fi
     done

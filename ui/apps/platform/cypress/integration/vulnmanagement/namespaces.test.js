@@ -1,29 +1,21 @@
 import withAuth from '../../helpers/basicAuth';
-import { hasFeatureFlag, hasOrchestratorFlavor } from '../../helpers/features';
 import {
     assertSortedItems,
     callbackForPairOfAscendingNumberValuesFromElements,
     callbackForPairOfDescendingNumberValuesFromElements,
 } from '../../helpers/sort';
 import {
-    getCountAndNounFromImageCVEsLinkResults,
     hasTableColumnHeadings,
     interactAndWaitForVulnerabilityManagementEntities,
     verifyConditionalCVEs,
     verifySecondaryEntities,
     visitVulnerabilityManagementEntities,
-} from '../../helpers/vulnmanagement/entities';
+} from './VulnerabilityManagement.helpers';
 
 const entitiesKey = 'namespaces';
 
 describe('Vulnerability Management Namespaces', () => {
     withAuth();
-
-    before(function beforeHook() {
-        if (!hasFeatureFlag('ROX_POSTGRES_DATASTORE')) {
-            this.skip();
-        }
-    });
 
     it('should display table columns', () => {
         visitVulnerabilityManagementEntities(entitiesKey);
@@ -80,25 +72,15 @@ describe('Vulnerability Management Namespaces', () => {
     // Argument 3 in verify functions is index of column which has the links.
     // The one-based index includes checkbox, hidden, invisible.
 
-    it('should display either links for image CVEs or text for No CVEs', function () {
-        if (hasOrchestratorFlavor('openshift')) {
-            this.skip(); // TODO verify and remove
-        }
-
-        verifyConditionalCVEs(
-            entitiesKey,
-            'image-cves',
-            3,
-            'imageVulnerabilityCounter',
-            getCountAndNounFromImageCVEsLinkResults
-        );
+    it('should display either links for image CVEs or text for No CVEs', () => {
+        verifyConditionalCVEs(entitiesKey, 'image-cves', 3, 'imageVulnerabilityCounter');
     });
 
     it('should display links for deployments', () => {
-        verifySecondaryEntities(entitiesKey, 'deployments', 5, /^\d+ deployments?$/);
+        verifySecondaryEntities(entitiesKey, 'deployments', 5);
     });
 
     it('should display links for images', () => {
-        verifySecondaryEntities(entitiesKey, 'images', 6, /^\d+ images?$/);
+        verifySecondaryEntities(entitiesKey, 'images', 6);
     });
 });

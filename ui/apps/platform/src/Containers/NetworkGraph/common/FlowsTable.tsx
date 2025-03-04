@@ -1,9 +1,10 @@
+/* eslint-disable react/no-array-index-key */
 import React, { ReactElement } from 'react';
 import {
     ActionsColumn,
     ExpandableRowContent,
     IAction,
-    TableComposable,
+    Table,
     Tbody,
     Td,
     Th,
@@ -14,6 +15,7 @@ import {
     Button,
     Flex,
     FlexItem,
+    Icon,
     Text,
     TextContent,
     TextVariants,
@@ -26,6 +28,7 @@ import {
     PlusIcon,
 } from '@patternfly/react-icons';
 
+import { ensureExhaustive } from 'utils/type.utils';
 import { BaselineSimulationDiffState, Flow, FlowEntityType } from '../types/flow.type';
 import { protocolLabel } from '../utils/flowUtils';
 
@@ -53,14 +56,28 @@ const columnNames = {
     portAndProtocol: 'Port / protocol',
 };
 
+function getFlowSubtext(flow: Flow): string {
+    switch (flow.type) {
+        case 'DEPLOYMENT':
+            return `in "${flow.namespace}"`;
+        case 'CIDR_BLOCK':
+        case 'EXTERNAL_ENTITIES':
+            return 'External to cluster';
+        case 'INTERNAL_ENTITIES':
+            return 'Internal to cluster';
+        default:
+            return ensureExhaustive(flow.type);
+    }
+}
+
 function getBaselineSimulatedRowStyle(
     baselineSimulationDiffState: BaselineSimulationDiffState | undefined
 ): React.CSSProperties {
     let customStyle: React.CSSProperties;
     if (baselineSimulationDiffState === 'ADDED') {
-        customStyle = { backgroundColor: 'var(--pf-global--palette--green-50)' };
+        customStyle = { backgroundColor: 'var(--pf-v5-global--palette--green-50)' };
     } else if (baselineSimulationDiffState === 'REMOVED') {
-        customStyle = { backgroundColor: 'var(--pf-global--palette--red-50)' };
+        customStyle = { backgroundColor: 'var(--pf-v5-global--palette--red-50)' };
     } else {
         customStyle = {};
     }
@@ -104,13 +121,13 @@ function AnomalousIcon({ type }: { type: FlowEntityType }) {
     if (type === 'CIDR_BLOCK' || type === 'EXTERNAL_ENTITIES') {
         return (
             <Tooltip content={<div>Anomalous external flow</div>}>
-                <ExclamationCircleIcon className="pf-u-danger-color-100" />
+                <ExclamationCircleIcon className="pf-v5-u-danger-color-100" />
             </Tooltip>
         );
     }
     return (
         <Tooltip content={<div>Anomalous internal flow</div>}>
-            <ExclamationTriangleIcon className="pf-u-warning-color-100" />
+            <ExclamationTriangleIcon className="pf-v5-u-warning-color-100" />
         </Tooltip>
     );
 }
@@ -165,10 +182,12 @@ function FlowsTable({
     };
 
     return (
-        <TableComposable aria-label={label} variant="compact">
+        <Table aria-label={label} variant="compact">
             <Thead>
                 <Tr>
-                    <Td />
+                    <Th>
+                        <span className="pf-v5-screen-reader">Row expansion</span>
+                    </Th>
                     {isEditable && (
                         <Th
                             select={{
@@ -181,7 +200,11 @@ function FlowsTable({
                     <Th>{columnNames.entity}</Th>
                     <Th modifier="nowrap">{columnNames.direction}</Th>
                     <Th modifier="nowrap">{columnNames.portAndProtocol}</Th>
-                    <Td />
+                    {isEditable && (
+                        <Th>
+                            <span className="pf-v5-screen-reader">Row actions</span>
+                        </Th>
+                    )}
                 </Tr>
             </Thead>
             {flows.map((row, rowIndex) => {
@@ -211,7 +234,11 @@ function FlowsTable({
                 );
 
                 return (
-                    <Tbody key={row.id} isExpanded={isExpanded} style={baselineSimulatedRowStyle}>
+                    <Tbody
+                        key={`${row.id}-${rowIndex}`}
+                        isExpanded={isExpanded}
+                        style={baselineSimulatedRowStyle}
+                    >
                         <Tr>
                             <Td
                                 expand={
@@ -234,7 +261,7 @@ function FlowsTable({
                                                   onSelect: (_event, isSelecting) =>
                                                       setRowSelected(row, isSelecting),
                                                   isSelected: isRowSelected(row),
-                                                  disable: !!row.children.length,
+                                                  isDisabled: !!row.children.length,
                                               }
                                             : undefined
                                     }
@@ -244,18 +271,16 @@ function FlowsTable({
                                 <Td dataLabel={columnNames.direction}>
                                     {row.baselineSimulationDiffState === 'ADDED' && (
                                         <Tooltip content={<div>Baseline added</div>}>
-                                            <PlusIcon
-                                                size="sm"
-                                                className="pf-u-success-color-200"
-                                            />
+                                            <Icon size="sm">
+                                                <PlusIcon className="pf-v5-u-success-color-200" />
+                                            </Icon>
                                         </Tooltip>
                                     )}
                                     {row.baselineSimulationDiffState === 'REMOVED' && (
                                         <Tooltip content={<div>Baseline removed</div>}>
-                                            <MinusIcon
-                                                size="sm"
-                                                className="pf-u-danger-color-200"
-                                            />
+                                            <Icon size="sm">
+                                                <MinusIcon className="pf-v5-u-danger-color-200" />
+                                            </Icon>
                                         </Tooltip>
                                     )}
                                 </Td>
@@ -275,9 +300,7 @@ function FlowsTable({
                                         <div>
                                             <TextContent>
                                                 <Text component={TextVariants.small}>
-                                                    {row.type === 'DEPLOYMENT'
-                                                        ? `in "${row.namespace}"`
-                                                        : 'External to cluster'}
+                                                    {getFlowSubtext(row)}
                                                 </Text>
                                             </TextContent>
                                         </div>
@@ -303,7 +326,7 @@ function FlowsTable({
                         </Tr>
                         {isExpanded &&
                             row.children &&
-                            row.children.map((child) => {
+                            row.children.map((child, index) => {
                                 const childActions: IAction[] = [
                                     child.isAnomalous
                                         ? {
@@ -323,7 +346,7 @@ function FlowsTable({
                                 ];
 
                                 return (
-                                    <Tr key={child.id} isExpanded={isExpanded}>
+                                    <Tr key={`${child.id}-${index}`} isExpanded={isExpanded}>
                                         <Td />
                                         {isEditable && (
                                             <Td
@@ -390,7 +413,7 @@ function FlowsTable({
                     direction="Ingress"
                 />
             )}
-        </TableComposable>
+        </Table>
     );
 }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { withRouter } from 'react-router-dom';
+import { useLocation, useRouteMatch } from 'react-router-dom';
 import { gql } from '@apollo/client';
 import { format } from 'date-fns';
 import pluralize from 'pluralize';
@@ -16,6 +16,7 @@ import { entityListPropTypes, entityListDefaultprops } from 'constants/entityPag
 import { nodeSortFields } from 'constants/sortFields';
 import queryService from 'utils/queryService';
 import URLService from 'utils/URLService';
+import { getConfigMgmtPathForEntitiesAndId } from '../entities';
 import List from './List';
 import NoEntitiesIconText from './utilities/NoEntitiesIconText';
 
@@ -58,6 +59,14 @@ const buildTableColumns = (match, location, entityContext) => {
             Header: `Node`,
             headerClassName: `w-1/8 ${defaultHeaderClassName}`,
             className: `w-1/8 ${defaultColumnClassName}`,
+            Cell: ({ original, pdf }) => {
+                const url = getConfigMgmtPathForEntitiesAndId('NODE', original.id);
+                return (
+                    <TableCellLink pdf={pdf} url={url}>
+                        {original.name}
+                    </TableCellLink>
+                );
+            },
             accessor: 'name',
             id: nodeSortFields.NODE,
             sortField: nodeSortFields.NODE,
@@ -150,8 +159,6 @@ const buildTableColumns = (match, location, entityContext) => {
 const createTableRows = (data) => data.results;
 
 const Nodes = ({
-    match,
-    location,
     className,
     selectedRowId,
     onRowClick,
@@ -160,6 +167,8 @@ const Nodes = ({
     totalResults,
     entityContext,
 }) => {
+    const match = useRouteMatch();
+    const location = useLocation();
     const autoFocusSearchInput = !selectedRowId;
     const tableColumns = buildTableColumns(match, location, entityContext);
     const queryText = queryService.objectToWhereClause(query);
@@ -185,4 +194,4 @@ const Nodes = ({
 Nodes.propTypes = entityListPropTypes;
 Nodes.defaultProps = entityListDefaultprops;
 
-export default withRouter(Nodes);
+export default Nodes;

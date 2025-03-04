@@ -2,6 +2,7 @@ import queryString from 'qs';
 import { saveFile } from 'services/DownloadService';
 import { cveSortFields } from 'constants/sortFields';
 import queryService from 'utils/queryService';
+import { getPaginationParams } from 'utils/searchUtils';
 import entityTypes from 'constants/entityTypes';
 import axios from './instance';
 
@@ -35,11 +36,12 @@ function getBaseCveUrl(cveType) {
 /**
  * Send request to suppress CVEs with a given IDs.
  *
- * @param {!string} CVE unique identifier
- * @param {!string} CVE suppress duration, if 0 then CVEs are suppressed indefinitely
+ * @param {string} cveType The type of CVEs to suppress
+ * @param {string[]} cveNames CVE names to suppress
+ * @param {string} duration CVE suppress duration, in hours, if "0" then CVEs are suppressed indefinitely
  * @returns {Promise<AxiosResponse, Error>} fulfilled in case of success or rejected with an error
  */
-export function suppressVulns(cveType, cveNames, duration = 0) {
+export function suppressVulns(cveType, cveNames, duration = '0') {
     const baseUrl = getBaseCveUrl(cveType);
     return axios.patch(`${baseUrl}/suppress`, { cves: cveNames, duration });
 }
@@ -47,7 +49,8 @@ export function suppressVulns(cveType, cveNames, duration = 0) {
 /**
  * Send request to unsuppress CVEs with a given IDs.
  *
- * @param {!string} CVE unique identifier
+ * @param {string} cveType The type of CVEs to suppress
+ * @param {string[]} cveNames CVE names to suppress
  * @returns {Promise<AxiosResponse, Error>} fulfilled in case of success or rejected with an error
  */
 export function unsuppressVulns(cveType, cveNames) {
@@ -64,15 +67,14 @@ export function getCvesInCsvFormat(
     pageSize = 0
 ) {
     const csvUrl = getCSVExportUrl(cveType);
-    const offset = page * pageSize;
     const params = queryString.stringify(
         {
             query,
-            pagination: {
-                offset,
-                limit: pageSize,
+            pagination: getPaginationParams({
+                page: page + 1, // one-based page for compatibility with PatternFly Pagination element
+                perPage: pageSize,
                 sortOption,
-            },
+            }),
         },
         { arrayFormat: 'repeat', allowDots: true }
     );

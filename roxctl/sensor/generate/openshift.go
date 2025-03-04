@@ -13,7 +13,6 @@ import (
 const (
 	errorAdmCntrlNotSupportedOnOpenShift3x  = "The --admission-controller-listen-on-events flag is not supported for OpenShift 3.11. Set --openshift-version=4 to indicate that you are deploying on OpenShift 4.x in order to use this flag."
 	errorAuditLogsNotSupportedOnOpenShift3x = "The --disable-audit-logs flag is not supported for OpenShift 3.11. Set --openshift-version=4 to indicate that you are deploying on OpenShift 4.x in order to use this flag."
-	noteOpenShift3xCompatibilityMode        = "Deployment files are generated in OpenShift 3.x compatibility mode. Set the --openshift-version flag to 3 to suppress this note, or to 4 to take advantage of OpenShift 4.x features."
 )
 
 type sensorGenerateOpenShiftCommand struct {
@@ -25,13 +24,12 @@ type sensorGenerateOpenShiftCommand struct {
 }
 
 func (s *sensorGenerateOpenShiftCommand) ConstructOpenShift() error {
-	s.cluster.Type = storage.ClusterType_OPENSHIFT_CLUSTER
+	s.cluster.Type = storage.ClusterType_OPENSHIFT4_CLUSTER
 	switch s.openshiftVersion {
 	case 0:
-		s.env.Logger().InfofLn(noteOpenShift3xCompatibilityMode)
 	case 3:
+		s.cluster.Type = storage.ClusterType_OPENSHIFT_CLUSTER
 	case 4:
-		s.cluster.Type = storage.ClusterType_OPENSHIFT4_CLUSTER
 	default:
 		return errox.InvalidArgs.Newf("invalid OpenShift version %d, supported values are '3' and '4'", s.openshiftVersion)
 	}
@@ -76,8 +74,8 @@ func openshift(generateCmd *sensorGenerateCommand) *cobra.Command {
 		}),
 	}
 	c.PersistentFlags().IntVar(&openshiftCommand.openshiftVersion, "openshift-version", 0, "OpenShift major version to generate deployment files for")
-	flags.OptBoolFlagVarPF(c.PersistentFlags(), &openshiftCommand.admissionControllerEvents, "admission-controller-listen-on-events", "", "enable admission controller webhook to listen on Kubernetes events", "auto")
-	flags.OptBoolFlagVarPF(c.PersistentFlags(), &openshiftCommand.disableAuditLogCollection, "disable-audit-logs", "", "disable audit log collection for runtime detection", "auto")
+	flags.OptBoolFlagVarPF(c.PersistentFlags(), &openshiftCommand.admissionControllerEvents, "admission-controller-listen-on-events", "", "Enable admission controller webhook to listen on Kubernetes events", "auto")
+	flags.OptBoolFlagVarPF(c.PersistentFlags(), &openshiftCommand.disableAuditLogCollection, "disable-audit-logs", "", "Disable audit log collection for runtime detection", "auto")
 
 	return c
 }

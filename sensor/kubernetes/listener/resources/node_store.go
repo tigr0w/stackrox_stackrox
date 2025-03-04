@@ -56,13 +56,20 @@ func newNodeStore() *nodeStoreImpl {
 	}
 }
 
+// Cleanup deletes all entries from store
+func (s *nodeStoreImpl) Cleanup() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.nodes = make(map[string]*nodeWrap)
+}
+
 // addOrUpdateNode upserts node into store.
 // It returns true if the IP addresses of the node changed as a result.
 func (s *nodeStoreImpl) addOrUpdateNode(node *nodeWrap) bool {
-	var oldNode *nodeWrap
-	concurrency.WithLock(&s.mutex, func() {
-		oldNode = s.nodes[node.Name]
+	oldNode := concurrency.WithLock1(&s.mutex, func() *nodeWrap {
+		oldNode := s.nodes[node.Name]
 		s.nodes[node.Name] = node
+		return oldNode
 	})
 
 	if oldNode == nil || len(oldNode.addresses) != len(node.addresses) {

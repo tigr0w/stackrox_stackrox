@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocation, useRouteMatch } from 'react-router-dom';
 import pluralize from 'pluralize';
 import { format } from 'date-fns';
 
@@ -15,6 +16,7 @@ import { imageSortFields } from 'constants/sortFields';
 import { IMAGES_QUERY } from 'queries/image';
 import queryService from 'utils/queryService';
 import URLService from 'utils/URLService';
+import { getConfigMgmtPathForEntitiesAndId } from '../entities';
 import List from './List';
 
 export const defaultImageSort = [
@@ -36,6 +38,14 @@ const buildTableColumns = (match, location, entityContext) => {
             Header: `Image`,
             headerClassName: `w-1/8 ${defaultHeaderClassName}`,
             className: `w-1/8 ${defaultColumnClassName}`,
+            Cell: ({ original, pdf }) => {
+                const url = getConfigMgmtPathForEntitiesAndId('IMAGE', original.id);
+                return (
+                    <TableCellLink pdf={pdf} url={url}>
+                        {original.name.fullName}
+                    </TableCellLink>
+                );
+            },
             accessor: 'name.fullName',
             id: imageSortFields.NAME,
             sortField: imageSortFields.NAME,
@@ -60,8 +70,7 @@ const buildTableColumns = (match, location, entityContext) => {
                   Header: `Deployments`,
                   headerClassName: `w-1/8 ${nonSortableHeaderClassName}`,
                   className: `w-1/8 ${defaultColumnClassName}`,
-                  // eslint-disable-next-line
-        Cell: ({ original, pdf }) => {
+                  Cell: ({ original, pdf }) => {
                       const { deployments, id } = original;
                       const num = deployments.length;
                       const text = `${num} ${pluralize('deployment', num)}`;
@@ -93,12 +102,12 @@ const Images = ({
     selectedRowId,
     onRowClick,
     query,
-    match,
-    location,
     data,
     totalResults,
     entityContext,
 }) => {
+    const location = useLocation();
+    const match = useRouteMatch();
     const autoFocusSearchInput = !selectedRowId;
     const queryText = queryService.objectToWhereClause(query);
     const variables = queryText ? { query: queryText } : null;

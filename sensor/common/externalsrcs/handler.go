@@ -15,6 +15,7 @@ import (
 	pkgNet "github.com/stackrox/rox/pkg/net"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/sensor/common"
+	"github.com/stackrox/rox/sensor/common/message"
 )
 
 var (
@@ -22,6 +23,8 @@ var (
 )
 
 // Store is a store for network graph external sources.
+//
+//go:generate mockgen-wrapper
 type Store interface {
 	ExternalSrcsValueStream() concurrency.ReadOnlyValueStream[*sensor.IPNetworkList]
 	LookupByNetwork(ipNet pkgNet.IPNetwork) *storage.NetworkEntityInfo
@@ -37,13 +40,13 @@ type handlerImpl struct {
 	stopSig   concurrency.Signal
 	updateSig concurrency.Signal
 
-	// `entities` stores the IPNetwork to entity object mappings. We allow only unique CIDRs in a cluster, which could
+	// entities stores the IPNetwork to entity object mappings. We allow only unique CIDRs in a cluster, which could
 	// be overlapping or not.
 	entities map[pkgNet.IPNetwork]*storage.NetworkEntityInfo
 	// entitiesById is used for easy lookups during network flow policy evaluation
 	entitiesByID     map[string]*storage.NetworkEntityInfo
 	lastRequestSeqID int64
-	// `lastSeenList` stores the networks in descending lexical byte order. Since, the host identifier bits are all set
+	// lastSeenList stores the networks in descending lexical byte order. Since, the host identifier bits are all set
 	// to 0, this gives us highest-smallest to lowest-largest subnet ordering. e.g. 127.0.0.0/8, 10.10.0.0/24,
 	// 10.0.0.0/24, 10.0.0.0/8. This list can be used to lookup the smallest subnet containing an IP address.
 	lastSeenList             *sensor.IPNetworkList
@@ -90,7 +93,7 @@ func (h *handlerImpl) ProcessMessage(msg *central.MsgToSensor) error {
 	}
 }
 
-func (h *handlerImpl) ResponsesC() <-chan *central.MsgFromSensor {
+func (h *handlerImpl) ResponsesC() <-chan *message.ExpiringMessage {
 	return nil
 }
 

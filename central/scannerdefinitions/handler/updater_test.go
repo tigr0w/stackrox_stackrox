@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"archive/zip"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 
 const (
 	defURL = "https://definitions.stackrox.io/e799c68a-671f-44db-9682-f24248cd0ffe/diff.zip"
+
+	mappingURL = "https://definitions.stackrox.io/v4/redhat-repository-mappings/mapping.zip"
+
+	v4VulnURL = "https://definitions.stackrox.io/v4/vulnerability-bundles/dev/vulns.json.zst"
 )
 
 var (
@@ -34,7 +39,7 @@ func TestUpdate(t *testing.T) {
 	require.NoError(t, u.doUpdate())
 	assertOnFileExistence(t, filePath, true)
 
-	lastUpdatedTime := time.Now().Add(time.Hour)
+	lastUpdatedTime := time.Now()
 	mustSetModTime(t, filePath, lastUpdatedTime)
 	// Should not fetch since it can't be updated in a time in the future.
 	require.NoError(t, u.doUpdate())
@@ -57,4 +62,50 @@ func mustGetModTime(t *testing.T, path string) time.Time {
 
 func mustSetModTime(t *testing.T, path string, modTime time.Time) {
 	require.NoError(t, os.Chtimes(path, time.Now(), modTime))
+}
+
+func TestMappingUpdate(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "test.zip")
+	u := newUpdater(file.New(filePath), &http.Client{Timeout: 30 * time.Second}, mappingURL, 1*time.Hour)
+
+	// Should fetch first time.
+	require.NoError(t, u.doUpdate())
+	assertOnFileExistence(t, filePath, true)
+
+	n, err := countFilesInZip(filePath)
+	if err != nil {
+		t.Fatalf("Failed to count files in zip: %v", err)
+	}
+	assert.Equal(t, len(v4FileMapping), n)
+}
+
+func TestV4VulnUpdate(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "test.json.zst")
+	u := newUpdater(file.New(filePath), &http.Client{Timeout: 1 * time.Minute}, v4VulnURL, 1*time.Hour)
+
+	// Should fetch first time.
+	require.NoError(t, u.doUpdate())
+	assertOnFileExistence(t, filePath, true)
+}
+
+// countFilesInZip counts the number of files inside a zip archive.
+func countFilesInZip(zipFilePath string) (int, error) {
+	r, err := zip.OpenReader(zipFilePath)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err := r.Close(); err != nil {
+			log.Errorf("Error closing zip reader: %v", err)
+		}
+	}()
+
+	count := 0
+	for _, f := range r.File {
+		if !f.FileInfo().IsDir() {
+			count++
+		}
+	}
+
+	return count, nil
 }

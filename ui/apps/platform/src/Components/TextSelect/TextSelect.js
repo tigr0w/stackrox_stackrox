@@ -22,11 +22,8 @@ const TextSelect = ({ ...rest }) => {
         control: (base) => ({
             ...base,
             border: 'none',
-            'letter-spacing': '.03125rem',
-            'text-transform': 'uppercase',
             'font-weight': '700!important',
             color: 'var(--base-600)',
-            'font-size': '.6875rem',
             cursor: 'pointer !important',
         }),
         indicatorSeparator: (base) => ({ ...base, display: 'none' }),
@@ -34,7 +31,15 @@ const TextSelect = ({ ...rest }) => {
     const components = {
         DropdownIndicator,
     };
-    return <Select styles={selectStyles} isSearchable={false} {...rest} components={components} />;
+    // Because React Select renders a dummy input element,
+    // axe DevTools reports a theoretical issue: Form elements must have labels.
+    // One of its suggestions is to enclose the form element in a label element.
+    // Thankfully that does not affect the layout.
+    return (
+        <label>
+            <Select styles={selectStyles} isSearchable={false} {...rest} components={components} />
+        </label>
+    );
 };
 
 export default TextSelect;

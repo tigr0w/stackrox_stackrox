@@ -4,12 +4,13 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/storage"
 	pkgNet "github.com/stackrox/rox/pkg/net"
 	"github.com/stackrox/rox/pkg/networkgraph"
 	"github.com/stackrox/rox/pkg/networkgraph/externalsrcs"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/utils"
 )
 
@@ -54,7 +55,7 @@ func GetExtSrcNetworkEntityInfo(id, name, cidr string, isDefault bool) *storage.
 }
 
 // GetNetworkFlow returns a network flow constructed from supplied data.
-func GetNetworkFlow(src, dst *storage.NetworkEntityInfo, port int, protocol storage.L4Protocol, ts *types.Timestamp) *storage.NetworkFlow {
+func GetNetworkFlow(src, dst *storage.NetworkEntityInfo, port int, protocol storage.L4Protocol, ts *time.Time) *storage.NetworkFlow {
 	return &storage.NetworkFlow{
 		Props: &storage.NetworkFlowProperties{
 			SrcEntity:  src,
@@ -62,7 +63,7 @@ func GetNetworkFlow(src, dst *storage.NetworkEntityInfo, port int, protocol stor
 			DstPort:    uint32(port),
 			L4Protocol: protocol,
 		},
-		LastSeenTimestamp: ts,
+		LastSeenTimestamp: protocompat.ConvertTimeToTimestampOrNil(ts),
 	}
 }
 
@@ -101,7 +102,7 @@ func GenRandomExtSrcNetworkEntity(family pkgNet.Family, numNetworks int, cluster
 func genRandomNetworks(family pkgNet.Family, numNetworks int) (map[string]struct{}, error) {
 	nets := make(map[string]struct{})
 
-	var bits int
+	var bits int32
 	if family == pkgNet.IPv4 {
 		bits = 32
 	} else if family == pkgNet.IPv6 {
@@ -114,7 +115,7 @@ func genRandomNetworks(family pkgNet.Family, numNetworks int) (map[string]struct
 			return nil, err
 		}
 
-		n, err := networkgraph.ValidateCIDR(net.IP(ip).String() + "/" + strconv.Itoa(int(1+rand.Int31n(int32(bits)))))
+		n, err := networkgraph.ValidateCIDR(net.IP(ip).String() + "/" + strconv.Itoa(int(1+rand.Int31n(bits))))
 		if err != nil {
 			continue
 		}

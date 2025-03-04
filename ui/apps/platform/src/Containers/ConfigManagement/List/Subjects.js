@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocation, useRouteMatch } from 'react-router-dom';
 import pluralize from 'pluralize';
 
 import {
@@ -13,6 +14,7 @@ import { subjectSortFields } from 'constants/sortFields';
 import { SUBJECTS_QUERY } from 'queries/subject';
 import queryService from 'utils/queryService';
 import URLService from 'utils/URLService';
+import { getConfigMgmtPathForEntitiesAndId } from '../entities';
 import List from './List';
 
 export const defaultSubjectSort = [
@@ -34,6 +36,14 @@ const buildTableColumns = (match, location) => {
             Header: 'Users & Groups',
             headerClassName: `w-1/10 ${defaultHeaderClassName}`,
             className: `w-1/10 ${defaultColumnClassName}`,
+            Cell: ({ original, pdf }) => {
+                const url = getConfigMgmtPathForEntitiesAndId('SUBJECT', original.id);
+                return (
+                    <TableCellLink pdf={pdf} url={url}>
+                        {original.name}
+                    </TableCellLink>
+                );
+            },
             accessor: 'name',
             id: subjectSortFields.SUBJECT,
             sortField: subjectSortFields.SUBJECT,
@@ -94,16 +104,9 @@ const buildTableColumns = (match, location) => {
 
 const createTableRows = (data) => data?.results || [];
 
-const Subjects = ({
-    match,
-    location,
-    selectedRowId,
-    onRowClick,
-    query,
-    className,
-    data,
-    totalResults,
-}) => {
+const Subjects = ({ selectedRowId, onRowClick, query, className, data, totalResults }) => {
+    const location = useLocation();
+    const match = useRouteMatch();
     const autoFocusSearchInput = !selectedRowId;
     const tableColumns = buildTableColumns(match, location);
     const queryText = queryService.objectToWhereClause(query);

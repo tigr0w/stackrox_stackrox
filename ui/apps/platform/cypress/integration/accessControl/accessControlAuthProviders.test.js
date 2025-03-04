@@ -3,6 +3,9 @@ import { generateNameWithDate, getInputByLabel } from '../../helpers/formHelpers
 import updateMinimumAccessRoleRequest from '../../fixtures/auth/updateMinimumAccessRole.json';
 
 import withAuth from '../../helpers/basicAuth';
+import { assertCannotFindThePage } from '../../helpers/visit';
+import { checkInviteUsersModal } from '../../helpers/inviteUsers';
+import { closeModalByButton } from '../../helpers/modal';
 
 import {
     assertAccessControlEntitiesPage,
@@ -17,8 +20,10 @@ import {
     clickRowActionMenuItemInTable,
     groupsAlias,
     groupsBatchAliasForPOST,
+    rolesAlias,
     saveCreatedAuthProvider,
     saveUpdatedAuthProvider,
+    inviteNewGroupsBatch,
     visitAccessControlEntities,
     visitAccessControlEntitiesWithStaticResponseForPermissions,
     visitAccessControlEntity,
@@ -28,7 +33,7 @@ import { selectors, accessModalSelectors } from './accessControl.selectors';
 describe('Access Control Auth providers', () => {
     withAuth();
 
-    it('displays alert if no permission', () => {
+    it('cannot find the page if no permission', () => {
         const staticResponseForPermissions = {
             fixture: 'auth/mypermissionsMinimalAccess.json',
         };
@@ -37,10 +42,7 @@ describe('Access Control Auth providers', () => {
             staticResponseForPermissions
         );
 
-        cy.get(selectors.alertTitle).should(
-            'contain', // instead of have.text because of "Info alert:" for screen reader
-            'You do not have permission to view auth providers.'
-        );
+        assertCannotFindThePage();
     });
 
     it('list has table head cells', () => {
@@ -56,7 +58,7 @@ describe('Access Control Auth providers', () => {
         cy.get('th:contains("Type")');
         cy.get('th:contains("Minimum access role")');
         cy.get('th:contains("Assigned rules")');
-        cy.get('th[aria-label="Row actions"]');
+        cy.get(`th:has('span.pf-v5-screen-reader:contains("Row actions")')`);
     });
 
     it('add Auth0', () => {
@@ -69,8 +71,8 @@ describe('Access Control Auth providers', () => {
 
         assertAccessControlEntityPage(entitiesKey);
 
-        cy.get('h2').should('have.text', `Create ${type} provider`);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
+        cy.get('h1').should('have.text', `Create ${type} provider`);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
 
         cy.get(selectors.form.inputName).should('be.enabled').should('have.attr', 'required');
         cy.get(selectors.form.authProvider.selectAuthProviderType)
@@ -100,8 +102,8 @@ describe('Access Control Auth providers', () => {
 
         assertAccessControlEntityPage(entitiesKey);
 
-        cy.get('h2').should('have.text', `Create ${type} provider`);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
+        cy.get('h1').should('have.text', `Create ${type} provider`);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
 
         cy.get(selectors.form.inputName).should('be.enabled').should('have.attr', 'required');
         cy.get(selectors.form.authProvider.selectAuthProviderType)
@@ -137,6 +139,7 @@ describe('Access Control Auth providers', () => {
         cy.get(`${selectCallbackModeItem}:contains("HTTP POST")`).click();
         cy.get(checkboxDoNotUseClientSecret).check();
         cy.get(inputClientSecret).should('be.disabled').should('not.have.attr', 'required');
+        cy.get('button:contains("Add claim mapping")').click();
 
         cy.get(selectors.form.saveButton).should('be.disabled');
         cy.get(selectors.form.cancelButton).click();
@@ -173,7 +176,8 @@ describe('Access Control Auth providers', () => {
             .should('not.have.attr', 'placeholder', '*****');
         cy.get(checkboxDoNotUseClientSecret).should('be.enabled').should('not.be.checked');
 
-        cy.get(inputIssuer).clear().type('irrelevant-updated');
+        cy.get(inputIssuer).clear();
+        cy.get(inputIssuer).type('irrelevant-updated');
 
         // Mock responses to save updated auth provider.
         const staticResponseMapForUpdatedAuthProvider = {
@@ -247,8 +251,8 @@ describe('Access Control Auth providers', () => {
 
         assertAccessControlEntityPage(entitiesKey);
 
-        cy.get('h2').should('have.text', `Create ${type} provider`);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
+        cy.get('h1').should('have.text', `Create ${type} provider`);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
 
         cy.get(selectors.form.inputName).should('be.enabled').should('have.attr', 'required');
         cy.get(selectors.form.authProvider.selectAuthProviderType)
@@ -298,8 +302,8 @@ describe('Access Control Auth providers', () => {
 
         assertAccessControlEntityPage(entitiesKey);
 
-        cy.get('h2').should('have.text', `Create ${type} provider`);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
+        cy.get('h1').should('have.text', `Create ${type} provider`);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
 
         getInputByLabel('Name').should('be.enabled').should('have.attr', 'required');
         cy.get(selectors.form.authProvider.selectAuthProviderType)
@@ -342,8 +346,8 @@ describe('Access Control Auth providers', () => {
 
         assertAccessControlEntityPage(entitiesKey);
 
-        cy.get('h2').should('have.text', `Create ${type} provider`);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
+        cy.get('h1').should('have.text', `Create ${type} provider`);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("Create ${type} provider")`);
 
         cy.get(selectors.form.inputName).should('be.enabled').should('have.attr', 'required');
         cy.get(selectors.form.authProvider.selectAuthProviderType)
@@ -402,7 +406,7 @@ describe('Access Control Auth providers', () => {
             };
             clickConfirmationToDeleteAuthProvider(entityId, staticResponseMapToDeleteAuthProvider);
 
-            cy.get('.pf-c-empty-state__content:contains("No auth providers")');
+            cy.get('.pf-v5-c-empty-state__content:contains("No auth providers")');
         });
     });
 
@@ -411,5 +415,66 @@ describe('Access Control Auth providers', () => {
         visitAccessControlEntity(entitiesKey, entityId);
 
         assertAccessControlEntityDoesNotExist(entitiesKey);
+    });
+});
+
+describe('Invite users', () => {
+    withAuth();
+
+    it('should have a trigger for opening the Invite users modal in the Auth Providers table header', () => {
+        const staticResponseMap = {
+            [authProvidersAlias]: {
+                fixture: 'auth/authProviders-id1-id3.json',
+            },
+            [rolesAlias]: {
+                fixture: 'auth/roles.json',
+            },
+        };
+        visitAccessControlEntities(entitiesKey, staticResponseMap);
+
+        cy.get('button:contains("Invite users")').click();
+
+        checkInviteUsersModal();
+
+        const staticResponseForInviteAction = {
+            [groupsBatchAliasForPOST]: {
+                statusCode: 200,
+                body: {},
+            },
+        };
+        inviteNewGroupsBatch(staticResponseForInviteAction);
+
+        cy.get(
+            '.pf-v5-c-modal-box__body p:contains("New rules have been created, but invitation emails could not be sent. Use the text below to manually send emails to your invitees.")'
+        );
+        cy.get('.pf-v5-c-modal-box__body p:contains("Role: Network Graph Viewer")');
+        cy.get('.pf-v5-c-modal-box__body [aria-label="Copyable input"]').should(
+            'have.value',
+            'scooby.doo@redhat.com'
+        );
+        cy.get(
+            '.pf-v5-c-modal-box__body .pf-v5-c-clipboard-copy__expandable-content:contains("You have been invited to use Red Hat Advanced Cluster Security. Please use the link to sign in: ")'
+        );
+
+        closeModalByButton('Done');
+    });
+
+    it('should warn if there are no auth providers available', () => {
+        const staticResponseMap = {
+            [authProvidersAlias]: {
+                fixture: 'auth/authProviders-empty.json',
+            },
+            [rolesAlias]: {
+                fixture: 'auth/roles.json',
+            },
+        };
+        visitAccessControlEntities(entitiesKey, staticResponseMap);
+
+        cy.get('button:contains("Invite users")').click();
+
+        cy.get('.pf-v5-c-alert__title:contains("No auth providers are available")');
+        cy.get('.pf-v5-c-modal-box__body .pf-m-warning a:contains("Access Control")').click();
+
+        assertAccessControlEntitiesPage(entitiesKey);
     });
 });

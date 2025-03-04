@@ -10,7 +10,7 @@ setup_file() {
 
   command -v curl || skip "Command 'curl' required."
   [[ -n "${API_ENDPOINT}" ]] || fail "Environment variable 'API_ENDPOINT' required"
-  [[ -n "${ROX_PASSWORD}" ]] || fail "Environment variable 'ROX_PASSWORD' required"
+  [[ -n "${ROX_ADMIN_PASSWORD}" ]] || fail "Environment variable 'ROX_ADMIN_PASSWORD' required"
 }
 
 setup() {
@@ -36,7 +36,7 @@ teardown() {
 }
 
 @test "[zip] roxctl scanner upload-db" {
-  run curl --silent --fail --output "${temp_dir}/test-scanner-vuln-updates.zip" --location 'https://install.stackrox.io/scanner/scanner-vuln-updates.zip'
+  run curl --retry 30 --retry-max-time 300 --retry-connrefused --show-error --fail --output "${temp_dir}/test-scanner-vuln-updates.zip" --location 'https://install.stackrox.io/scanner/scanner-vuln-updates.zip'
   assert_success
 
   run roxctl_authenticated scanner upload-db --scanner-db-file "${temp_dir}/test-scanner-vuln-updates.zip"

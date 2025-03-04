@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *SignatureIntegrationsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE signature_integrations CASCADE")
 	s.T().Log("signature_integrations", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *SignatureIntegrationsStoreSuite) TestStore() {
 	foundSignatureIntegration, exists, err = store.Get(ctx, signatureIntegration.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(signatureIntegration, foundSignatureIntegration)
+	protoassert.Equal(s.T(), signatureIntegration, foundSignatureIntegration)
 
-	signatureIntegrationCount, err := store.Count(ctx)
+	signatureIntegrationCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, signatureIntegrationCount)
-	signatureIntegrationCount, err = store.Count(withNoAccessCtx)
+	signatureIntegrationCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(signatureIntegrationCount)
 
@@ -75,11 +78,6 @@ func (s *SignatureIntegrationsStoreSuite) TestStore() {
 	s.True(signatureIntegrationExists)
 	s.NoError(store.Upsert(ctx, signatureIntegration))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, signatureIntegration), sac.ErrResourceAccessDenied)
-
-	foundSignatureIntegration, exists, err = store.Get(ctx, signatureIntegration.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(signatureIntegration, foundSignatureIntegration)
 
 	s.NoError(store.Delete(ctx, signatureIntegration.GetId()))
 	foundSignatureIntegration, exists, err = store.Get(ctx, signatureIntegration.GetId())
@@ -99,13 +97,13 @@ func (s *SignatureIntegrationsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, signatureIntegrations))
 
-	signatureIntegrationCount, err = store.Count(ctx)
+	signatureIntegrationCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, signatureIntegrationCount)
 
 	s.NoError(store.DeleteMany(ctx, signatureIntegrationIDs))
 
-	signatureIntegrationCount, err = store.Count(ctx)
+	signatureIntegrationCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, signatureIntegrationCount)
 }

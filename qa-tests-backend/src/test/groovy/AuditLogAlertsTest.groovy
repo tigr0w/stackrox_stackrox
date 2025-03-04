@@ -11,8 +11,9 @@ import objects.Secret
 import services.AlertService
 import services.ClusterService
 import services.PolicyService
-import util.Helpers
 
+import spock.lang.Ignore
+import spock.lang.IgnoreIf
 import spock.lang.Requires
 import spock.lang.Stepwise
 import spock.lang.Tag
@@ -21,8 +22,14 @@ import util.Env
 
 // Audit Log alerts are only supported on OpenShift 4
 @Requires({ Env.mustGetOrchestratorType() == OrchestratorTypes.OPENSHIFT })
+// Some OpenShift cluster flavors do not provide access to the audit log e.g.
+// hosted control planes. ROX-22448
+@IgnoreIf({ Env.getDisableAuditLogAlertsTest() == "true" })
 @Stepwise
+@Tag("PZ")
 class AuditLogAlertsTest extends BaseSpecification {
+    static final private Integer WAIT_FOR_VIOLATION_TIMEOUT = 60
+
     @Unroll
     @Tag("BAT")
     @Tag("RUNTIME")
@@ -43,6 +50,7 @@ class AuditLogAlertsTest extends BaseSpecification {
         def policy = createAuditLogSourcePolicy(resName, verb, resourceType)
         def policyId = PolicyService.createNewPolicy(policy)
         assert policyId
+        sleep(5000) // wait 5s for the policy top propagate to sensor
 
         and:
         "The resource is created, accessed and deleted"
@@ -54,7 +62,8 @@ class AuditLogAlertsTest extends BaseSpecification {
 
         then:
         "Verify that policy was violated"
-        def violations =  getResourceViolationsWithTimeout(resourceType, resName, policy.getName(), 60)
+        def violations =  getResourceViolationsWithTimeout(resourceType, resName,
+                policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
         // There should be exactly one violation because we are testing only verb at a time
         assert violations != null && violations.size() == 1
 
@@ -81,6 +90,7 @@ class AuditLogAlertsTest extends BaseSpecification {
     @Unroll
     @Tag("BAT")
     @Tag("RUNTIME")
+    @Ignore("ROX-18533")
     def "Verify collection continues even after ACS components restarts: #component"() {
         when:
         "Audit log collection is enabled"
@@ -98,12 +108,13 @@ class AuditLogAlertsTest extends BaseSpecification {
         def policy = createAuditLogSourcePolicy(resName, "GET", "CONFIGMAPS")
         def policyId = PolicyService.createNewPolicy(policy)
         assert policyId
+        sleep(5000) // wait 5s for the policy top propagate to sensor
 
         and:
         "A violation is generated and resolved"
         createGetAndDeleteConfigMap(resName, Constants.ORCHESTRATOR_NAMESPACE)
         def violations =  getResourceViolationsWithTimeout("CONFIGMAPS", resName,
-                policy.getName(), 60)
+                policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
         // There should be exactly one violation
         assert violations != null && violations.size() == 1
 
@@ -121,7 +132,7 @@ class AuditLogAlertsTest extends BaseSpecification {
         then:
         "Verify that only the access after restart triggers a violation"
         def allViolations =  getAllResourceViolationsWithTimeout("CONFIGMAPS",
-                policy.getName(), 60)
+                policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
 
         // There should only be one violation - the new one
         assert allViolations != null &&
@@ -165,12 +176,13 @@ class AuditLogAlertsTest extends BaseSpecification {
         def policy = createAuditLogSourcePolicy(resName, "GET", "CONFIGMAPS")
         def policyId = PolicyService.createNewPolicy(policy)
         assert policyId
+        sleep(5000) // wait 5s for the policy top propagate to sensor
 
         and:
         "A violation is generated and resolved"
         createGetAndDeleteConfigMap(resName, Constants.ORCHESTRATOR_NAMESPACE)
         def violations =  getResourceViolationsWithTimeout("CONFIGMAPS", resName,
-                policy.getName(), 60)
+                policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
         // There should be exactly one violation
         assert violations != null && violations.size() == 1
 
@@ -179,9 +191,9 @@ class AuditLogAlertsTest extends BaseSpecification {
         and:
         "Feature is disabled and then re-enabled"
         assert ClusterService.updateAuditLogDynamicConfig(true)
-        Helpers.sleepWithRetryBackoff(5000) // wait 5s for it to propagate to sensor before re-enabling
+        sleep(5000) // wait 5s for it to propagate to sensor before re-enabling
         assert ClusterService.updateAuditLogDynamicConfig(false)
-        Helpers.sleepWithRetryBackoff(5000) // wait 5s for it to propagate again
+        sleep(5000) // wait 5s for it to propagate again
 
         and:
         "Another violation is generated"
@@ -191,7 +203,7 @@ class AuditLogAlertsTest extends BaseSpecification {
         then:
         "Verify that only the access after restart triggers a violation"
         def allViolations =  getAllResourceViolationsWithTimeout("CONFIGMAPS",
-                policy.getName(), 60)
+                policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
 
         // There should only be one violation - the new one
         assert allViolations != null &&
@@ -223,6 +235,7 @@ class AuditLogAlertsTest extends BaseSpecification {
         def policy = createAuditLogSourcePolicy(resName, "GET", "CONFIGMAPS")
         def policyId = PolicyService.createNewPolicy(policy)
         assert policyId
+        sleep(5000) // wait 5s for the policy to propagate to sensor
 
         and:
         "The resource is accessed"
@@ -231,7 +244,7 @@ class AuditLogAlertsTest extends BaseSpecification {
         then:
         "Verify that no violations were generated"
         def violations =  getResourceViolationsWithTimeout("CONFIGMAPS", resName,
-                policy.getName(), 60)
+                policy.getName(), WAIT_FOR_VIOLATION_TIMEOUT)
         assert violations == null || violations.size() == 0
 
         cleanup:

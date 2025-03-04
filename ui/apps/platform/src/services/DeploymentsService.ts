@@ -4,14 +4,15 @@ import searchOptionsToQuery, { RestSearchOption } from 'services/searchOptionsTo
 import { Deployment, ListDeployment } from 'types/deployment.proto';
 import { ContainerNameAndBaselineStatus } from 'types/processBaseline.proto';
 import { Risk } from 'types/risk.proto';
-import { SearchFilter } from 'types/search';
+import { ApiSortOption, SearchFilter } from 'types/search';
 import {
     ORCHESTRATOR_COMPONENTS_KEY,
     orchestratorComponentsOption,
 } from 'utils/orchestratorComponents';
-import { getRequestQueryStringForSearchFilter } from 'utils/searchUtils';
+import { getPaginationParams, getRequestQueryStringForSearchFilter } from 'utils/searchUtils';
 import { CancellableRequest, makeCancellableAxiosRequest } from './cancellationUtils';
 import axios from './instance';
+import { Pagination } from './types';
 
 const deploymentsUrl = '/v1/deployments';
 const deploymentsWithProcessUrl = '/v1/deploymentswithprocessinfo';
@@ -25,21 +26,16 @@ function shouldHideOrchestratorComponents() {
 
 function fillDeploymentSearchQuery(
     searchFilter: SearchFilter,
-    sortOption: Record<string, string>,
+    sortOption: ApiSortOption,
     page: number,
-    pageSize: number
+    perPage: number
 ): string {
-    const offset = page * pageSize;
     const query = getRequestQueryStringForSearchFilter(searchFilter);
-    const queryObject: Record<
-        string,
-        string | Record<string, number | string | Record<string, string>>
-    > = {
-        pagination: {
-            offset,
-            limit: pageSize,
-            sortOption,
-        },
+    const queryObject: {
+        pagination: Pagination;
+        query?: string;
+    } = {
+        pagination: getPaginationParams({ page, perPage, sortOption }),
     };
     if (query) {
         queryObject.query = query;
@@ -56,7 +52,7 @@ function fillDeploymentSearchQuery(
  */
 export function listDeployments(
     searchFilter: SearchFilter,
-    sortOption: Record<string, string>,
+    sortOption: ApiSortOption,
     page: number,
     pageSize: number
 ): Promise<ListDeployment[]> {
@@ -76,7 +72,7 @@ export function listDeployments(
  */
 export function fetchDeploymentsWithProcessInfo(
     searchFilter: SearchFilter,
-    sortOption: Record<string, string>,
+    sortOption: ApiSortOption,
     page: number,
     pageSize: number
 ): CancellableRequest<ListDeploymentWithProcessInfo[]> {
@@ -98,34 +94,33 @@ export function fetchDeploymentsWithProcessInfo(
  */
 export function fetchDeploymentsWithProcessInfoLegacy(
     options: RestSearchOption[] = [],
-    sortOption: Record<string, string>,
-    page: number,
-    pageSize: number
+    sortOption: ApiSortOption,
+    page: number, // zero-based page
+    perPage: number
 ): Promise<ListDeploymentWithProcessInfo[]> {
-    const offset = page * pageSize;
     let searchOptions: RestSearchOption[] = options;
     if (shouldHideOrchestratorComponents()) {
         searchOptions = [...options, ...orchestratorComponentsOption];
     }
     const query = searchOptionsToQuery(searchOptions);
-    const queryObject: Record<
-        string,
-        string | Record<string, number | string | Record<string, string>>
-    > = {
-        pagination: {
-            offset,
-            limit: pageSize,
+    const queryObject: {
+        pagination: Pagination;
+        query?: string;
+    } = {
+        pagination: getPaginationParams({
+            page: page + 1, // one-based page for compatibility with PatternFly Pagination element
+            perPage,
             sortOption,
-        },
+        }),
     };
     if (query) {
         queryObject.query = query;
     }
     const params = queryString.stringify(queryObject, { arrayFormat: 'repeat', allowDots: true });
     return axios
-        .get<{ deployments: ListDeploymentWithProcessInfo[] }>(
-            `${deploymentsWithProcessUrl}?${params}`
-        )
+        .get<{
+            deployments: ListDeploymentWithProcessInfo[];
+        }>(`${deploymentsWithProcessUrl}?${params}`)
         .then((response) => response?.data?.deployments ?? []);
 }
 
@@ -137,7 +132,7 @@ export type ListDeploymentWithProcessInfo = {
 /**
  * Fetches count of registered deployments.
  */
-export function fetchDeploymentsCount(options: RestSearchOption[]): Promise<number> {
+export function fetchDeploymentsCountLegacy(options: RestSearchOption[]): Promise<number> {
     let searchOptions: RestSearchOption[] = options;
     if (shouldHideOrchestratorComponents()) {
         searchOptions = [...options, ...orchestratorComponentsOption];
@@ -149,6 +144,15 @@ export function fetchDeploymentsCount(options: RestSearchOption[]): Promise<numb
                   query,
               }
             : {};
+    const params = queryString.stringify(queryObject, { arrayFormat: 'repeat' });
+    return axios
+        .get<{ count: number }>(`${deploymentsCountUrl}?${params}`)
+        .then((response) => response?.data?.count ?? 0);
+}
+
+export function fetchDeploymentsCount(searchFilter: SearchFilter): Promise<number> {
+    const query = getRequestQueryStringForSearchFilter(searchFilter);
+    const queryObject = query ? { query } : {};
     const params = queryString.stringify(queryObject, { arrayFormat: 'repeat' });
     return axios
         .get<{ count: number }>(`${deploymentsCountUrl}?${params}`)

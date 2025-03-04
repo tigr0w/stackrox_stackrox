@@ -1,5 +1,10 @@
 # StackRox Database migration
 
+## IMPORTANT
+All migrations must be backwards compatible in order to ensure a safe and successful rollback.
+
+Please review the [overview](OVERVIEW.md) for details on the upgrade and migration process.
+
 ## Purpose of database migrations
 
 When changing the data model for stored objects, data conversions may be required. All migrations
@@ -7,11 +12,35 @@ are in the `migrations` subdirectory.
 
 Migrations are organized with sequence numbers and executed in sequence. Each migration is provided
 with a pointer to `types.Databases` where the pointed object contains all necessary database instances,
-including `Bolt`, `RocksDB`, `Postgres` and `GormDB` (datamodel for postgres). Depending on the version
-a migration is operating on, some database instances may be nil.
+including `Postgres` and `GormDB` (datamodel for postgres) as well as a context `DBCtx`. 
+The context allows for the migrations to be wrapped in a transaction so they can be committed as they 
+are processed.  (Migrations moving data with `GormDB` will not be part of the outer transaction, 
+as such care should be taken when using `GormDB` to move data.)  Depending on the version a migration 
+is operating on, some database instances may be nil.
 
 A migration can read from any of the databases, make changes to the data or to the datamodel
 (database schema when working with postgres), then persist these changes to the database.
+
+## Migrations and feature flags
+
+The short version is:
+**Do not use feature flags in migration code**.
+The application has to work on the same data model with enabled and disabled feature flags.
+
+If a feature needs a new field (named `new_field` for the purpose of the example) in the stored data,
+the code should be able to support the zero value (0, empty string, nil pointer), or
+this `new_field` needs to be seeded. In the latter case, the data should have an initial seed in the form
+of a migration that populates it from default values, or a mix of existing fields. Once the migration has run,
+the application code should also populate and maintain this field on creation or update of stored objects.
+It is important that this `new_field` should be populated regardless of the fact that the feature is
+activated or not: the feature may have to be temporarily deactivated, and later reactivated, in which case
+the data should still be ready for use by the feature.
+
+If a feature cannot work without DB migration, the data should be migrated prior to any work on the feature.
+
+If a feature can work at lesser development cost without data migration, workaround code can be written
+to work on the existing schema. Once the feature is made Generally Available, a data migration
+can be written, applied and the workaround code replaced with code that uses the new data schema.
 
 ## History of the datastores
 
@@ -44,56 +73,22 @@ A migration can read from any of the databases, make changes to the data or to t
 Script should correspond to single change. Script should be part of the same release as this change.
 Here are the steps to write migration script:
 
-1. Lookup the current database version (`CurrentDBVersionSeqNum`) in `pkg/migrations/internal/seq_num.go` file. 
+1. Run `DESCRIPTION="xxx" make bootstrap_migration` with a proper description of what the migration will do
+   in the `DESCRIPTION` environment variable.
 
-    The selected variable will be referred to as `currentDBVersion` in the next steps.
- 
-2. Under `migrations` folder create new folder with name
-`m_{currentDBVersion}_to_m_{currentDBVersion+1}_{summary_of_migration}`
+2. Determine if this change breaks a previous releases database.  If so increment the `MinimumSupportedDBVersionSeqNum` 
+   to the `CurrentDBVersionSeqNum` of the release immediately following the release that cannot tolerate the change. 
+   For example, in 4.2 a column `column_v2` is added to replace the `column_v1` column in 4.1.  All the code from 4.2
+   onward will not reference `column_v1`.  At some point in the future a rollback to 4.1 will not longer be supported
+   and we want to remove `column_v1`.  To do so, we will upgrade the schema to remove the column
+   and update the `MinimumSupportedDBVersionSeqNum` to be the value of `CurrentDBVersionSeqNum` in 4.2
+   as 4.1 will no longer be supported.  The migration process will inform the user of an error when trying to migrate
+   to a software version that can no longer be supported by the database.
 
-    1. Ensure that the `summary_of_migration` follows the naming convention of previous migrations,
-        i.e., postfix `_policy` if it modifies policies
+3. Write the migration code and associated tests in the generated `migration_impl.go` and `migration_test.go` files.
+   The files contain a number of TODOs to help with the tasks to complete when writing the migration code itself.
 
-3. Create at least two files: `migration.go` and `migration_test.go`. These files should belong to package
-`m{currentDBVersion}tom{currentDBVersion+1}`
-
-4. The `migration.go` file should contain at least the following elements:
-    ```go
-   import (
-       "github.com/stackrox/rox/migrator/migrations"
-       "github.com/stackrox/rox/migrator/types"
-       // If needed for the sequence number management.
-       pkgMigrations "github.com/stackrox/rox/pkg/migrations"
-   )
-   
-   var (
-       startSeqNum = {curentDBVersion}
-       migration = types.Migration{
-           StartingSeqNum: startSeqNum,
-           VersionAfter: startSeqNum+1,
-           Run: func(database *types.Databases) error {
-               // Migration code ..
-           },
-       }
-   )
-   
-   func init() {
-       migrations.MustRegisterMigration(migration)
-   }
-   
-   // Additional code to support the migration code
-    ```
-5. Add to `migrator/runner/all.go` line
-
-    ```go
-    _ "github.com/stackrox/rox/migrator/migrations/m_{currentDBVersion}_to_m_{currentDBVersion+1}_{summary_of_migration}"
-    ```
-
-6. Increment the `CurrentDBVersionSeqNum` sequence number variable used from `pkg/migrations/internal/seq_num.go` by one.
-
-7. Determine if this change breaks a previous releases database.  If so increment the `MinimumSupportedDBVersionSeqNum` to the `CurrentDBVersionSeqNum` of the release immediately following the release that cannot tolerate the change.  For example, in 4.2 a column `column_v2` is added to replace the `column_v1` column in 4.1.  All the code from 4.2 onward will not reference `column_v1`.  At some point in the future a rollback to 4.1 will not longer be supported and we want to remove `column_v1`.  To do so, we will upgrade the schema to remove the column and update the `MinimumSupportedDBVersionSeqNum` to be the value of `CurrentDBVersionSeqNum` in 4.2 as 4.1 will no longer be supported.  The migration process will inform the user of an error when trying to migrate to a software version that can no longer be supported by the database.
-
-8. To better understand how to write the `migration.go` and `migration_test.go` files, look at existing examples
+4. To better understand how to write the `migration.go` and `migration_test.go` files, look at existing examples
 in `migrations` directory, or at the examples listed below.
 
     - [#1](https://github.com/stackrox/rox/pull/8609)
@@ -124,6 +119,9 @@ in `migrations` directory, or at the examples listed below.
 
 ## Writing postgres migration tests
 
+Follow the TODOs listed in `migration_test.go`.  This includes a recommended test to verify the pre-migration SQL statements provide
+the expected results against the post-migration database in order to verify backwards compatiblity.
+
 ### Migrator limitations
 
 Migrator upgrades the data from a previous datamodel to the current one. In the case of data manipulation migrations,
@@ -147,10 +145,10 @@ To freeze a schema, you can use the following tool to generate a frozen schema, 
 to generate current schema which can be find in each Postgres store.
 
 ```shell
-pg-schema-migration-helper --type=<prototype> --search-category ...
+./tools/generate-helpers/pg-schema-migration-helper --type=<prototype> --search-category ...
 ```
 
-This tool also generates conversion tools for schema, you may remove the 
+This tool also generates conversion tools for schema, you may remove them. 
 
 #### Create or upgrade the schema of a table.
 
@@ -178,16 +176,83 @@ In migrator, there are a multiple ways to access data.
 
     Raw SQL commands are always available to databases and it has good isolation from current release. It is used frequently in
     migrations before Postgres. Migrations with raw SQL command needs less maintenance but it may not be convenient
-    and it could be error-prone.
+    and it could be error-prone.  This model supports the transaction passed via the databases.DBCtx.
     We try to provide more convenient way to read and update the data.
 
 2. Gorm
 
+    Consideration:  If the migration is dealing with multiple tables tied together it may be simpler for
+    the migration author to use the store method vs gorm.
+    
     Use Gorm to read small amount data. Gorm is light-weighted and comprehensive ORM allowing accessing databases
     in an object oriented way. You may have partial data access by trimming the gorm model.
     Check the [details](https://gorm.io/docs/) how to use Gorm.
 
-    For example, to get all the image id and operating system from the image table, a Gorm model is needed first.
+    The example below, illustrates how to walk the object to populate a field that was promoted to a column.  Note that
+    we must explicitly narrow the fields we select.  If we select the whole object, gorm will default to a `select *`
+    and in that case a subsquent migration modifying the structure of the same table will fail because the statement
+    cach will be invalid.  The simplest way to do that is to use a separate handle to query vs write.
+    
+    ```go
+    func migrate(database *types.Databases) error {
+        // We are simply promoting a field to a column so the serialized object is unchanged.  Thus, we
+        // have no need to worry about the old schema and can simply perform all our work on the new one.
+        db := database.GormDB
+        pgutils.CreateTableFromModel(database.DBCtx, db, schema.CreateTableListeningEndpointsStmt)
+        db = db.WithContext(database.DBCtx).Table(schema.ListeningEndpointsTableName)
+        query := db.WithContext(database.DBCtx).Table(schema.ListeningEndpointsTableName).Select("serialized")
+
+        rows, err := query.Rows()
+        if err != nil {
+            return errors.Wrapf(err, "failed to iterate table %s", schema.ListeningEndpointsTableName)
+        }
+        defer func() { _ = rows.Close() }()
+
+        var convertedPLOPs []*schema.ListeningEndpoints
+        var count int
+        for rows.Next() {
+            var plop *schema.ListeningEndpoints
+            if err = query.ScanRows(rows, &plop); err != nil {
+                return errors.Wrap(err, "failed to scan rows")
+            }
+
+            plopProto, err := schema.ConvertProcessListeningOnPortStorageToProto(plop)
+            if err != nil {
+                return errors.Wrapf(err, "failed to convert %+v to proto", plop)
+            }
+
+            converted, err := schema.ConvertProcessListeningOnPortStorageFromProto(plopProto)
+            if err != nil {
+                return errors.Wrapf(err, "failed to convert from proto %+v", plopProto)
+            }
+            convertedPLOPs = append(convertedPLOPs, converted)
+            count++
+
+            if len(convertedPLOPs) == batchSize {
+                // Upsert converted blobs
+                if err = db.Clauses(clause.OnConflict{UpdateAll: true}).Model(schema.CreateTableListeningEndpointsStmt.GormModel).Create(&convertedPLOPs).Error; err != nil {
+                    return errors.Wrapf(err, "failed to upsert converted %d objects after %d upserted", len(convertedPLOPs), count-len(convertedPLOPs))
+                }
+                convertedPLOPs = convertedPLOPs[:0]
+            }
+        }
+
+        if err := rows.Err(); err != nil {
+            return errors.Wrapf(err, "failed to get rows for %s", schema.ListeningEndpointsTableName)
+        }
+
+        if len(convertedPLOPs) > 0 {
+            if err = db.Clauses(clause.OnConflict{UpdateAll: true}).Model(schema.CreateTableListeningEndpointsStmt.GormModel).Create(&convertedPLOPs).Error; err != nil {
+                return errors.Wrapf(err, "failed to upsert last %d objects", len(convertedPLOPs))
+            }
+        }
+        log.Infof("Converted %d plop records", count)
+
+        return nil
+    }
+    ```
+
+    Another example, to get all the image id and operating system from the image table, a Gorm model is needed first.
     As not all data is needed, a trimmed model can be used. All Gorm models can be read from `pkg/postgres/schema`,
     copied and trimmed.
 
@@ -227,12 +292,20 @@ In migrator, there are a multiple ways to access data.
        Serialized []byte    `gorm:"column:serialized;type:bytea"`
    }
    ```
+   Gorm cannot participate in the transaction passed via the context.  The risk and possible ramifications of that
+   should be considered before deciding to use Gorm to move the data.
 
 3. Duplicate the Postgres Store
    This method is used in version 73 and 74 to migrate all tables from RocksDB to Postgres. In addition to frozen schema,
    the store to access the data are also frozen for migration. The migrations with this method are closely associated
-   with current release eg. search/delete with schema and the prototypes of the objects. This method is NOT recommended for
-   4.0 and beyond.
+   with current release eg. search/delete with schema and the prototypes of the objects. 
+
+   Now that stores are built upon a generic store you would need to make a copy of the store and remove
+   references to SAC and such.  We should be careful not to rely on the search framework for queries as those
+   could change over time.  Additionally the stores should use the frozen schemas just as any other migration would
+   to ensure isolation.  
+
+   This model supports the transaction passed via the databases.DBCtx.
 
 #### Conversion tool
 
@@ -247,7 +320,7 @@ The following shows an example of the conversion functions.
 The tool is `pg-schema-migration-helper`, it can be used as follows.
 
 ```shell
-pg-schema-migration-helper --type=storage.VulnerabilityRequest --search-category VULN_REQUEST
+./tools/generate-helpers/pg-schema-migration-helper --type=storage.VulnerabilityRequest --search-category VULN_REQUEST
 ```
 
 `pg-schema-migration-helper` uses the same elements as `pg-table-bindings-wrapper` (the code generator for the postgres
@@ -257,7 +330,7 @@ schema and conversion functions.
 More examples with test protobuf objects are available in `migrator/migrations/postgreshelper/schema`
 ```go
 func convertVulnerabilityRequestFromProto(obj *storage.VulnerabilityRequest) (*schema.VulnerabilityRequests, error) {
-        serialized, err := obj.Marshal()
+        serialized, err := obj.MarshalVT()
         if err != nil {
                 return nil, err
         }

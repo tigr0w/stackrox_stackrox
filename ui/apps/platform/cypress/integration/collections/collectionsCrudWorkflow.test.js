@@ -1,19 +1,12 @@
 import withAuth from '../../helpers/basicAuth';
-import { hasFeatureFlag } from '../../helpers/features';
 import { tryDeleteCollection, visitCollections } from './Collections.helpers';
 
-/* 
+/*
     Each test in this spec builds upon the previous by executing another piece
     of the collection CRUD workflow.
 */
 describe('Create collection', () => {
     withAuth();
-
-    beforeEach(function beforeHook() {
-        if (!hasFeatureFlag('ROX_POSTGRES_DATASTORE')) {
-            this.skip();
-        }
-    });
 
     const collectionName = 'Financial deployments';
     const clonedName = `${collectionName} -COPY-`;
@@ -25,11 +18,11 @@ describe('Create collection', () => {
 
         visitCollections();
 
-        cy.get('a:contains("Create collection")').click();
+        cy.get('a:contains("Create collection")').first().click();
         cy.get('input[name="name"]').type(collectionName);
         cy.get('input[name="description"]').type('A collection for financial data');
 
-        cy.get('button:contains("All deployments")').click();
+        cy.get('button:contains("No deployments specified")').click();
         cy.get('button:contains("Deployments with labels matching")').click();
         cy.get('input[aria-label="Select label value 1 of 1 for deployment rule 1 of 1"]').type(
             'meta/name=visa-processor'
@@ -39,11 +32,11 @@ describe('Create collection', () => {
             'meta/name=mastercard-processor'
         );
 
-        cy.get('button:contains("All namespaces")').click();
+        cy.get('button:contains("No namespaces specified")').click();
         cy.get('button:contains("Namespaces with names matching")').click();
         cy.get('input[aria-label="Select value 1 of 1 for the namespace name"]').type('payments');
 
-        cy.get('button:contains("All clusters")').click();
+        cy.get('button:contains("No clusters specified")').click();
         cy.get('button:contains("Clusters with names matching")').click();
         cy.get('input[aria-label="Select value 1 of 1 for the cluster name"]').type('production');
 
@@ -126,7 +119,7 @@ describe('Create collection', () => {
 
         // Delete the clone first, since the `:contains()` selector cannot do an exact match
         // Delete one from the main collection table
-        cy.get(`tr:has(a:contains("${clonedName}")) button[aria-label="Actions"]`).click();
+        cy.get(`tr:has(a:contains("${clonedName}")) button[aria-label="Kebab toggle"]`).click();
         cy.get('button:contains("Delete collection")').click();
         cy.get('*[role="dialog"] button:contains("Delete")').click();
         cy.get('*:contains("Successfully deleted")');

@@ -3,26 +3,24 @@ package iap
 import (
 	"context"
 	"net/http"
+	"slices"
 
+	joseJwt "github.com/go-jose/go-jose/v4/jwt"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/pkg/auth/authproviders"
 	"github.com/stackrox/rox/pkg/auth/tokens"
 	"github.com/stackrox/rox/pkg/grpc/requestinfo"
 	"github.com/stackrox/rox/pkg/jwt"
-	"github.com/stackrox/rox/pkg/logging"
-	"github.com/stackrox/rox/pkg/sliceutils"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	joseJwt "gopkg.in/square/go-jose.v2/jwt"
 )
 
 var (
-	log                   = logging.LoggerForModule()
 	errFingerPrintChanged = errors.New("IAP token fingerprint changed, please log in again")
 )
 
 const (
-	jwtAssertion = "X-Goog-IAP-JWT-Assertion"
+	jwtAssertion = "X-Goog-IAP-JWT-Assertion" //#nosec G101
 	issuerID     = "https://cloud.google.com/iap"
 	publicKeyURL = "https://www.gstatic.com/iap/verify/public_key-jwk"
 
@@ -110,7 +108,7 @@ func (p *backendImpl) Validate(ctx context.Context, roxClaims *tokens.Claims) er
 		return errFingerPrintChanged
 	}
 
-	if !sliceutils.Equal([]string{extraClaims.Hd}, []string{roxClaims.ExternalUser.Attributes["hd"][0]}) {
+	if !slices.Equal([]string{extraClaims.Hd}, []string{roxClaims.ExternalUser.Attributes["hd"][0]}) {
 		return errFingerPrintChanged
 	}
 

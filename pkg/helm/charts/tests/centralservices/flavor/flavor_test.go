@@ -27,6 +27,9 @@ func customFlavor(t *testing.T) defaults.ImageFlavor {
 		ScannerImageTag:        "3.2.1",
 		ScannerDBSlimImageName: "scanner-slim",
 		ScannerDBImageName:     "custom-scanner-db",
+		ScannerV4ImageName:     "custom-scanner-v4",
+		ScannerV4DBImageName:   "custom-scanner-v4-db",
+		ScannerV4ImageTag:      "4.2.1",
 
 		ChartRepo: defaults.ChartRepo{
 			URL:     "url",
@@ -53,9 +56,8 @@ func TestOverriddenTagsAreRenderedInTheChart(t *testing.T) {
 func TestWithDifferentImageFlavors(t *testing.T) {
 	testutils.SetVersion(t, testutils.GetExampleVersion(t))
 	imageFlavorCases := map[string]defaults.ImageFlavor{
-		"stackrox": defaults.StackRoxIOReleaseImageFlavor(),
-		"rhacs":    defaults.RHACSReleaseImageFlavor(),
-		"custom":   customFlavor(t),
+		"rhacs":  defaults.RHACSReleaseImageFlavor(),
+		"custom": customFlavor(t),
 	}
 	if buildinfo.ReleaseBuild {
 		imageFlavorCases["development_build-release"] = defaults.DevelopmentBuildImageFlavor()

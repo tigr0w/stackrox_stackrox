@@ -1,31 +1,51 @@
 import React, { useState } from 'react';
-import { Button, Badge, Modal, Form, FormGroup, Checkbox, Flex } from '@patternfly/react-core';
+import { Button, Modal, Form, FormGroup, Checkbox } from '@patternfly/react-core';
 import cloneDeep from 'lodash/cloneDeep';
 import { useFormik, FormikProvider } from 'formik';
 import { Globe } from 'react-feather';
 
-import { DefaultFilters, FixableStatus, VulnerabilitySeverityLabel } from '../types';
+import useAnalytics, { WORKLOAD_CVE_DEFAULT_FILTERS_CHANGED } from 'hooks/useAnalytics';
+import { DefaultFilters, FixableStatus, VulnerabilitySeverityLabel } from '../../types';
+
+function analyticsTrackDefaultFilters(
+    analyticsTrack: ReturnType<typeof useAnalytics>['analyticsTrack'],
+    filters: DefaultFilters
+) {
+    analyticsTrack({
+        event: WORKLOAD_CVE_DEFAULT_FILTERS_CHANGED,
+        properties: {
+            SEVERITY_CRITICAL: filters.SEVERITY.includes('Critical') ? 1 : 0,
+            SEVERITY_IMPORTANT: filters.SEVERITY.includes('Important') ? 1 : 0,
+            SEVERITY_MODERATE: filters.SEVERITY.includes('Moderate') ? 1 : 0,
+            SEVERITY_LOW: filters.SEVERITY.includes('Low') ? 1 : 0,
+            CVE_STATUS_FIXABLE: filters.FIXABLE.includes('Fixable') ? 1 : 0,
+            CVE_STATUS_NOT_FIXABLE: filters.FIXABLE.includes('Not fixable') ? 1 : 0,
+        },
+    });
+}
 
 type DefaultFilterModalProps = {
     defaultFilters: DefaultFilters;
-    setLocalStorage: (values) => void;
+    setLocalStorage: (values: DefaultFilters) => void;
 };
 
 function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterModalProps) {
+    const { analyticsTrack } = useAnalytics();
     const [isOpen, setIsOpen] = useState(false);
-    const totalFilters = defaultFilters.Severity.length + defaultFilters.Fixable.length;
+    const totalFilters = defaultFilters.SEVERITY.length + defaultFilters.FIXABLE.length;
 
     const formik = useFormik({
         initialValues: cloneDeep(defaultFilters),
         onSubmit: (values: DefaultFilters) => {
             setLocalStorage(values);
             setIsOpen(false);
+            analyticsTrackDefaultFilters(analyticsTrack, values);
         },
     });
 
     const { submitForm, values, setFieldValue, setValues } = formik;
-    const severityValues = values.Severity;
-    const fixableValues = values.Fixable;
+    const severityValues = values.SEVERITY;
+    const fixableValues = values.FIXABLE;
 
     function handleModalToggle() {
         if (isOpen) {
@@ -41,7 +61,7 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
         } else {
             newSeverityValues = newSeverityValues.filter((val) => val !== severity);
         }
-        setFieldValue('Severity', newSeverityValues).catch(() => {});
+        setFieldValue('SEVERITY', newSeverityValues).catch(() => {});
     }
 
     function handleFixableChange(fixable: FixableStatus, isChecked: boolean) {
@@ -51,22 +71,26 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
         } else {
             newFixableValues = newFixableValues.filter((val) => val !== fixable);
         }
-        setFieldValue('Fixable', newFixableValues).catch(() => {});
+        setFieldValue('FIXABLE', newFixableValues).catch(() => {});
     }
 
     return (
         <>
-            <Button variant="plain" className="pf-u-color-300" onClick={handleModalToggle}>
-                <Flex alignItems={{ default: 'alignItemsCenter' }}>
-                    <Globe className="pf-u-mr-sm" />
-                    Default vulnerability filters
-                    <Badge key={1} isRead className="pf-u-ml-sm">
-                        {totalFilters}
-                    </Badge>
-                </Flex>
+            <Button
+                variant="secondary"
+                className="pf-v5-u-display-inline-flex pf-v5-u-align-items-center"
+                onClick={handleModalToggle}
+                countOptions={{
+                    isRead: true,
+                    count: totalFilters,
+                    className: 'custom-badge-unread',
+                }}
+            >
+                <Globe height="20px" width="20px" className="pf-v5-u-mr-sm" />
+                <span>Default filters</span>
             </Button>
             <Modal
-                title="Default vulnerability filters"
+                title="Default filters"
                 description="Select default vulnerability filters to be applied across all views."
                 isOpen={isOpen}
                 onClose={handleModalToggle}
@@ -87,7 +111,7 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
                                 label="Critical"
                                 id="critical-severity"
                                 isChecked={severityValues.includes('Critical')}
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
                                     handleSeverityChange('Critical', isChecked);
                                 }}
                             />
@@ -95,7 +119,7 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
                                 label="Important"
                                 id="important-severity"
                                 isChecked={severityValues.includes('Important')}
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
                                     handleSeverityChange('Important', isChecked);
                                 }}
                             />
@@ -103,7 +127,7 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
                                 label="Moderate"
                                 id="moderate-severity"
                                 isChecked={severityValues.includes('Moderate')}
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
                                     handleSeverityChange('Moderate', isChecked);
                                 }}
                             />
@@ -111,7 +135,7 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
                                 label="Low"
                                 id="low-severity"
                                 isChecked={severityValues.includes('Low')}
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
                                     handleSeverityChange('Low', isChecked);
                                 }}
                             />
@@ -121,7 +145,7 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
                                 label="Fixable"
                                 id="fixable-status"
                                 isChecked={fixableValues.includes('Fixable')}
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
                                     handleFixableChange('Fixable', isChecked);
                                 }}
                             />
@@ -129,7 +153,7 @@ function DefaultFilterModal({ defaultFilters, setLocalStorage }: DefaultFilterMo
                                 label="Not fixable"
                                 id="not-fixable-status"
                                 isChecked={fixableValues.includes('Not fixable')}
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
                                     handleFixableChange('Not fixable', isChecked);
                                 }}
                             />

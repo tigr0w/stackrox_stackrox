@@ -1,15 +1,17 @@
 package compliance
 
 import (
-	"github.com/stackrox/rox/generated/internalapi/central"
+	"time"
+
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/sensor/common"
 	"github.com/stackrox/rox/sensor/common/clusterid"
+	"github.com/stackrox/rox/sensor/common/message"
 )
 
-//go:generate mockgen-wrapper AuditLogCollectionManager
+//go:generate mockgen-wrapper
 
 // AuditLogCollectionManager manages all aspects of the audit log collection states. Given the stream of audit events via the AuditMessages channel, it saves, keeps track and updates Central
 // of the latest read audit log event per compliance node. It also provides an API for sensor to use to use to add eligible nodes, enable/disable/restart collection.
@@ -49,9 +51,10 @@ func NewAuditLogCollectionManager() AuditLogCollectionManager {
 		eligibleComplianceNodes: make(map[string]sensor.ComplianceService_CommunicateServer),
 		fileStates:              make(map[string]*storage.AuditLogFileState),
 		auditEventMsgs:          make(chan *sensor.MsgFromCompliance),
-		fileStateUpdates:        make(chan *central.MsgFromSensor),
-		stopSig:                 concurrency.NewSignal(),
+		fileStateUpdates:        make(chan *message.ExpiringMessage),
+		stopper:                 concurrency.NewStopper(),
 		forceUpdateSig:          concurrency.NewSignal(),
-		updateInterval:          defaultInterval,
+		centralReady:            concurrency.NewSignal(),
+		updaterTicker:           time.NewTicker(defaultInterval),
 	}
 }

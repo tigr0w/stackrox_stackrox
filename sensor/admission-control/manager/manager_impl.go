@@ -3,9 +3,9 @@ package manager
 import (
 	"context"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
-	"github.com/gogo/protobuf/types"
 	pkgErr "github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/generated/storage"
@@ -18,6 +18,7 @@ import (
 	"github.com/stackrox/rox/pkg/detection/runtime"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/mtls"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/size"
 	"github.com/stackrox/rox/pkg/sizeboundedcache"
@@ -84,7 +85,7 @@ type manager struct {
 
 	settingsStream     *concurrency.ValueStream[*sensor.AdmissionControlSettings]
 	settingsC          chan *sensor.AdmissionControlSettings
-	lastSettingsUpdate *types.Timestamp
+	lastSettingsUpdate *time.Time
 
 	syncC chan *concurrency.Signal
 
@@ -102,7 +103,7 @@ type manager struct {
 // NewManager creates a new manager
 func NewManager(namespace string, maxImageCacheSize int64, imageServiceClient sensor.ImageServiceClient, deploymentServiceClient sensor.DeploymentServiceClient) *manager {
 	cache, err := sizeboundedcache.New(maxImageCacheSize, 2*size.MB, func(key string, value imageCacheEntry) int64 {
-		return int64(len(key) + value.Size())
+		return int64(len(key) + value.SizeVT())
 	})
 	utils.CrashOnError(err)
 
@@ -229,7 +230,7 @@ func (m *manager) ProcessNewSettings(newSettings *sensor.AdmissionControlSetting
 		return
 	}
 
-	if m.lastSettingsUpdate != nil && newSettings.GetTimestamp().Compare(m.lastSettingsUpdate) <= 0 {
+	if m.lastSettingsUpdate != nil && protocompat.CompareTimestampToTime(newSettings.GetTimestamp(), m.lastSettingsUpdate) <= 0 {
 		return // no update
 	}
 
@@ -237,7 +238,7 @@ func (m *manager) ProcessNewSettings(newSettings *sensor.AdmissionControlSetting
 	runtimePoliciesWithDeployFields, runtimePoliciesWithoutDeployFields := detection.NewPolicySet(), detection.NewPolicySet()
 	for _, policy := range newSettings.GetRuntimePolicies().GetPolicies() {
 		if policyfields.ContainsScanRequiredFields(policy) && !newSettings.GetClusterConfig().GetAdmissionControllerConfig().GetScanInline() {
-			log.Warnf(errors.ImageScanUnavailableMsg(policy))
+			log.Warn(errors.ImageScanUnavailableMsg(policy))
 			continue
 		}
 
@@ -265,7 +266,7 @@ func (m *manager) ProcessNewSettings(newSettings *sensor.AdmissionControlSetting
 		for _, policy := range newSettings.GetEnforcedDeployTimePolicies().GetPolicies() {
 			if policyfields.ContainsScanRequiredFields(policy) &&
 				!newSettings.GetClusterConfig().GetAdmissionControllerConfig().GetScanInline() {
-				log.Warnf(errors.ImageScanUnavailableMsg(policy))
+				log.Warn(errors.ImageScanUnavailableMsg(policy))
 				continue
 			}
 			if err := deployTimePolicySet.UpsertPolicy(policy); err != nil {
@@ -309,7 +310,7 @@ func (m *manager) ProcessNewSettings(newSettings *sensor.AdmissionControlSetting
 		}
 
 		if newSettings.GetCentralEndpoint() != "" {
-			conn, err := clientconn.AuthenticatedGRPCConnection(newSettings.GetCentralEndpoint(), mtls.CentralSubject, clientconn.UseServiceCertToken(true))
+			conn, err := clientconn.AuthenticatedGRPCConnection(context.Background(), newSettings.GetCentralEndpoint(), mtls.CentralSubject, clientconn.UseServiceCertToken(true))
 			if err != nil {
 				log.Errorf("Could not create connection to Central: %v", err)
 			} else {
@@ -328,7 +329,7 @@ func (m *manager) ProcessNewSettings(newSettings *sensor.AdmissionControlSetting
 	if m.lastSettingsUpdate == nil {
 		log.Info("RE-ENABLING admission control service")
 	}
-	m.lastSettingsUpdate = newSettings.GetTimestamp()
+	m.lastSettingsUpdate = protocompat.ConvertTimestampToTimeOrNil(newSettings.GetTimestamp())
 
 	enforceablePolicies := 0
 	for _, policy := range allRuntimePolicySet.GetCompiledPolicies() {

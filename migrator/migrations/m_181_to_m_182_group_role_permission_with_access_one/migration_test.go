@@ -12,6 +12,7 @@ import (
 	pghelper "github.com/stackrox/rox/migrator/migrations/postgreshelper"
 	"github.com/stackrox/rox/migrator/types"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stretchr/testify/suite"
 )
@@ -204,7 +205,7 @@ var (
 				// Replacing resources
 				Access: storage.Access_READ_ACCESS,
 				// Non-replaced resources
-				Administration:                   storage.Access_NO_ACCESS,
+				Administration:                   storage.Access_READ_ACCESS,
 				Alert:                            storage.Access_NO_ACCESS,
 				CVE:                              storage.Access_NO_ACCESS,
 				Cluster:                          storage.Access_READ_WRITE_ACCESS,
@@ -222,7 +223,6 @@ var (
 				NetworkPolicy:                    storage.Access_NO_ACCESS,
 				Node:                             storage.Access_READ_ACCESS,
 				Policy:                           storage.Access_READ_WRITE_ACCESS,
-				Role:                             storage.Access_READ_WRITE_ACCESS,
 				Secret:                           storage.Access_READ_ACCESS,
 				ServiceAccount:                   storage.Access_NO_ACCESS,
 				VulnerabilityManagementApprovals: storage.Access_READ_WRITE_ACCESS,
@@ -345,7 +345,7 @@ func TestMigration(t *testing.T) {
 }
 
 func (s *psMigrationTestSuite) SetupSuite() {
-	s.db = pghelper.ForT(s.T(), true)
+	s.db = pghelper.ForT(s.T(), false)
 	pgutils.CreateTableFromModel(ctx, s.db.GetGormDB(), frozenSchema.CreateTablePermissionSetsStmt)
 }
 
@@ -370,5 +370,5 @@ func (s *psMigrationTestSuite) TestMigration() {
 		return nil
 	}))
 
-	s.ElementsMatch(migratedPermissionSets, allPSAfterMigration)
+	protoassert.ElementsMatch(s.T(), migratedPermissionSets, allPSAfterMigration)
 }

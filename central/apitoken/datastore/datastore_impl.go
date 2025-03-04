@@ -3,59 +3,38 @@ package datastore
 import (
 	"context"
 
-	"github.com/pkg/errors"
 	scheduleStore "github.com/stackrox/rox/central/apitoken/datastore/internal/schedulestore/postgres"
 	"github.com/stackrox/rox/central/apitoken/datastore/internal/store"
 	postgresStore "github.com/stackrox/rox/central/apitoken/datastore/internal/store/postgres"
-	rocksdbStore "github.com/stackrox/rox/central/apitoken/datastore/internal/store/rocksdb"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
-	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
-	"github.com/stackrox/rox/pkg/search/blevesearch"
 	"github.com/stackrox/rox/pkg/sync"
 )
 
 var (
 	integrationSAC = sac.ForResource(resources.Integration)
-
-	log = logging.LoggerForModule()
 )
 
 type datastoreImpl struct {
-	storage  store.Store
-	searcher search.Searcher
+	storage store.Store
 
 	scheduleStorage scheduleStore.Store
 
-	sync.Mutex
+	sync.RWMutex
 }
 
 func newPostgres(pool postgres.DB) *datastoreImpl {
 	storage := postgresStore.New(pool)
-	indexer := postgresStore.NewIndexer(pool)
-	searcher := blevesearch.WrapUnsafeSearcherAsSearcher(indexer)
 	scheduleStorage := scheduleStore.New(pool)
 
 	return &datastoreImpl{
 		storage:         storage,
-		searcher:        searcher,
 		scheduleStorage: scheduleStorage,
-	}
-}
-
-func newRocks(rocksDBInstance *rocksdb.RocksDB) *datastoreImpl {
-	storage := rocksdbStore.New(rocksDBInstance)
-	return &datastoreImpl{
-		storage:         storage,
-		searcher:        nil,
-		scheduleStorage: nil,
 	}
 }
 
@@ -79,8 +58,8 @@ func (b *datastoreImpl) GetTokenOrNil(ctx context.Context, id string) (token *st
 		return nil, nil
 	}
 
-	b.Lock()
-	defer b.Unlock()
+	b.RLock()
+	defer b.RUnlock()
 
 	token, exists, err := b.storage.Get(ctx, id)
 	if err != nil {
@@ -99,8 +78,8 @@ func (b *datastoreImpl) GetTokens(ctx context.Context, req *v1.GetAPITokensReque
 		return nil, nil
 	}
 
-	b.Lock()
-	defer b.Unlock()
+	b.RLock()
+	defer b.RUnlock()
 
 	var tokens []*storage.TokenMetadata
 	walkFn := func() error {
@@ -113,7 +92,7 @@ func (b *datastoreImpl) GetTokens(ctx context.Context, req *v1.GetAPITokensReque
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 	return tokens, nil
@@ -144,37 +123,44 @@ func (b *datastoreImpl) RevokeToken(ctx context.Context, id string) (bool, error
 	return true, nil
 }
 
+func (b *datastoreImpl) Count(ctx context.Context, q *v1.Query) (int, error) {
+	if err := sac.VerifyAuthzOK(integrationSAC.ReadAllowed(ctx)); err != nil {
+		return 0, err
+	}
+
+	b.RLock()
+	defer b.RUnlock()
+
+	return b.storage.Count(ctx, q)
+}
+
 func (b *datastoreImpl) Search(ctx context.Context, q *v1.Query) ([]search.Result, error) {
 	if err := sac.VerifyAuthzOK(integrationSAC.ReadAllowed(ctx)); err != nil {
 		return nil, err
 	}
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.New("API Token search is only available in postgres mode")
-	}
-	return b.searcher.Search(ctx, q)
+
+	b.RLock()
+	defer b.RUnlock()
+
+	return b.storage.Search(ctx, q)
 }
 
 func (b *datastoreImpl) SearchRawTokens(ctx context.Context, q *v1.Query) ([]*storage.TokenMetadata, error) {
 	if err := sac.VerifyAuthzOK(integrationSAC.ReadAllowed(ctx)); err != nil {
 		return nil, err
 	}
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, errors.New("API Token search is only available in postgres mode")
-	}
+
+	b.RLock()
+	defer b.RUnlock()
+
 	return b.storage.GetByQuery(ctx, q)
 
 }
 
 func (b *datastoreImpl) GetNotificationSchedule(ctx context.Context) (*storage.NotificationSchedule, bool, error) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil, false, errors.New("API Token notification schedule retrieval is only supported in postgres mode")
-	}
 	return b.scheduleStorage.Get(ctx)
 }
 
 func (b *datastoreImpl) UpsertNotificationSchedule(ctx context.Context, schedule *storage.NotificationSchedule) error {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return errors.New("API Token notification schedule update is only supported in postgres mode")
-	}
 	return b.scheduleStorage.Upsert(ctx, schedule)
 }

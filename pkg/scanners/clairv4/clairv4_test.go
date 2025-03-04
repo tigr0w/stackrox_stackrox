@@ -1,6 +1,7 @@
 package clairv4
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,14 +9,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/quay/claircore"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/registries/mocks"
 	"github.com/stackrox/rox/pkg/registries/types"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 var _ types.Registry = (*mockRegistry)(nil)
@@ -36,7 +38,7 @@ func (m *mockRegistry) Test() error {
 	panic("unsupported")
 }
 
-func (m *mockRegistry) Config() *types.Config {
+func (m *mockRegistry) Config(_ context.Context) *types.Config {
 	return &types.Config{
 		URL: m.url,
 	}
@@ -209,6 +211,6 @@ func TestGetScan(t *testing.T) {
 	scan, err := clair.GetScan(testImage.image)
 	assert.NoError(t, err)
 	expected := testImage.expected
-	assert.ElementsMatch(t, expected.Components, scan.Components)
+	protoassert.ElementsMatch(t, expected.Components, scan.Components)
 	assert.Equal(t, expected.OperatingSystem, scan.OperatingSystem)
 }

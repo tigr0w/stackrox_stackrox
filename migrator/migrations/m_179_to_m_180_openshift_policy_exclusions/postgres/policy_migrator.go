@@ -4,7 +4,6 @@ import (
 	"context"
 	"embed"
 	"path/filepath"
-	"reflect"
 
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
@@ -60,8 +59,8 @@ func diffPolicies(beforePolicy, afterPolicy *storage.Policy) (PolicyUpdates, err
 	}
 
 	// Clone policies because we mutate them.
-	beforePolicy = beforePolicy.Clone()
-	afterPolicy = afterPolicy.Clone()
+	beforePolicy = beforePolicy.CloneVT()
+	afterPolicy = afterPolicy.CloneVT()
 
 	var updates PolicyUpdates
 
@@ -70,7 +69,7 @@ func diffPolicies(beforePolicy, afterPolicy *storage.Policy) (PolicyUpdates, err
 	beforePolicy.Exclusions = nil
 	afterPolicy.Exclusions = nil
 
-	if !reflect.DeepEqual(beforePolicy, afterPolicy) {
+	if !beforePolicy.EqualVT(afterPolicy) {
 		return PolicyUpdates{}, errors.New("policies have diff after nil-ing out fields we checked, please update this function " +
 			"to be able to diff more fields")
 	}
@@ -81,7 +80,7 @@ func getExclusionsUpdates(beforePolicy *storage.Policy, afterPolicy *storage.Pol
 	matchedAfterExclusionsIdxs := set.NewSet[int]()
 	for _, beforeExclusion := range beforePolicy.GetExclusions() {
 		for afterExclusionIdx, afterExclusion := range afterPolicy.GetExclusions() {
-			if reflect.DeepEqual(beforeExclusion, afterExclusion) {
+			if beforeExclusion.EqualVT(afterExclusion) {
 				matchedAfterExclusionsIdxs.Add(afterExclusionIdx)
 				break
 			}
@@ -184,12 +183,4 @@ func checkIfPoliciesMatch(fieldsToCompare []FieldComparator, first *storage.Poli
 		}
 	}
 	return true
-}
-
-func strPtr(s string) *string {
-	return &s
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }

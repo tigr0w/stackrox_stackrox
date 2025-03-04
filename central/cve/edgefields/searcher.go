@@ -4,10 +4,10 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/gogo/protobuf/proto"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/scoped"
 )
@@ -21,7 +21,7 @@ func TransformFixableFields(searcher search.Searcher) search.Searcher {
 	return search.FuncSearcher{
 		SearchFunc: func(ctx context.Context, q *v1.Query) ([]search.Result, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 
@@ -32,7 +32,7 @@ func TransformFixableFields(searcher search.Searcher) search.Searcher {
 		},
 		CountFunc: func(ctx context.Context, q *v1.Query) (int, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 
@@ -70,7 +70,7 @@ func HandleCVEEdgeSearchQuery(searcher search.Searcher) search.Searcher {
 	return search.FuncSearcher{
 		SearchFunc: func(ctx context.Context, q *v1.Query) ([]search.Result, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 
@@ -81,7 +81,7 @@ func HandleCVEEdgeSearchQuery(searcher search.Searcher) search.Searcher {
 		},
 		CountFunc: func(ctx context.Context, q *v1.Query) (int, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 
@@ -130,7 +130,7 @@ func getCVEEdgeQuery(q *v1.Query) {
 				search.NewQueryBuilder().AddBools(search.ClusterCVEFixable, val).ProtoQuery())
 		}
 	default:
-		log.Errorf("Unhandled query type: %T; query was %s", q, proto.MarshalTextString(q))
+		log.Errorf("Unhandled query type: %T; query was %s", q, protocompat.MarshalTextString(q))
 	}
 }
 
@@ -140,7 +140,7 @@ func HandleSnoozeSearchQuery(searcher search.Searcher) search.Searcher {
 	return search.FuncSearcher{
 		SearchFunc: func(ctx context.Context, q *v1.Query) ([]search.Result, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 
@@ -151,7 +151,7 @@ func HandleSnoozeSearchQuery(searcher search.Searcher) search.Searcher {
 		},
 		CountFunc: func(ctx context.Context, q *v1.Query) (int, error) {
 			// Local copy to avoid changing input.
-			local := q.Clone()
+			local := q.CloneVT()
 			pagination := local.GetPagination()
 			local.Pagination = nil
 

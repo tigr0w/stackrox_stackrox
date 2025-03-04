@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/VividCortex/ewma"
-	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/pkg/concurrency"
@@ -30,7 +29,7 @@ import (
 	"github.com/stackrox/rox/roxctl/common/environment"
 	"github.com/vbauerster/mpb/v4"
 	"github.com/vbauerster/mpb/v4/decor"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -161,7 +160,7 @@ func (r *v2Restorer) Run(ctx context.Context, file *os.File) (*http.Response, er
 	r.statusLine.SetSpinner(waitingSpinner)
 	r.statusLine.SetTextStatic("Initiating restore ...")
 
-	termWidth, _, err := terminal.GetSize(int(os.Stderr.Fd())) //nolint:forbidigo // TODO(ROX-13473)
+	termWidth, _, err := term.GetSize(int(os.Stderr.Fd())) //nolint:forbidigo // TODO(ROX-13473)
 	if err == nil && termWidth > 40 {
 		if termWidth > 120 {
 			termWidth = 120
@@ -352,7 +351,7 @@ func (r *v2Restorer) initNewProcess(ctx context.Context, file *os.File) (*http.R
 		},
 	}
 
-	headerBytes, err := proto.Marshal(header)
+	headerBytes, err := header.MarshalVT()
 	if err != nil {
 		return nil, errors.Wrap(err, "could not marshal restore header")
 	}
@@ -444,7 +443,7 @@ func (r *v2Restorer) resumeAfterError(ctx context.Context) (*http.Request, error
 		// Unavailable and DeadlineExceeded indicate transport failures & timeouts. All other errors (permissions etc.)
 		// are likely permanent.
 		if code := status.Convert(err).Code(); code == codes.Unavailable || code == codes.DeadlineExceeded {
-			err = retry.MakeRetryable(err)
+			err = common.MakeRetryable(err)
 		}
 		return nil, err
 	}

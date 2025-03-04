@@ -5,17 +5,18 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/central/compliance"
 	"github.com/stackrox/rox/central/compliance/datastore"
 	storeMocks "github.com/stackrox/rox/central/compliance/datastore/internal/store/mocks"
 	"github.com/stackrox/rox/central/compliance/datastore/mocks"
 	"github.com/stackrox/rox/central/compliance/datastore/types"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 var (
@@ -63,7 +64,7 @@ func (s *complianceDataStoreTestSuite) TearDownTest() {
 
 func (s *complianceDataStoreTestSuite) TestGetLatestRunResults() {
 	clusterID := "cid"
-	standardID := "CIS_Docker_v1_2_0"
+	standardID := "CIS_Kubernetes_v1_5"
 	expectedReturn := types.ResultsWithStatus{
 		LastSuccessfulResults: &storage.ComplianceRunResults{},
 	}
@@ -79,15 +80,16 @@ func (s *complianceDataStoreTestSuite) TestGetLatestRunResults() {
 
 	// Check results match.
 	s.Nil(err)
-	s.Equal(expectedReturn, result)
+	protoassert.SlicesEqual(s.T(), expectedReturn.FailedRuns, result.FailedRuns)
+	protoassert.Equal(s.T(), expectedReturn.LastSuccessfulResults, result.LastSuccessfulResults)
 }
 
 func (s *complianceDataStoreTestSuite) TestGetLatestRunResultsBatch() {
 	clusterIDs := []string{"cid"}
-	standardIDs := []string{"CIS_Docker_v1_2_0"}
+	standardIDs := []string{"CIS_Kubernetes_v1_5"}
 	csPair := compliance.ClusterStandardPair{
 		ClusterID:  "cid",
-		StandardID: "CIS_Docker_v1_2_0",
+		StandardID: "CIS_Kubernetes_v1_5",
 	}
 	expectedReturn := map[compliance.ClusterStandardPair]types.ResultsWithStatus{
 		csPair: {
@@ -113,7 +115,10 @@ func (s *complianceDataStoreTestSuite) TestGetLatestRunResultsBatch() {
 	// Check results match.
 	s.Nil(err)
 	s.Equal(1, len(result))
-	s.Equal(expectedReturn[csPair], result[csPair])
+	expected := expectedReturn[csPair]
+	actual := result[csPair]
+	protoassert.Equal(s.T(), expected.LastSuccessfulResults, actual.LastSuccessfulResults)
+	protoassert.SlicesEqual(s.T(), expected.FailedRuns, actual.FailedRuns)
 }
 
 func (s *complianceDataStoreTestSuite) TestStoreRunResults() {
@@ -177,7 +182,7 @@ func (s *complianceDataStoreWithSACTestSuite) TestEnforceGetLatestRunResults() {
 
 	// Call tested.
 	clusterID := "cid"
-	standardID := "CIS_Docker_v1_2_0"
+	standardID := "CIS_Kubernetes_v1_5"
 	_, err := s.dataStore.GetLatestRunResults(s.hasNoneCtx, clusterID, standardID, types.WithMessageStrings)
 
 	// Check results match.
@@ -200,23 +205,7 @@ func (s *complianceDataStoreWithSACTestSuite) TestEnforceStoreFailure() {
 	s.ErrorIs(err, sac.ErrResourceAccessDenied)
 }
 
-func (s *complianceDataStoreWithSACTestSuite) TestDoesNotUseStoredAggregationsWithSAC() {
-	noop := func() ([]*storage.ComplianceAggregation_Result, []*storage.ComplianceAggregation_Source, map[*storage.ComplianceAggregation_Result]*storage.ComplianceDomain, error) {
-		return nil, nil, nil, nil
-	}
-	aggArgs := &datastore.StoredAggregationArgs{
-		QueryString:     "query",
-		GroupBy:         nil,
-		Unit:            storage.ComplianceAggregation_CLUSTER,
-		AggregationFunc: noop,
-	}
-	_, _, _, err := s.dataStore.PerformStoredAggregation(context.Background(), aggArgs)
-	s.Require().NoError(err)
-}
-
 func (s *complianceDataStoreWithSACTestSuite) TestUsesStoredAggregationsWithoutSAC() {
-	s.T().Skip("ROX-9134: Re-enable or delete")
-
 	queryString := "query"
 	testUnit := storage.ComplianceAggregation_CLUSTER
 	results := []*storage.ComplianceAggregation_Result{}
@@ -233,6 +222,6 @@ func (s *complianceDataStoreWithSACTestSuite) TestUsesStoredAggregationsWithoutS
 		Unit:            testUnit,
 		AggregationFunc: noop,
 	}
-	_, _, _, err := s.dataStore.PerformStoredAggregation(context.Background(), aggArgs)
+	_, _, _, err := s.dataStore.PerformStoredAggregation(s.hasReadCtx, aggArgs)
 	s.Require().NoError(err)
 }

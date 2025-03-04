@@ -31,8 +31,10 @@ echo "Creating sensor secrets..."
 ${KUBE_COMMAND} apply -f "$DIR/sensor-secret.yaml"
 echo "Creating sensor RBAC roles..."
 ${KUBE_COMMAND} apply -f "$DIR/sensor-rbac.yaml"
-echo "Creating sensor security context constraints..."
-${KUBE_COMMAND} apply -f "$DIR/sensor-scc.yaml"
+if [[ -f "$DIR/sensor-compliance-rbac.yaml" ]]; then
+    echo "Creating sensor compliance RBAC roles..."
+    ${KUBE_COMMAND} apply -f "$DIR/sensor-compliance-rbac.yaml"
+fi
 echo "Creating sensor network policies..."
 ${KUBE_COMMAND} apply -f "$DIR/sensor-netpol.yaml"
 
@@ -44,6 +46,11 @@ if [[ -f "$DIR/sensor-pod-security.yaml" ]]; then
     echo "Creating sensor pod security policies..."
     ${KUBE_COMMAND} apply -f "$DIR/sensor-pod-security.yaml"
   fi
+fi
+
+if [[ -f "$DIR/openshift-monitoring.yaml" ]]; then
+    echo "Creating OpenShift monitoring configuration..."
+    ${KUBE_COMMAND} apply -f "$DIR/openshift-monitoring.yaml"
 fi
 
 # OpenShift roles can be delayed to be added
@@ -83,8 +90,6 @@ type: kubernetes.io/dockerconfigjson
 EOF
 fi
 
-echo "Creating admission controller security context constraints..."
-${KUBE_COMMAND} apply -f "$DIR/admission-controller-scc.yaml"
 echo "Creating admission controller secrets..."
 ${KUBE_COMMAND} apply -f "$DIR/admission-controller-secret.yaml"
 echo "Creating admission controller RBAC roles..."
@@ -111,7 +116,6 @@ ${KUBE_COMMAND} apply -f "$DIR/collector-rbac.yaml"
 echo "Creating collector network policies..."
 ${KUBE_COMMAND} apply -f "$DIR/collector-netpol.yaml"
 if [[ -f "$DIR/collector-pod-security.yaml" ]]; then
-  ${KUBE_COMMAND} apply -f "$DIR/collector-pod-security.yaml"
   if [[ "${SUPPORTS_PSP}" -eq 0 ]]; then
     echo "Pod security policies are not supported on this cluster. Skipping..."
   else

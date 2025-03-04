@@ -2,12 +2,10 @@ package role
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -21,7 +19,7 @@ func TestValidateRole(t *testing.T) {
 				"Policy": storage.Access_READ_ACCESS,
 			},
 		},
-		"role must reference an existing permission set": constructRole("role with no permission set", "", ""),
+		"role must reference an existing permission set": constructRole("role with no permission set", "", GenerateAccessScopeID()),
 		"empty access scope reference is not allowed":    constructRole("role with no access scope", GeneratePermissionSetID(), ""),
 	}
 
@@ -53,12 +51,7 @@ func constructRole(name, permissionSetID, accessScopeID string) *storage.Role {
 }
 
 func TestValidatePermissionSet(t *testing.T) {
-	var mockGoodID string
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		mockGoodID = uuid.NewDummy().String()
-	} else {
-		mockGoodID = permissionSetIDPrefix + "Tanis Half-Elven"
-	}
+	mockGoodID := uuid.NewDummy().String()
 	mockBadID := "Tanis Half-Elven"
 	mockName := "Hero of the Lance"
 	mockGoodResource := "K8sRoleBinding"
@@ -116,41 +109,11 @@ func TestValidatePermissionSet(t *testing.T) {
 
 func TestGeneratePermissionSetID(t *testing.T) {
 	generatedID := GeneratePermissionSetID()
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		assert.True(t, strings.HasPrefix(generatedID, permissionSetIDPrefix))
-	}
-	var generatedIDSuffix string
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		generatedIDSuffix = generatedID
-	} else {
-		generatedIDSuffix = strings.TrimPrefix(generatedID, permissionSetIDPrefix)
-	}
-	_, err := uuid.FromString(generatedIDSuffix)
+	_, err := uuid.FromString(generatedID)
 	assert.NoError(t, err)
 }
 
-func TestEnsureValidPermissionSetID(t *testing.T) {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		t.Skip()
-	}
-	validID := GeneratePermissionSetID()
-	checkedValidID := EnsureValidPermissionSetID(validID)
-	assert.Equal(t, validID, checkedValidID)
-
-	suffix := "some identifier"
-	// Test that prefixed ID is returned as is
-	prefixedID := permissionSetIDPrefix + suffix
-	checkedPrefixedID := EnsureValidPermissionSetID(prefixedID)
-	assert.Equal(t, prefixedID, checkedPrefixedID)
-	// Test that unprefixed ID is returned with permissionSetID prefix prepended
-	checkedNonPrefixedID := EnsureValidPermissionSetID(suffix)
-	assert.Equal(t, permissionSetIDPrefix+suffix, checkedNonPrefixedID)
-}
-
 func TestEnsureValidPermissionSetIDPostgres(t *testing.T) {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		t.Skip()
-	}
 	validID := GeneratePermissionSetID()
 	checkedValidID := EnsureValidPermissionSetID(validID)
 	assert.Equal(t, validID, checkedValidID)
@@ -164,13 +127,9 @@ func TestEnsureValidPermissionSetIDPostgres(t *testing.T) {
 }
 
 func TestValidateSimpleAccessScope(t *testing.T) {
-	var mockGoodID string
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		mockGoodID = uuid.NewDummy().String()
-	} else {
-		mockGoodID = EnsureValidAccessScopeID("42")
-	}
+	mockGoodID := uuid.NewDummy().String()
 	mockBadID := "42"
+	emptyID := ""
 	mockName := "Heart of Gold"
 	mockDescription := "HHGTTG"
 	mockGoodRules := &storage.SimpleAccessScope_Rules{
@@ -225,6 +184,11 @@ func TestValidateSimpleAccessScope(t *testing.T) {
 		{
 			name:                   "id is missing",
 			scope:                  &storage.SimpleAccessScope{Name: mockName, Rules: &storage.SimpleAccessScope_Rules{}},
+			expectedNumberOfErrors: 1,
+		},
+		{
+			name:                   "empty id",
+			scope:                  &storage.SimpleAccessScope{Id: emptyID, Name: mockName, Rules: &storage.SimpleAccessScope_Rules{}},
 			expectedNumberOfErrors: 1,
 		}, {
 			name:                   "name is missing",
@@ -325,16 +289,7 @@ func TestGenerateAccessScopeID(t *testing.T) {
 	generatedID := GenerateAccessScopeID()
 	validID := EnsureValidAccessScopeID(generatedID)
 	assert.Equal(t, generatedID, validID)
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		assert.True(t, strings.HasPrefix(generatedID, accessScopeIDPrefix))
-	}
-	var generatedIDSuffix string
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		generatedIDSuffix = generatedID
-	} else {
-		generatedIDSuffix = strings.TrimPrefix(generatedID, accessScopeIDPrefix)
-	}
-	_, err := uuid.FromString(generatedIDSuffix)
+	_, err := uuid.FromString(generatedID)
 	assert.NoError(t, err)
 }
 
@@ -343,21 +298,10 @@ func TestEnsureValidAccessScopeID(t *testing.T) {
 	checkedValidID := EnsureValidAccessScopeID(validID)
 	assert.Equal(t, validID, checkedValidID)
 
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		// Test that an invalid ID triggers the generation of a valid UUID.
-		invalidID := "abcdefgh-ijkl-mnop-qrst-uvwxyz012345"
-		checkedInvalidID := EnsureValidAccessScopeID(invalidID)
-		assert.NotEqual(t, invalidID, checkedInvalidID)
-		_, err := uuid.FromString(checkedInvalidID)
-		assert.NoError(t, err)
-	} else {
-		suffix := "some identifier"
-		// Test that prefixed ID is returned as is
-		prefixedID := accessScopeIDPrefix + suffix
-		checkedPrefixedID := EnsureValidAccessScopeID(prefixedID)
-		assert.Equal(t, prefixedID, checkedPrefixedID)
-		// Test that unprefixed ID is returned with permissionSetID prefix prepended
-		checkedNonPrefixedID := EnsureValidAccessScopeID(suffix)
-		assert.Equal(t, accessScopeIDPrefix+suffix, checkedNonPrefixedID)
-	}
+	// Test that an invalid ID triggers the generation of a valid UUID.
+	invalidID := "abcdefgh-ijkl-mnop-qrst-uvwxyz012345"
+	checkedInvalidID := EnsureValidAccessScopeID(invalidID)
+	assert.NotEqual(t, invalidID, checkedInvalidID)
+	_, err := uuid.FromString(checkedInvalidID)
+	assert.NoError(t, err)
 }

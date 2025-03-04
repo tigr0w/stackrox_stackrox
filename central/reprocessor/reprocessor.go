@@ -6,10 +6,11 @@ import (
 
 	"github.com/pkg/errors"
 	activeComponentsUpdater "github.com/stackrox/rox/central/activecomponent/updater"
+	administrationEvents "github.com/stackrox/rox/central/administration/events"
 	deploymentDatastore "github.com/stackrox/rox/central/deployment/datastore"
 	"github.com/stackrox/rox/central/enrichment"
-	"github.com/stackrox/rox/central/globaldb/dackbox"
 	imageDatastore "github.com/stackrox/rox/central/image/datastore"
+	"github.com/stackrox/rox/central/metrics"
 	nodeDatastore "github.com/stackrox/rox/central/node/datastore"
 	"github.com/stackrox/rox/central/risk/manager"
 	"github.com/stackrox/rox/central/sensor/service/connection"
@@ -18,13 +19,14 @@ import (
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/dackbox/utils/queue"
 	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
 	imageEnricher "github.com/stackrox/rox/pkg/images/enricher"
 	"github.com/stackrox/rox/pkg/images/utils"
 	"github.com/stackrox/rox/pkg/logging"
 	nodeEnricher "github.com/stackrox/rox/pkg/nodes/enricher"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/options/deployments"
 	imageMapping "github.com/stackrox/rox/pkg/search/options/images"
@@ -36,7 +38,7 @@ import (
 )
 
 var (
-	log = logging.LoggerForModule()
+	log = logging.LoggerForModule(administrationEvents.EnableAdministrationEvents())
 
 	riskDedupeNamespace = uuid.NewV4()
 
@@ -47,26 +49,37 @@ var (
 
 	emptyCtx = context.Background()
 
+	delegateScanCtx = sac.WithGlobalAccessScopeChecker(
+		context.Background(),
+		sac.AllowFixedScopes(
+			sac.AccessModeScopeKeys(storage.Access_READ_ACCESS),
+			sac.ResourceScopeKeys(resources.Image),
+		),
+	)
+
 	imageClusterIDFieldPath = imageMapping.ImageDeploymentOptions.MustGet(search.ClusterID.String()).GetFieldPath()
 
 	allImagesQuery = search.NewQueryBuilder().AddStringsHighlighted(search.ClusterID, search.WildcardString).
 			ProtoQuery()
 
-	imagesWithSignatureVerificationResultsQuery = search.NewQueryBuilder().
-							AddStringsHighlighted(search.ClusterID, search.WildcardString).
-							AddDays(search.ImageSignatureFetchedTime, 0).ProtoQuery()
+	imagesWithSignaturesQuery = search.NewQueryBuilder().
+		// We take all images into account irrespective whether they have a cluster associated with them
+		// or not. The reason is that we want to reprocess those in case e.g. a previous signature
+		// verification failure lead to an enforcement, which would make the image not have any cluster
+		// associated with it.
+		AddTimeRangeField(search.ImageSignatureFetchedTime,
+			// Could potentially miss images that _just_ fetched signatures so creating a small jitter
+			// to include those as well.
+			time.Unix(0, 0), time.Now().Add(10*time.Second)).
+		ProtoQuery()
 )
 
 // Singleton returns the singleton reprocessor loop
 func Singleton() Loop {
 	once.Do(func() {
-		var dackboxIndexQueue queue.WaitableQueue
-		if !env.PostgresDatastoreEnabled.BooleanSetting() {
-			dackboxIndexQueue = dackbox.GetIndexQueue()
-		}
 		loop = NewLoop(connection.ManagerSingleton(), enrichment.ImageEnricherSingleton(), enrichment.NodeEnricherSingleton(),
 			deploymentDatastore.Singleton(), imageDatastore.Singleton(), nodeDatastore.Singleton(), manager.Singleton(),
-			watchedImageDataStore.Singleton(), activeComponentsUpdater.Singleton(), dackboxIndexQueue)
+			watchedImageDataStore.Singleton(), activeComponentsUpdater.Singleton())
 	})
 	return loop
 }
@@ -80,16 +93,17 @@ type Loop interface {
 	Stop()
 
 	ReprocessRiskForDeployments(deploymentIDs ...string)
-	ReprocessSignatureVerifications()
+	ReprocessSignatureVerifications(firstIntegration bool)
 }
 
 // NewLoop returns a new instance of a Loop.
 func NewLoop(connManager connection.Manager, imageEnricher imageEnricher.ImageEnricher, nodeEnricher nodeEnricher.NodeEnricher,
 	deployments deploymentDatastore.DataStore, images imageDatastore.DataStore, nodes nodeDatastore.DataStore,
-	risk manager.Manager, watchedImages watchedImageDataStore.DataStore, acUpdater activeComponentsUpdater.Updater, indexQueue queue.WaitableQueue) Loop {
+	risk manager.Manager, watchedImages watchedImageDataStore.DataStore, acUpdater activeComponentsUpdater.Updater) Loop {
 	return newLoopWithDuration(
-		connManager, imageEnricher, nodeEnricher, deployments, images, nodes, risk, watchedImages,
-		env.ReprocessInterval.DurationSetting(), 15*time.Second, env.ActiveVulnRefreshInterval.DurationSetting(), acUpdater, indexQueue)
+		connManager, imageEnricher, nodeEnricher, deployments, images, nodes, risk,
+		watchedImages, env.ReprocessInterval.DurationSetting(), env.RiskReprocessInterval.DurationSetting(),
+		env.ActiveVulnRefreshInterval.DurationSetting(), acUpdater)
 }
 
 // newLoopWithDuration returns a loop that ticks at the given duration.
@@ -97,8 +111,8 @@ func NewLoop(connManager connection.Manager, imageEnricher imageEnricher.ImageEn
 // to enable testing.
 func newLoopWithDuration(connManager connection.Manager, imageEnricher imageEnricher.ImageEnricher, nodeEnricher nodeEnricher.NodeEnricher,
 	deployments deploymentDatastore.DataStore, images imageDatastore.DataStore, nodes nodeDatastore.DataStore,
-	risk manager.Manager, watchedImages watchedImageDataStore.DataStore, enrichAndDetectDuration, deploymentRiskDuration time.Duration,
-	activeComponentTickerDuration time.Duration, acUpdater activeComponentsUpdater.Updater, indexQueue queue.WaitableQueue) *loopImpl {
+	risk manager.Manager, watchedImages watchedImageDataStore.DataStore, enrichAndDetectDuration, deploymentRiskDuration,
+	activeComponentTickerDuration time.Duration, acUpdater activeComponentsUpdater.Updater) *loopImpl {
 	return &loopImpl{
 		enrichAndDetectTickerDuration: enrichAndDetectDuration,
 		deploymentRiskTickerDuration:  deploymentRiskDuration,
@@ -127,7 +141,6 @@ func newLoopWithDuration(connManager connection.Manager, imageEnricher imageEnri
 		signatureVerificationSig: concurrency.NewSignal(),
 
 		connManager: connManager,
-		indexQueue:  indexQueue,
 	}
 }
 
@@ -165,12 +178,12 @@ type loopImpl struct {
 	riskStopped       concurrency.Signal
 	enrichmentStopped concurrency.Signal
 
-	signatureVerificationSig concurrency.Signal
+	signatureVerificationSig  concurrency.Signal
+	firstSignatureIntegration concurrency.Flag
 
 	reprocessingInProgress concurrency.Flag
 
 	connManager connection.Manager
-	indexQueue  queue.WaitableQueue
 }
 
 func (l *loopImpl) ReprocessRiskForDeployments(deploymentIDs ...string) {
@@ -205,10 +218,11 @@ func (l *loopImpl) ShortCircuit() {
 	l.shortCircuitSig.Signal()
 }
 
-func (l *loopImpl) ReprocessSignatureVerifications() {
+func (l *loopImpl) ReprocessSignatureVerifications(firstIntegration bool) {
 	// Signal that we should reprocess signature verifications for all images. This will only trigger a reprocess with
 	// refetch of signature verification results.
 	// If the signal is already triggered, then the current signal is effectively deduped.
+	l.firstSignatureIntegration.Set(firstIntegration)
 	l.signatureVerificationSig.Signal()
 }
 
@@ -220,7 +234,7 @@ func (l *loopImpl) sendDeployments(deploymentIDs []string) {
 
 	results, err := l.deployments.SearchDeployments(allAccessCtx, query.ProtoQuery())
 	if err != nil {
-		log.Errorf("error getting results for deployment reprocessing: %v", err)
+		log.Errorw("Error getting results for deployment reprocessing", logging.Err(err))
 		return
 	}
 
@@ -267,7 +281,8 @@ func (l *loopImpl) runReprocessingForObjects(entityType string, getIDsFunc func(
 	}
 	ids, err := getIDsFunc()
 	if err != nil {
-		log.Errorf("Reprocessing failed: error retrieving active ids for %s: %v", entityType, err)
+		log.Errorw("Failed to retrieve active IDs for entity", logging.String("entity", entityType),
+			logging.Err(err))
 		return
 	}
 	log.Infof("Found %d %ss to scan", len(ids), entityType)
@@ -278,7 +293,7 @@ func (l *loopImpl) runReprocessingForObjects(entityType string, getIDsFunc func(
 	for _, id := range ids {
 		wg.Add(1)
 		if err := sema.Acquire(concurrency.AsContext(&l.stopSig), 1); err != nil {
-			log.Errorf("context cancelled via stop: %v", err)
+			log.Errorw("Reprocessing stopped", logging.Err(err))
 			return
 		}
 		go func(id string) {
@@ -286,9 +301,6 @@ func (l *loopImpl) runReprocessingForObjects(entityType string, getIDsFunc func(
 			defer wg.Add(-1)
 			if individualReprocessFunc(id) {
 				nReprocessed.Inc()
-				if !env.PostgresDatastoreEnabled.BooleanSetting() {
-					l.waitForIndexing()
-				}
 			}
 		}(id)
 	}
@@ -306,7 +318,7 @@ func (l *loopImpl) reprocessImage(id string, fetchOpt imageEnricher.FetchOption,
 	reprocessingFunc imageReprocessingFunc) (*storage.Image, bool) {
 	image, exists, err := l.images.GetImage(allAccessCtx, id)
 	if err != nil {
-		log.Errorf("error fetching image %q from the database: %v", id, err)
+		log.Errorw("Error fetching image from database", logging.ImageID(id), logging.Err(err))
 		return nil, false
 	}
 	if !exists || image.GetNotPullable() || image.GetIsClusterLocal() {
@@ -318,20 +330,29 @@ func (l *loopImpl) reprocessImage(id string, fetchOpt imageEnricher.FetchOption,
 	}, image)
 
 	if err != nil {
-		log.Errorf("error enriching image: %v", err)
+		log.Errorw("Error enriching image", logging.ImageName(image.GetName().GetFullName()), logging.Err(err))
 		return nil, false
 	}
 	if result.ImageUpdated {
 		if err := l.risk.CalculateRiskAndUpsertImage(image); err != nil {
-			log.Errorf("error upserting image %q into datastore: %v", image.GetName().GetFullName(), err)
+			log.Errorw("Error upserting image into datastore",
+				logging.ImageName(image.GetName().GetFullName()), logging.Err(err))
 			return nil, false
 		}
+		// We need to fetch the image again to make sure all fields are populated.
+		// GetImage will internally call a Merge function which will use the CVEEdges table to enrich fields like
+		// FirstImageOccurrence and FirstSystemOccurrence.
+		newImage, exists, err := l.images.GetImage(allAccessCtx, id)
+		if err != nil {
+			log.Errorw("Error fetching image from database", logging.ImageName(image.GetName().GetFullName()), logging.Err(err))
+			return nil, false
+		}
+		if !exists {
+			log.Errorw("The image was not found after enrichement", logging.ImageName(image.GetName().GetFullName()))
+			return nil, false
+		}
+		return newImage, true
 	}
-
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		l.waitForIndexing()
-	}
-
 	return image, true
 }
 
@@ -345,16 +366,6 @@ func (l *loopImpl) getActiveImageIDs() ([]string, error) {
 	return search.ResultsToIDs(results), nil
 }
 
-func (l *loopImpl) waitForIndexing() {
-	indexingCompleted := concurrency.NewSignal()
-	l.indexQueue.PushSignal(&indexingCompleted)
-
-	select {
-	case <-indexingCompleted.Done():
-	case <-l.stopSig.Done():
-	}
-}
-
 func (l *loopImpl) reprocessImagesAndResyncDeployments(fetchOpt imageEnricher.FetchOption,
 	imgReprocessingFunc imageReprocessingFunc, imageQuery *v1.Query) {
 	if l.stopSig.IsDone() {
@@ -362,7 +373,7 @@ func (l *loopImpl) reprocessImagesAndResyncDeployments(fetchOpt imageEnricher.Fe
 	}
 	results, err := l.images.Search(allAccessCtx, imageQuery)
 	if err != nil {
-		log.Errorf("error searching for active image IDs: %v", err)
+		log.Errorw("Error searching for active image IDs", logging.Err(err))
 		return
 	}
 
@@ -377,7 +388,7 @@ func (l *loopImpl) reprocessImagesAndResyncDeployments(fetchOpt imageEnricher.Fe
 	for _, result := range results {
 		wg.Add(1)
 		if err := sema.Acquire(concurrency.AsContext(&l.stopSig), 1); err != nil {
-			log.Errorf("context cancelled via stop: %v", err)
+			log.Errorw("Reprocessing stopped", logging.Err(err))
 			return
 		}
 		// Duplicates can exist if the image is within multiple deployments
@@ -406,7 +417,8 @@ func (l *loopImpl) reprocessImagesAndResyncDeployments(fetchOpt imageEnricher.Fe
 					},
 				})
 				if err != nil {
-					log.Errorf("error injecting updated image %s to Sensor %q: %v", image.GetName().GetFullName(), clusterID, err)
+					log.Errorw("Error sending updated image to sensor "+clusterID,
+						logging.ImageName(image.GetName().GetFullName()), logging.Err(err))
 				}
 			}
 		}(result.ID, clusterIDSet)
@@ -418,7 +430,7 @@ func (l *loopImpl) reprocessImagesAndResyncDeployments(fetchOpt imageEnricher.Fe
 		return
 	}
 	log.Infof("Successfully reprocessed %d/%d images", nReprocessed.Load(), len(results))
-	log.Infof("Resyncing deployments now that images have been reprocessed...")
+	log.Info("Resyncing deployments now that images have been reprocessed...")
 	// Once the images have been rescanned, then reprocess the deployments.
 	// This should not take a particularly long period of time.
 	if !l.stopSig.IsDone() {
@@ -433,11 +445,11 @@ func (l *loopImpl) reprocessImagesAndResyncDeployments(fetchOpt imageEnricher.Fe
 func (l *loopImpl) reprocessNode(id string) bool {
 	node, exists, err := l.nodes.GetNode(allAccessCtx, id)
 	if err != nil {
-		log.Errorf("fetching node (id: %q) from the database: %v", id, err)
+		log.Errorw("Error fetching node from the database", logging.NodeID(id), logging.Err(err))
 		return false
 	}
 	if !exists {
-		log.Warnf("fetching node (id: %q) from the database: node does not exist", id)
+		log.Warnw("Error fetching non-existing node from the database", logging.NodeID(id))
 		return false
 	}
 
@@ -449,7 +461,7 @@ func (l *loopImpl) reprocessNode(id string) bool {
 
 	err = l.nodeEnricher.EnrichNode(node)
 	if err != nil {
-		log.Errorf("enriching node %s: %v", nodeDatastore.NodeString(node), err)
+		log.Errorw("Error enriching node", logging.String("node", nodeDatastore.NodeString(node)), logging.Err(err))
 		return false
 	}
 	if err := l.risk.CalculateRiskAndUpsertNode(node); err != nil {
@@ -471,11 +483,19 @@ func (l *loopImpl) reprocessNodes() {
 }
 
 func (l *loopImpl) reprocessWatchedImage(name string) bool {
-	img, err := imageEnricher.EnrichImageByName(emptyCtx, l.imageEnricher, imageEnricher.EnrichmentContext{
+	enrichmentCtx := imageEnricher.EnrichmentContext{
 		FetchOpt: imageEnricher.IgnoreExistingImages,
-	}, name)
+	}
+
+	ctx := emptyCtx
+	if features.DelegateWatchedImageReprocessing.Enabled() {
+		ctx = delegateScanCtx
+		enrichmentCtx.Delegable = true
+	}
+
+	img, err := imageEnricher.EnrichImageByName(ctx, l.imageEnricher, enrichmentCtx, name)
 	if err != nil {
-		log.Errorf("Error enriching watched image with name %q: %v", name, err)
+		log.Errorw("Error enriching watched image", logging.ImageName(name), logging.Err(err))
 		return false
 	}
 	// Save the image
@@ -484,7 +504,7 @@ func (l *loopImpl) reprocessWatchedImage(name string) bool {
 		return false
 	}
 	if err := l.risk.CalculateRiskAndUpsertImage(img); err != nil {
-		log.Errorf("Failed to upsert watched image with name %q after enriching: %v", name, err)
+		log.Errorw("Error upserting watched image after enriching", logging.ImageName(name), logging.Err(err))
 		return false
 	}
 	return true
@@ -510,6 +530,7 @@ func (l *loopImpl) runReprocessing(imageFetchOpt imageEnricher.FetchOption) {
 	if l.reprocessingInProgress.TestAndSet(true) {
 		return
 	}
+	defer metrics.SetReprocessorDuration(time.Now())
 	l.reprocessNodes()
 	l.reprocessWatchedImages()
 	l.reprocessImagesAndResyncDeployments(imageFetchOpt, l.enrichImage, allImagesQuery)
@@ -518,10 +539,18 @@ func (l *loopImpl) runReprocessing(imageFetchOpt imageEnricher.FetchOption) {
 }
 
 func (l *loopImpl) runSignatureVerificationReprocessing() {
+	defer metrics.SetSignatureVerificationReprocessorDuration(time.Now())
 	l.reprocessWatchedImages()
-	l.reprocessImagesAndResyncDeployments(imageEnricher.ForceRefetchSignaturesOnly,
-		l.forceEnrichImageSignatureVerificationResults, imagesWithSignatureVerificationResultsQuery)
+	query := imagesWithSignaturesQuery
+	// If we have reprocessed when the _first_ signature integration is added, then take into account all images.
+	if l.firstSignatureIntegration.Get() {
+		query = allImagesQuery
+	}
 
+	l.reprocessImagesAndResyncDeployments(imageEnricher.ForceRefetchSignaturesOnly,
+		l.forceEnrichImageSignatureVerificationResults, query)
+
+	l.firstSignatureIntegration.Set(false)
 }
 
 func (l *loopImpl) forceEnrichImageSignatureVerificationResults(ctx context.Context, _ imageEnricher.EnrichmentContext,
@@ -566,13 +595,13 @@ func (l *loopImpl) riskLoop() {
 		case <-l.stopSig.Done():
 			return
 		case <-l.deploymentRiskTicker.C:
-			l.deploymentRiskLock.Lock()
-			if l.deploymentRiskSet.Cardinality() > 0 {
-				// goroutine to ensure this is non-blocking.
-				go l.sendDeployments(l.deploymentRiskSet.AsSlice())
-				l.deploymentRiskSet.Clear()
-			}
-			l.deploymentRiskLock.Unlock()
+			concurrency.WithLock(&l.deploymentRiskLock, func() {
+				if l.deploymentRiskSet.Cardinality() > 0 {
+					// goroutine to ensure this is non-blocking.
+					go l.sendDeployments(l.deploymentRiskSet.AsSlice())
+					l.deploymentRiskSet.Clear()
+				}
+			})
 		}
 	}
 }

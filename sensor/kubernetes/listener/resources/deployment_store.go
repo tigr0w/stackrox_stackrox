@@ -3,9 +3,10 @@ package resources
 import (
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
-	"github.com/stackrox/rox/sensor/common/imagecacheutils"
+	"github.com/stackrox/rox/sensor/common/image/cache"
 	"github.com/stackrox/rox/sensor/common/selector"
 	"github.com/stackrox/rox/sensor/common/store"
 )
@@ -18,13 +19,22 @@ type DeploymentStore struct {
 	deploymentIDs map[string]map[string]struct{}
 	// Stores deployments by IDs.
 	deployments map[string]*deploymentWrap
+
+	// deploymentSnapshots
+	deploymentSnapshots map[string]snapshotEntry
+}
+
+type snapshotEntry struct {
+	dependenciesHash uint64
+	builtDeployment  *storage.Deployment
 }
 
 // newDeploymentStore creates and returns a new deployment store.
 func newDeploymentStore() *DeploymentStore {
 	return &DeploymentStore{
-		deploymentIDs: make(map[string]map[string]struct{}),
-		deployments:   make(map[string]*deploymentWrap),
+		deploymentIDs:       make(map[string]map[string]struct{}),
+		deployments:         make(map[string]*deploymentWrap),
+		deploymentSnapshots: make(map[string]snapshotEntry),
 	}
 }
 
@@ -46,6 +56,16 @@ func (ds *DeploymentStore) addOrUpdateDeploymentNoLock(wrap *deploymentWrap) {
 	ds.deployments[wrap.GetId()] = wrap
 }
 
+// Cleanup deletes all entries from store
+func (ds *DeploymentStore) Cleanup() {
+	ds.lock.Lock()
+	defer ds.lock.Unlock()
+
+	ds.deploymentIDs = make(map[string]map[string]struct{})
+	ds.deployments = make(map[string]*deploymentWrap)
+	ds.deploymentSnapshots = make(map[string]snapshotEntry)
+}
+
 func (ds *DeploymentStore) removeDeployment(wrap *deploymentWrap) {
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
@@ -56,6 +76,7 @@ func (ds *DeploymentStore) removeDeployment(wrap *deploymentWrap) {
 	}
 	delete(ids, wrap.GetId())
 	delete(ds.deployments, wrap.GetId())
+	delete(ds.deploymentSnapshots, wrap.GetId())
 }
 
 func (ds *DeploymentStore) getDeploymentsByIDs(_ string, idSet set.StringSet) []*deploymentWrap {
@@ -126,7 +147,7 @@ func (ds *DeploymentStore) GetAll() []*storage.Deployment {
 	var ret []*storage.Deployment
 	for _, wrap := range ds.deployments {
 		if wrap != nil {
-			ret = append(ret, wrap.GetDeployment())
+			ret = append(ret, wrap.GetDeployment().CloneVT())
 		}
 	}
 	return ret
@@ -180,7 +201,7 @@ func (ds *DeploymentStore) findDeploymentIDsByImageNoLock(image *storage.Image) 
 	ids := set.NewStringSet()
 	for _, d := range ds.deployments {
 		for _, c := range d.GetContainers() {
-			if imagecacheutils.CompareImageCacheKey(c.GetImage(), image) {
+			if cache.CompareKeys(c.GetImage(), image) {
 				ids.Add(d.GetId())
 				// The deployment id is already the set, we can break here
 				break
@@ -214,8 +235,26 @@ func (ds *DeploymentStore) getWrapNoLock(id string) *deploymentWrap {
 
 // Get returns deployment for supplied id.
 func (ds *DeploymentStore) Get(id string) *storage.Deployment {
-	wrap := ds.getWrap(id)
-	return wrap.GetDeployment()
+	ds.lock.RLock()
+	defer ds.lock.RUnlock()
+
+	wrap := ds.getWrapNoLock(id)
+	return wrap.GetDeployment().CloneVT()
+}
+
+// GetSnapshot returns the snapshot of the deployment for the supplied id.
+// If the snapshot is not found, this functions returns a clone of the deployment.
+func (ds *DeploymentStore) GetSnapshot(id string) *storage.Deployment {
+	ds.lock.RLock()
+	defer ds.lock.RUnlock()
+
+	if features.SensorDeploymentBuildOptimization.Enabled() {
+		if d, ok := ds.deploymentSnapshots[id]; ok {
+			return d.builtDeployment
+		}
+	}
+	wrap := ds.getWrapNoLock(id)
+	return wrap.GetDeployment().CloneVT()
 }
 
 // GetBuiltDeployment returns a cloned deployment for supplied id and a flag if it is fully built.
@@ -226,33 +265,76 @@ func (ds *DeploymentStore) GetBuiltDeployment(id string) (*storage.Deployment, b
 	if wrap == nil {
 		return nil, false
 	}
-	return wrap.GetDeployment().Clone(), wrap.isBuilt
+	return wrap.GetDeployment().CloneVT(), wrap.isBuilt
+}
+
+// EnhanceDeploymentReadOnly takes a deployment.storage object and enhances it with available information
+// without changing the internal stores
+func (ds *DeploymentStore) EnhanceDeploymentReadOnly(d *storage.Deployment, dependencies store.Dependencies) {
+	wrap := deploymentWrap{
+		Deployment: d,
+	}
+	// Note: No need to check any pod info, as no new pods are created
+	wrap.populatePorts()
+	wrap.updateServiceAccountPermissionLevel(dependencies.PermissionLevel)
+	wrap.updatePortExposureSlice(dependencies.Exposures)
 }
 
 // BuildDeploymentWithDependencies creates storage.Deployment object using external object dependencies.
-func (ds *DeploymentStore) BuildDeploymentWithDependencies(id string, dependencies store.Dependencies) (*storage.Deployment, error) {
+func (ds *DeploymentStore) BuildDeploymentWithDependencies(id string, dependencies store.Dependencies) (*storage.Deployment, bool, error) {
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
 
 	// Get wrap with no lock since ds.lock.Lock() was already requested above
 	wrap, found := ds.deployments[id]
 	if !found || wrap == nil {
-		return nil, errors.Errorf("deployment with ID %s doesn't exist in the internal deployment store", id)
+		return nil, false, errors.Errorf("deployment with ID %s doesn't exist in the internal deployment store", id)
+	}
+
+	var dependencyHash uint64
+	if features.SensorDeploymentBuildOptimization.Enabled() {
+		var err error
+		snapshot, exists := ds.deploymentSnapshots[wrap.GetId()]
+
+		dependencyHash, err = dependencies.GetHash()
+		if err != nil {
+			return nil, false, errors.Wrap(err, "hashing deployment dependencies")
+		}
+
+		if wrap.isBuilt {
+			// check if dependencies changed, otherwise return an existing deployment object without needing to clone
+			// or check for hashes.
+			if exists && dependencyHash == snapshot.dependenciesHash {
+				return snapshot.builtDeployment, false, nil
+			}
+		}
 	}
 
 	wrap.updateServiceAccountPermissionLevel(dependencies.PermissionLevel)
 	wrap.updatePortExposureSlice(dependencies.Exposures)
-	if err := wrap.updateHash(); err != nil {
-		return nil, err
-	}
 
 	// These properties are set when initially parsing a deployment/pod event as a deploymentWrap. Since secrets could
 	// influence its values, we need to call this again with the same pods from the wrap. Inside this function we call
 	// the registry store and update `IsClusterLocal` and `NotPullable` based on it. Meaning that if a pull secret was
 	// updated, the value from this properties might need to be updated.
-	wrap.populateDataFromPods(wrap.pods...)
+	wrap.populateDataFromPods(dependencies.LocalImages, wrap.pods...)
+
+	if err := wrap.updateHash(); err != nil {
+		return nil, false, err
+	}
 
 	wrap.isBuilt = true
+
+	// If it's the first time we are building, or the snapshot is different, then update and clone the deployment
 	ds.addOrUpdateDeploymentNoLock(wrap)
-	return wrap.GetDeployment().Clone(), nil
+	clone := wrap.GetDeployment().CloneVT()
+
+	if features.SensorDeploymentBuildOptimization.Enabled() {
+		ds.deploymentSnapshots[clone.GetId()] = snapshotEntry{
+			dependenciesHash: dependencyHash,
+			builtDeployment:  clone,
+		}
+	}
+
+	return clone, true, nil
 }

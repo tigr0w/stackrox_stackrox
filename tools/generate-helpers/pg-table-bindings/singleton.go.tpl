@@ -1,4 +1,3 @@
-{{ $inMigration := ne (index . "Migration") nil}}
 {{define "schemaVar"}}pkgSchema.{{.Table|upperCamelCase}}Schema{{end}}
 {{define "paramList"}}{{range $index, $pk := .}}{{if $index}}, {{end}}{{$pk.ColumnName|lowerCamelCase}} {{$pk.Type}}{{end}}{{end}}
 {{define "argList"}}{{range $index, $pk := .}}{{if $index}}, {{end}}{{$pk.ColumnName|lowerCamelCase}}{{end}}{{end}}
@@ -16,20 +15,17 @@ import (
 
     "github.com/stackrox/rox/pkg/postgres"
     "github.com/pkg/errors"
-    {{- if not $inMigration}}
     "github.com/stackrox/rox/central/metrics"
-    "github.com/stackrox/rox/central/role/resources"
     pkgSchema "github.com/stackrox/rox/pkg/postgres/schema"
-    {{- else}}
-    pkgSchema "github.com/stackrox/rox/migrator/migrations/frozenschema/v73"
-    {{- end}}
     v1 "github.com/stackrox/rox/generated/api/v1"
     "github.com/stackrox/rox/generated/storage"
     "github.com/stackrox/rox/pkg/auth/permissions"
     "github.com/stackrox/rox/pkg/logging"
     ops "github.com/stackrox/rox/pkg/metrics"
     "github.com/stackrox/rox/pkg/postgres/pgutils"
+    "github.com/stackrox/rox/pkg/protocompat"
     "github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
     "github.com/stackrox/rox/pkg/search"
     pgSearch "github.com/stackrox/rox/pkg/search/postgres"
     "github.com/stackrox/rox/pkg/sync"
@@ -46,7 +42,7 @@ const (
 var (
     log = logging.LoggerForModule()
     schema = {{ template "schemaVar" .Schema}}
-    {{ if and (not $inMigration) (or (.Obj.IsGloballyScoped) (.Obj.IsDirectlyScoped)) -}}
+    {{ if and (or (.Obj.IsGloballyScoped) (.Obj.IsDirectlyScoped)) -}}
     targetResource = resources.{{.Type | storageToResource}}
     {{- end }}
 )
@@ -78,7 +74,7 @@ func New(db postgres.DB) Store {
 {{- define "insertObject"}}
 {{- $schema := .schema }}
 func {{ template "insertFunctionName" $schema }}(ctx context.Context, tx *postgres.Tx, obj {{$schema.Type}}{{ range $field := $schema.FieldsDeterminedByParent }}, {{$field.Name}} {{$field.Type}}{{end}}) error {
-    serialized, marshalErr := obj.Marshal()
+    serialized, marshalErr := obj.MarshalVT()
     if marshalErr != nil {
         return marshalErr
     }
@@ -87,7 +83,7 @@ func {{ template "insertFunctionName" $schema }}(ctx context.Context, tx *postgr
         // parent primary keys start
         {{- range $field := $schema.DBColumnFields -}}
         {{- if eq $field.DataType "datetime" }}
-        pgutils.NilOrTime({{$field.Getter "obj"}}),
+        protocompat.NilOrTime({{$field.Getter "obj"}}),
         {{- else if eq $field.SQLType "uuid" }}
         pgutils.NilOrUUID({{$field.Getter "obj"}}),
         {{- else }}
@@ -108,15 +104,14 @@ func {{ template "insertFunctionName" $schema }}(ctx context.Context, tx *postgr
 
 // Upsert saves the current state of an object in storage.
 func (s *storeImpl) Upsert(ctx context.Context, obj *{{.Type}}) error {
-    {{- if not $inMigration}}
     defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Upsert, "{{.TrimmedType}}")
 
     {{ template "defineScopeChecker" "READ_WRITE" }}
     if !scopeChecker.IsAllowed() {
         return sac.ErrResourceAccessDenied
     }
-    {{ end }}
-    return pgutils.Retry(func() error {
+
+    return pgutils.Retry(ctx, func() error {
         return s.retryableUpsert(ctx, obj)
     })
 }
@@ -151,15 +146,14 @@ func (s *storeImpl) retryableUpsert(ctx context.Context, obj *{{.Type}}) error {
 
 // Get returns the object, if it exists from the store.
 func (s *storeImpl) Get(ctx context.Context) (*{{.Type}}, bool, error) {
-    {{- if not $inMigration}}
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Get, "{{.TrimmedType}}")
 
     {{ template "defineScopeChecker" "READ" }}
     if !scopeChecker.IsAllowed() {
         return nil, false, nil
     }
-    {{ end}}
-    return pgutils.Retry3(func()(*{{.Type}}, bool, error) {
+
+    return pgutils.Retry3(ctx, func()(*{{.Type}}, bool, error) {
         return s.retryableGet(ctx)
     })
 }
@@ -178,16 +172,14 @@ func (s *storeImpl) retryableGet(ctx context.Context) (*{{.Type}}, bool, error) 
 	}
 
 	var msg {{.Type}}
-	if err := msg.Unmarshal(data); err != nil {
+	if err := msg.UnmarshalVTUnsafe(data); err != nil {
         return nil, false, err
 	}
 	return &msg, true, nil
 }
 
 func (s *storeImpl) acquireConn(ctx context.Context, op ops.Op, typ string) (*postgres.Conn, func(), error) {
-    {{- if not $inMigration}}
 	defer metrics.SetAcquireDBConnDuration(time.Now(), op, typ)
-    {{- end}}
 	conn, err := s.db.Acquire(ctx)
 	if err != nil {
 	    return nil, nil, err
@@ -197,15 +189,14 @@ func (s *storeImpl) acquireConn(ctx context.Context, op ops.Op, typ string) (*po
 
 // Delete removes the singleton from the store
 func (s *storeImpl) Delete(ctx context.Context) error {
-    {{- if not $inMigration}}
 	defer metrics.SetPostgresOperationDurationTime(time.Now(), ops.Remove, "{{.TrimmedType}}")
 
     {{ template "defineScopeChecker" "READ_WRITE" }}
     if !scopeChecker.IsAllowed() {
         return sac.ErrResourceAccessDenied
     }
-    {{ end}}
-    return pgutils.Retry(func() error {
+
+    return pgutils.Retry(ctx, func() error {
         return s.retryableDelete(ctx)
     })
 }

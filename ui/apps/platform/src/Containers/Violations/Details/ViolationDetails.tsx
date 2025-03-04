@@ -1,12 +1,14 @@
 import React, { ReactElement } from 'react';
 import { Divider, Flex, FlexItem, Title } from '@patternfly/react-core';
 
+import { LifecycleStage } from 'types/policy.proto';
+import { ProcessViolation, Violation } from 'types/alert.proto';
+
 import DeploytimeMessages from './DeploytimeMessages';
 import RuntimeMessages from './RuntimeMessages';
-import { ProcessViolation, LifecycleStage, Violation } from '../types/violationTypes';
 
 type ViolationDetailsProps = {
-    processViolation?: ProcessViolation;
+    processViolation: ProcessViolation | null;
     lifecycleStage: LifecycleStage;
     violations: Violation[];
 };
@@ -22,7 +24,7 @@ function ViolationDetails({
         <Flex>
             <Flex direction={{ default: 'column' }} flex={{ default: 'flex_1' }}>
                 <FlexItem>
-                    <Title headingLevel="h3" className="pf-u-mb-md">
+                    <Title headingLevel="h3" className="pf-v5-u-mb-md">
                         Violation events
                     </Title>
                     <Divider component="div" />

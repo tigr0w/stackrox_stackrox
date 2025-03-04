@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/pkg/grpc/authn"
 	idmocks "github.com/stackrox/rox/pkg/grpc/authn/mocks"
 	"github.com/stackrox/rox/pkg/grpc/requestinfo"
 	"github.com/stackrox/rox/pkg/telemetry/phonehome/telemeter"
 	"github.com/stackrox/rox/pkg/telemetry/phonehome/telemeter/mocks"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 )
@@ -62,10 +62,9 @@ func matchOptions(opts ...telemeter.Option) gomock.Matcher {
 
 func (s *interceptorTestSuite) TestAddGrpcInterceptor() {
 	testRP := &RequestParams{
-		Path:      "/v1.Abc",
-		Code:      0,
-		UserAgent: "test",
-		UserID:    nil,
+		Path:   "/v1.Abc",
+		Code:   0,
+		UserID: nil,
 		GRPCReq: &testRequest{
 			value: "test value",
 		},
@@ -95,10 +94,9 @@ func (s *interceptorTestSuite) TestAddGrpcInterceptor() {
 func (s *interceptorTestSuite) TestAddHttpInterceptor() {
 	mockID := idmocks.NewMockIdentity(s.ctrl)
 	testRP := &RequestParams{
-		Path:      "/v1/abc",
-		Code:      200,
-		UserAgent: "test",
-		UserID:    mockID,
+		Path:   "/v1/abc",
+		Code:   200,
+		UserID: mockID,
 	}
 	req, err := http.NewRequest(http.MethodPost, "https://test"+testRP.Path+"?test_key=test_value", nil)
 	s.NoError(err)
@@ -127,13 +125,13 @@ func (s *interceptorTestSuite) TestAddHttpInterceptor() {
 
 func (s *interceptorTestSuite) TestGrpcRequestInfo() {
 	testRP := &RequestParams{
-		Code:      0,
-		UserAgent: "test",
-		Path:      "/v1.Test",
+		Code:    0,
+		Path:    "/v1.Test",
+		Headers: withUserAgent(s.T(), nil, "test"),
 	}
 
 	md := metadata.New(nil)
-	md.Set("User-Agent", testRP.UserAgent)
+	md.Set(userAgentHeaderKey, testRP.Headers(userAgentHeaderKey)...)
 	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.UnixAddr{Net: "pipe"}})
 
 	rih := requestinfo.NewRequestInfoHandler()
@@ -143,24 +141,25 @@ func (s *interceptorTestSuite) TestGrpcRequestInfo() {
 	rp := getGRPCRequestDetails(ctx, err, testRP.Path, "request")
 	s.Equal(testRP.Path, rp.Path)
 	s.Equal(testRP.Code, rp.Code)
-	s.Equal(testRP.UserAgent, rp.UserAgent)
 	s.Nil(rp.UserID)
 	s.Equal("request", rp.GRPCReq)
+	s.Equal(testRP.Headers(userAgentHeaderKey), rp.Headers(userAgentHeaderKey))
 }
 
 func (s *interceptorTestSuite) TestGrpcWithHTTPRequestInfo() {
 	req, _ := http.NewRequest("PATCH", "/wrapped/http", nil)
+	req.Header.Add(userAgentHeaderKey, "user")
 	rih := requestinfo.NewRequestInfoHandler()
 	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.UnixAddr{Net: "pipe"}})
 	md := rih.AnnotateMD(ctx, req)
-	md.Set("User-Agent", "test")
+	md.Set(userAgentHeaderKey, "gateway")
 
 	ctx, err := rih.UpdateContextForGRPC(metadata.NewIncomingContext(ctx, md))
 	s.NoError(err)
 
 	rp := getGRPCRequestDetails(ctx, err, "ignored grpc method", "request")
 	s.Equal(http.StatusOK, rp.Code)
-	s.Equal("test", rp.UserAgent)
+	s.Equal([]string{"gateway", "user"}, rp.Headers(userAgentHeaderKey))
 	s.Nil(rp.UserID)
 	s.Equal("request", rp.GRPCReq)
 	s.Equal("/wrapped/http", rp.Path)
@@ -201,20 +200,20 @@ func (s *interceptorTestSuite) TestGrpcWithBody() {
 func (s *interceptorTestSuite) TestHttpRequestInfo() {
 	mockID := idmocks.NewMockIdentity(s.ctrl)
 	testRP := &RequestParams{
-		UserID:    mockID,
-		Code:      200,
-		UserAgent: "test",
-		Path:      "/v1/test",
+		UserID:  mockID,
+		Code:    200,
+		Headers: withUserAgent(s.T(), nil, "test"),
+		Path:    "/v1/test",
 	}
 
 	req, err := http.NewRequest(http.MethodPost, "https://test"+testRP.Path+"?test_key=test_value", nil)
 	s.NoError(err)
-	req.Header.Add("User-Agent", testRP.UserAgent)
+	req.Header.Add(userAgentHeaderKey, testRP.Headers(userAgentHeaderKey)[0])
 
 	ctx := authn.ContextWithIdentity(context.Background(), testRP.UserID, nil)
 	rp := getHTTPRequestDetails(ctx, req, 200)
 	s.Equal(testRP.Path, rp.Path)
 	s.Equal(testRP.Code, rp.Code)
-	s.Equal(testRP.UserAgent, rp.UserAgent)
 	s.Equal(mockID, rp.UserID)
+	s.Equal(testRP.Headers(userAgentHeaderKey), rp.Headers(userAgentHeaderKey))
 }

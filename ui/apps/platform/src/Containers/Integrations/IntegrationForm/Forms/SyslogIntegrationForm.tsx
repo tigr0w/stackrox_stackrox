@@ -12,10 +12,13 @@ import {
     FormSelect,
     FormSelectOption,
     TextInput,
+    ToggleGroup,
+    ToggleGroupItem,
 } from '@patternfly/react-core';
 import { PlusCircleIcon, TrashIcon } from '@patternfly/react-icons';
 import * as yup from 'yup';
 import { FieldArray, FormikProvider } from 'formik';
+import merge from 'lodash/merge';
 
 import { SyslogNotifierIntegration as SyslogIntegration } from 'types/notifier.proto';
 
@@ -28,6 +31,8 @@ import { IntegrationFormProps } from '../integrationFormTypes';
 
 import IntegrationFormActions from '../IntegrationFormActions';
 import FormLabelGroup from '../FormLabelGroup';
+
+import './SyslogIntegrationForm.css';
 
 export const validationSchema = yup.object().shape({
     name: yup.string().required('Integration name is required'),
@@ -57,6 +62,7 @@ export const defaultValues: SyslogIntegration = {
     id: '',
     name: '',
     syslog: {
+        messageFormat: 'CEF',
         localFacility: undefined,
         extraFields: [],
         tcpConfig: {
@@ -76,10 +82,7 @@ function SyslogIntegrationForm({
     initialValues = null,
     isEditable = false,
 }: IntegrationFormProps<SyslogIntegration>): ReactElement {
-    const formInitialValues = initialValues
-        ? { ...defaultValues, ...initialValues }
-        : defaultValues;
-
+    const formInitialValues: SyslogIntegration = merge({}, defaultValues, initialValues);
     const formik = useIntegrationForm<SyslogIntegration>({
         initialValues: formInitialValues,
         validationSchema,
@@ -122,7 +125,7 @@ function SyslogIntegrationForm({
                                 type="text"
                                 id="name"
                                 value={values.name}
-                                onChange={onChange}
+                                onChange={(event, value) => onChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             />
@@ -138,7 +141,7 @@ function SyslogIntegrationForm({
                                 isRequired
                                 id="syslog.localFacility"
                                 value={values.syslog.localFacility}
-                                onChange={onChange}
+                                onChange={(event, value) => onChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             >
@@ -170,8 +173,8 @@ function SyslogIntegrationForm({
                                 type="text"
                                 id="syslog.tcpConfig.hostname"
                                 value={values.syslog.tcpConfig.hostname}
-                                placeholder="example, host.example.com)"
-                                onChange={onChange}
+                                placeholder="(example, host.example.com)"
+                                onChange={(event, value) => onChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             />
@@ -189,17 +192,48 @@ function SyslogIntegrationForm({
                                 type="number"
                                 id="syslog.tcpConfig.port"
                                 value={values.syslog.tcpConfig.port}
-                                onChange={onChange}
+                                onChange={(event, value) => onChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             />
+                        </FormLabelGroup>
+                        <FormLabelGroup
+                            label="Message Format"
+                            isRequired
+                            fieldId="messageFormat"
+                            touched={touched}
+                            errors={errors}
+                            helperText="For new integrations, choose CEF. If you have an existing integration that relies on the old behavior, leave Legacy selected."
+                        >
+                            <ToggleGroup id="messageFormat" areAllGroupsDisabled={!isEditable}>
+                                        <ToggleGroupItem
+                                            // The HTML ID and custom CSS rule are required to make the shorter option similar in size to the longer option
+                                            // because PatternFly does not allow the inner width of the toggle button to be expanded easily
+                                            // (setting a min-witch on Toggle Item just adds space to the right of the outlined button)
+                                            id="CEF-option"
+                                            key='CEF'
+                                            text="CEF"
+                                            isSelected={values.syslog.messageFormat === 'CEF'}
+                                            onChange={() =>
+                                                setFieldValue('syslog.messageFormat', 'CEF')
+                                            }
+                                        />
+                                        <ToggleGroupItem
+                                            key='LEGACY'
+                                            text="CEF (legacy field order)"
+                                            isSelected={values.syslog.messageFormat === 'LEGACY' || !values.syslog.messageFormat}
+                                            onChange={() =>
+                                                setFieldValue('syslog.messageFormat', 'LEGACY')
+                                            }
+                                        />
+                            </ToggleGroup>
                         </FormLabelGroup>
                         <FormLabelGroup fieldId="syslog.tcpConfig.useTls" errors={errors}>
                             <Checkbox
                                 label="Use TLS"
                                 id="syslog.tcpConfig.useTls"
                                 isChecked={values.syslog.tcpConfig.useTls}
-                                onChange={onChange}
+                                onChange={(event, value) => onChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             />
@@ -209,12 +243,12 @@ function SyslogIntegrationForm({
                                 label="Disable TLS certificate validation (insecure)"
                                 id="syslog.tcpConfig.skipTlsVerify"
                                 isChecked={values.syslog.tcpConfig.skipTlsVerify}
-                                onChange={onChange}
+                                onChange={(event, value) => onChange(value, event)}
                                 onBlur={handleBlur}
                                 isDisabled={!isEditable}
                             />
                         </FormLabelGroup>
-                        <FormSection title="Extra Fields" titleElement="h3" className="pf-u-mt-0">
+                        <FormSection title="Extra Fields" titleElement="h3" className="pf-v5-u-mt-0">
                             <FieldArray
                                 name="syslog.extraFields"
                                 render={(arrayHelpers) => (
@@ -242,7 +276,7 @@ function SyslogIntegrationForm({
                                                                             .extraFields[`${index}`]
                                                                             .key
                                                                     }
-                                                                    onChange={onChange}
+                                                                    onChange={(event, value) => onChange(value, event)}
                                                                     onBlur={handleBlur}
                                                                     isDisabled={!isEditable}
                                                                 />
@@ -264,7 +298,7 @@ function SyslogIntegrationForm({
                                                                             .extraFields[`${index}`]
                                                                             .value
                                                                     }
-                                                                    onChange={onChange}
+                                                                    onChange={(event, value) => onChange(value, event)}
                                                                     onBlur={handleBlur}
                                                                     isDisabled={!isEditable}
                                                                 />
@@ -297,7 +331,7 @@ function SyslogIntegrationForm({
                                                         variant="link"
                                                         isInline
                                                         icon={
-                                                            <PlusCircleIcon className="pf-u-mr-sm" />
+                                                            <PlusCircleIcon className="pf-v5-u-mr-sm" />
                                                         }
                                                         onClick={() =>
                                                             arrayHelpers.push({

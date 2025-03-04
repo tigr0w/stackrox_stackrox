@@ -6,24 +6,21 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/stackrox/rox/central/administration/events"
 	"github.com/stackrox/rox/central/apitoken/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 )
 
-const (
-	// The timestamp format / layout is borrowed from `pkg/search/postgres/query/time_query.go`. It would be worth exporting.
-	timestampLayout = "01/02/2006 3:04:05 PM MST"
-)
-
 var (
-	log = logging.LoggerForModule()
+	log = logging.LoggerForModule(events.EnableAdministrationEvents())
 
 	expirySearchCtx = sac.WithGlobalAccessScopeChecker(context.Background(),
 		sac.AllowFixedScopes(
@@ -70,10 +67,8 @@ func newExpirationNotifier(store datastore.DataStore) *expirationNotifierImpl {
 }
 
 func (n *expirationNotifierImpl) Start() {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		n.notificationTicker = time.NewTicker(env.APITokenExpirationNotificationInterval.DurationSetting())
-		go n.runExpirationNotifier()
-	}
+	n.notificationTicker = time.NewTicker(env.APITokenExpirationNotificationInterval.DurationSetting())
+	go n.runExpirationNotifier()
 }
 
 func (n *expirationNotifierImpl) Stop() {
@@ -101,11 +96,6 @@ func (n *expirationNotifierImpl) runExpirationNotifier() {
 }
 
 func (n *expirationNotifierImpl) checkAndNotifyExpirations() {
-	// Only works in Postgres Mode
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return
-	}
-
 	now := time.Now()
 	aboutToExpireDate := now.Add(env.APITokenExpirationExpirationWindow.DurationSetting())
 	staleNotificationDate := now.Add(-env.APITokenExpirationStaleNotificationAge.DurationSetting())
@@ -127,7 +117,7 @@ func (n *expirationNotifierImpl) checkAndNotifyExpirations() {
 	// The staleNotificationDate and staleNotificationTimestamp contain the point in time until which a notification
 	// is considered stale. If the last notification occurred before then, the back-off window has run out and a new
 	// notification can be sent. Otherwise, nothing needs to be done (at least) until the next loop cycle.
-	if notificationSchedule.GetLastRun().Compare(staleNotificationTimestamp) >= 0 {
+	if protocompat.CompareTimestamps(notificationSchedule.GetLastRun(), staleNotificationTimestamp) >= 0 {
 		return
 	}
 	notificationSchedule.LastRun = protoconv.ConvertTimeToTimestamp(now)
@@ -149,8 +139,8 @@ func (n *expirationNotifierImpl) checkAndNotifyExpirations() {
 }
 
 func (n *expirationNotifierImpl) listItemsToNotify(now time.Time, expiresUntil time.Time) ([]*storage.TokenMetadata, error) {
-	formattedNow := now.Format(timestampLayout)
-	formattedExpiresUntil := expiresUntil.Format(timestampLayout)
+	formattedNow := now.Format(datastore.TimestampLayout)
+	formattedExpiresUntil := expiresUntil.Format(datastore.TimestampLayout)
 	// Search tokens that expire before expiresUntil, that have not expired yet,
 	// and that have not been revoked.
 	// That is now < Expiration < expiresUntil and Revoked = false.
@@ -190,7 +180,7 @@ func generateExpiringTokenLog(token *storage.TokenMetadata, now time.Time, expir
 	if sliceCount != 1 {
 		sliceDuration = sliceName + "s"
 	}
-	return fmt.Sprintf("API Token %s (ID %s) will expire in less than %d %s.", token.GetName(), token.GetId(), sliceCount, sliceDuration)
+	return fmt.Sprintf("API Token will expire in less than %d %s", sliceCount, sliceDuration)
 }
 
 func (n *logExpirationNotifier) Notify(items []*storage.TokenMetadata) error {
@@ -198,7 +188,8 @@ func (n *logExpirationNotifier) Notify(items []*storage.TokenMetadata) error {
 	expirationSliceDuration := env.APITokenExpirationExpirationSlice.DurationSetting()
 	expirationSliceName := env.APITokenExpirationExpirationSliceName.Setting()
 	for _, token := range items {
-		log.Warnf(generateExpiringTokenLog(token, now, expirationSliceDuration, expirationSliceName))
+		log.Warnw(generateExpiringTokenLog(token, now, expirationSliceDuration, expirationSliceName),
+			logging.APITokenName(token.GetName()), logging.APITokenID(token.GetId()))
 	}
 	return nil
 }

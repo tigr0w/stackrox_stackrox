@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 
 	"github.com/pkg/errors"
@@ -26,7 +26,6 @@ import (
 
 const (
 	requestTimeout = 2 * time.Minute
-	typeString     = "clairV4"
 
 	indexStatePath          = "/indexer/api/v1/index_state"
 	indexReportPath         = "/indexer/api/v1/index_report"
@@ -44,7 +43,7 @@ var (
 
 // Creator provides the type a scanners.Creator to add to the scanners Registry.
 func Creator(set registries.Set) (string, func(integration *storage.ImageIntegration) (types.Scanner, error)) {
-	return typeString, func(integration *storage.ImageIntegration) (types.Scanner, error) {
+	return types.ClairV4, func(integration *storage.ImageIntegration) (types.Scanner, error) {
 		scan, err := newScanner(integration, set)
 		return scan, err
 	}
@@ -169,9 +168,11 @@ func (c *clairv4) GetScan(image *storage.Image) (*storage.ImageScan, error) {
 }
 
 func (c *clairv4) indexReportExists(digest string) (bool, error) {
-	// FIXME: go1.19 adds https://pkg.go.dev/net/url#JoinPath, which seems more idiomatic.
-	url := strings.Join([]string{c.indexReportEndpoint, digest}, "/")
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	path, err := url.JoinPath(c.indexReportEndpoint, digest)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequest(http.MethodGet, path, nil)
 	if err != nil {
 		return false, err
 	}
@@ -242,9 +243,11 @@ func (c *clairv4) index(manifest *claircore.Manifest) error {
 }
 
 func (c *clairv4) getVulnerabilityReport(digest string) (*claircore.VulnerabilityReport, error) {
-	// FIXME: go1.19 adds https://pkg.go.dev/net/url#JoinPath, which seems more idiomatic.
-	url := strings.Join([]string{c.vulnerabilityReportEndpoint, digest}, "/")
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	path, err := url.JoinPath(c.vulnerabilityReportEndpoint, digest)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +304,7 @@ func (c *clairv4) Test() error {
 }
 
 func (c *clairv4) Type() string {
-	return typeString
+	return types.ClairV4
 }
 
 func (c *clairv4) Name() string {

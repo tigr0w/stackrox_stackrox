@@ -11,7 +11,7 @@ import {
 
 import DescriptionListItem from 'Components/DescriptionListItem';
 import dateTimeFormat from 'constants/dateTimeFormat';
-import { NetworkFlowInfo } from '../types/violationTypes';
+import { NetworkFlowInfo } from 'types/alert.proto';
 
 export type NetworkFlowCardProps = {
     networkFlowInfo: NetworkFlowInfo;
@@ -27,9 +27,12 @@ function NetworkFlowCard({ networkFlowInfo, message, time }: NetworkFlowCardProp
     }
 
     return (
-        <div className="pf-u-mb-md" key={message} data-testid="networkFlow">
-            <Card isExpanded={isExpanded} id={message} isFlat>
-                <CardHeader onExpand={onExpand}>
+        <div className="pf-v5-u-mb-md">
+            <Card isExpanded={isExpanded} isFlat>
+                <CardHeader
+                    onExpand={onExpand}
+                    toggleButtonProps={{ 'aria-expanded': isExpanded, 'aria-label': 'Details' }}
+                >
                     <CardTitle>{message}</CardTitle>
                 </CardHeader>
                 <CardExpandableContent>

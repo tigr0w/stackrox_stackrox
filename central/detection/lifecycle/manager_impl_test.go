@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/types"
-	"github.com/golang/mock/gomock"
 	"github.com/pkg/errors"
 	queueMocks "github.com/stackrox/rox/central/deployment/queue/mocks"
 	alertManagerMocks "github.com/stackrox/rox/central/detection/alertmanager/mocks"
@@ -15,10 +13,12 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/fixtures"
+	"github.com/stackrox/rox/pkg/protoassert"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/uuid"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestManager(t *testing.T) {
@@ -60,7 +60,7 @@ func makeIndicator() (*storage.ProcessBaselineKey, *storage.ProcessIndicator) {
 	signal := &storage.ProcessSignal{
 		Id:           uuid.NewV4().String(),
 		ContainerId:  uuid.NewV4().String(),
-		Time:         types.TimestampNow(),
+		Time:         protocompat.TimestampNow(),
 		Name:         uuid.NewV4().String(),
 		Args:         uuid.NewV4().String(),
 		ExecFilePath: uuid.NewV4().String(),
@@ -156,7 +156,7 @@ func (suite *ManagerTestSuite) TestHandleResourceAlerts() {
 
 	// unfortunately because the filters are in a different package and have unexported functions it cannot be tested here. Alert Manager tests should cover it
 	suite.alertManager.EXPECT().
-		AlertAndNotify(gomock.Any(), alerts, gomock.Any(), gomock.Any(), gomock.Any()).
+		AlertAndNotify(gomock.Any(), alerts, gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(set.NewStringSet(), nil)
 
 	// reprocessor.ReprocessRiskForDeployments should _not_ be called for resource alerts
@@ -209,6 +209,6 @@ func TestFilterOutDisabledPolicies(t *testing.T) {
 
 		manager := &managerImpl{removedOrDisabledPolicies: c.removedPolicies}
 		manager.filterOutDisabledPolicies(&testAlerts)
-		assert.Equal(t, c.expectedAlerts, testAlerts)
+		protoassert.SlicesEqual(t, c.expectedAlerts, testAlerts)
 	}
 }

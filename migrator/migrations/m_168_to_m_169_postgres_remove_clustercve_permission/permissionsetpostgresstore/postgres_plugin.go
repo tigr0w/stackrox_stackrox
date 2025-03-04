@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/hashicorp/go-multierror"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
@@ -24,8 +24,6 @@ import (
 // The kept functions are stripped from the scoped access control checks.
 
 const (
-	baseTable = "permission_sets"
-
 	batchAfter = 100
 
 	// using copyFrom, we may not even want to batch.  It would probably be simpler
@@ -63,7 +61,7 @@ func New(db postgres.DB) Store {
 
 func insertIntoPermissionSets(_ context.Context, batch *pgx.Batch, obj *storage.PermissionSet) error {
 
-	serialized, marshalErr := obj.Marshal()
+	serialized, marshalErr := obj.MarshalVT()
 	if marshalErr != nil {
 		return marshalErr
 	}
@@ -104,7 +102,7 @@ func (s *storeImpl) copyFromPermissionSets(ctx context.Context, tx *postgres.Tx,
 		// Todo: ROX-9499 Figure out how to more cleanly template around this issue.
 		log.Debugf("This is here for now because there is an issue with pods_TerminatedInstances where the obj in the loop is not used as it only consists of the parent id and the idx.  Putting this here as a stop gap to simply use the object.  %s", obj)
 
-		serialized, marshalErr := obj.Marshal()
+		serialized, marshalErr := obj.MarshalVT()
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -200,7 +198,7 @@ func (s *storeImpl) upsert(ctx context.Context, objs ...*storage.PermissionSet) 
 
 func (s *storeImpl) UpsertMany(ctx context.Context, objs []*storage.PermissionSet) error {
 
-	return pgutils.Retry(func() error {
+	return pgutils.Retry(ctx, func() error {
 		// Lock since copyFrom requires a delete first before being executed.  If multiple processes are updating
 		// same subset of rows, both deletes could occur before the copyFrom resulting in unique constraint
 		// violations

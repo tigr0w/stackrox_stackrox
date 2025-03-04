@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/graph-gophers/graphql-go"
 	"github.com/stackrox/rox/central/audit"
 	clusterMockDS "github.com/stackrox/rox/central/cluster/datastore/mocks"
 	deploymentMockDS "github.com/stackrox/rox/central/deployment/datastore/mocks"
 	namespaceMockDS "github.com/stackrox/rox/central/namespace/datastore/mocks"
 	netPolMockDS "github.com/stackrox/rox/central/networkpolicies/datastore/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	secretMocks "github.com/stackrox/rox/central/secret/datastore/mocks"
 	serviceAccountMocks "github.com/stackrox/rox/central/serviceaccount/datastore/mocks"
 	v1 "github.com/stackrox/rox/generated/api/v1"
@@ -22,8 +20,10 @@ import (
 	mockIdentity "github.com/stackrox/rox/pkg/grpc/authn/mocks"
 	notifierMocks "github.com/stackrox/rox/pkg/notifier/mocks"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 // While it would've been nice to use the proto object, because of the oneofs and enums json unmarshalling into that object is a struggle
@@ -176,7 +176,7 @@ func (s *ServiceAccountResolverTestSuite) TestGetSaNamespace() {
 
 func (s *ServiceAccountResolverTestSuite) getMockContext(extraPerms ...permissions.ResourceMetadata) context.Context {
 	id := mockIdentity.NewMockIdentity(s.mockCtrl)
-	id.EXPECT().UID().Return(fakeUserID).AnyTimes()
+	id.EXPECT().UID().Return("fakeUserID").AnyTimes()
 	id.EXPECT().FullName().Return("First Last").AnyTimes()
 	id.EXPECT().FriendlyName().Return("DefinitelyNotBob").AnyTimes()
 

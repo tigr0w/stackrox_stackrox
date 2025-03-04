@@ -4,14 +4,19 @@ import (
 	"context"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 	metrics "github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/central/processlisteningonport/store"
 	"github.com/stackrox/rox/generated/storage"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
+)
+
+var (
+	plopSAC = sac.ForResource(resources.DeploymentExtension)
 )
 
 // NewFullStore augments the generated store with GetProcessListeningOnPort functions.
@@ -31,12 +36,14 @@ type fullStoreImpl struct {
 // process_indicators. Used to provide information for queries like 'give
 // me all PLOP by this deployment'.
 // XXX: Verify the query plan to make sure needed indexes are in use.
-const getByDeploymentStmt = "SELECT plop.id, plop.serialized, " +
+const getByDeploymentStmt = "SELECT plop.serialized, " +
 	"proc.serialized as proc_serialized " +
 	"FROM listening_endpoints plop " +
 	"LEFT OUTER JOIN process_indicators proc " +
 	"ON plop.processindicatorid = proc.id " +
 	"WHERE plop.deploymentid = $1 AND plop.closed = false"
+
+const getClusterAndNamespaceStmt = "SELECT namespace, clusterid FROM deployments WHERE id = $1"
 
 // Manually written function to get PLOP joined with ProcessIndicators
 func (s *fullStoreImpl) GetProcessListeningOnPort(
@@ -49,9 +56,76 @@ func (s *fullStoreImpl) GetProcessListeningOnPort(
 		"ProcessListeningOnPortStorage",
 	)
 
-	return pgutils.Retry2(func() ([]*storage.ProcessListeningOnPort, error) {
+	allowed, err := pgutils.Retry2(ctx, func() (bool, error) {
+		return s.checkAccess(ctx, deploymentID)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !allowed {
+		return nil, nil
+	}
+
+	return pgutils.Retry2(ctx, func() ([]*storage.ProcessListeningOnPort, error) {
 		return s.retryableGetPLOP(ctx, deploymentID)
 	})
+}
+
+func (s *fullStoreImpl) checkAccess(
+	ctx context.Context,
+	deploymentID string,
+) (bool, error) {
+
+	extendedCtx := sac.WithAllAccess(ctx)
+	rows, err := s.db.Query(extendedCtx, getClusterAndNamespaceStmt, deploymentID)
+
+	if err != nil {
+		// Do not be alarmed if the error is simply NoRows
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		log.Warnf("%s: %s", getClusterAndNamespaceStmt, err)
+
+		return false, err
+	}
+	defer rows.Close()
+
+	allowed, err := s.checkAccesssForRows(ctx, rows)
+
+	if err != nil {
+		return false, err
+	}
+
+	return allowed, nil
+}
+
+func (s *fullStoreImpl) checkAccesssForRows(
+	ctx context.Context,
+	rows pgx.Rows,
+) (bool, error) {
+
+	// There should only be one row
+	if rows.Next() {
+		var namespace string
+		var clusterID string
+
+		if err := rows.Scan(&namespace, &clusterID); err != nil {
+			return false, pgutils.ErrNilIfNoRows(err)
+		}
+
+		if ok, err := plopSAC.ReadAllowed(ctx, sac.ClusterScopeKey(clusterID), sac.NamespaceScopeKey(namespace)); err != nil {
+			return false, err
+		} else if !ok {
+			return false, sac.ErrResourceAccessDenied
+		}
+
+	} else {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (s *fullStoreImpl) retryableGetPLOP(
@@ -73,7 +147,7 @@ func (s *fullStoreImpl) retryableGetPLOP(
 	}
 	defer rows.Close()
 
-	results, err := s.readRows(rows)
+	results, err := s.readRows(ctx, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -84,15 +158,18 @@ func (s *fullStoreImpl) retryableGetPLOP(
 // Manual converting of raw data from SQL query to ProcessListeningOnPort (not
 // ProcessListeningOnPortStorage) object enriched with ProcessIndicator info.
 func (s *fullStoreImpl) readRows(
+	ctx context.Context,
 	rows pgx.Rows,
 ) ([]*storage.ProcessListeningOnPort, error) {
 	var plops []*storage.ProcessListeningOnPort
 
 	for rows.Next() {
-		var id string
 		var serialized []byte
 		var procSerialized []byte
 		var podID string
+		var podUID string
+		var clusterID string
+		var namespace string
 		var containerName string
 		var name string
 		var args string
@@ -100,19 +177,23 @@ func (s *fullStoreImpl) readRows(
 
 		// We're getting ProcessIndicator directly from the SQL query, PLOP
 		// parts have to be extra deserialized.
-		if err := rows.Scan(&id, &serialized, &procSerialized); err != nil {
+		if err := rows.Scan(&serialized, &procSerialized); err != nil {
 			return nil, pgutils.ErrNilIfNoRows(err)
 		}
 
 		var msg storage.ProcessListeningOnPortStorage
-		if err := proto.Unmarshal(serialized, &msg); err != nil {
+		if err := msg.UnmarshalVTUnsafe(serialized); err != nil {
 			return nil, err
 		}
 
 		var procMsg storage.ProcessIndicator
-		if err := proto.Unmarshal(procSerialized, &procMsg); err != nil {
-			return nil, err
+		if procSerialized != nil {
+			if err := procMsg.UnmarshalVTUnsafe(procSerialized); err != nil {
+				return nil, err
+			}
 		}
+
+		podUID = msg.GetPodUid()
 
 		if procMsg.GetPodId() != "" {
 			podID = procMsg.GetPodId()
@@ -126,6 +207,18 @@ func (s *fullStoreImpl) readRows(
 			name = msg.GetProcess().GetProcessName()
 			args = msg.GetProcess().GetProcessArgs()
 			execFilePath = msg.GetProcess().GetProcessExecFilePath()
+		}
+
+		if procMsg.GetClusterId() != "" {
+			clusterID = procMsg.GetClusterId()
+		} else {
+			clusterID = msg.GetClusterId()
+		}
+
+		if procMsg.GetNamespace() != "" {
+			namespace = procMsg.GetNamespace()
+		} else {
+			namespace = msg.GetNamespace()
 		}
 
 		// If we don't have any of this information from either the process indicator side or
@@ -142,7 +235,7 @@ func (s *fullStoreImpl) readRows(
 			},
 			DeploymentId:  msg.GetDeploymentId(),
 			PodId:         podID,
-			PodUid:        procMsg.GetPodUid(),
+			PodUid:        podUID,
 			ContainerName: containerName,
 			Signal: &storage.ProcessSignal{
 				Id:           procMsg.GetSignal().GetId(),
@@ -158,15 +251,21 @@ func (s *fullStoreImpl) readRows(
 				Scraped:      procMsg.GetSignal().GetScraped(),
 				LineageInfo:  procMsg.GetSignal().GetLineageInfo(),
 			},
-			ClusterId:          procMsg.GetClusterId(),
-			Namespace:          procMsg.GetNamespace(),
+			ClusterId:          clusterID,
+			Namespace:          namespace,
 			ContainerStartTime: procMsg.GetContainerStartTime(),
 			ImageId:            procMsg.GetImageId(),
 		}
 
-		plops = append(plops, plop)
+		if ok, err := plopSAC.ReadAllowed(ctx, sac.ClusterScopeKey(plop.ClusterId), sac.NamespaceScopeKey(plop.Namespace)); err == nil && ok {
+			plops = append(plops, plop)
+		}
 	}
 
 	log.Debugf("Read returned %+v plops", len(plops))
+	if len(plops) == 0 {
+		return nil, nil
+	}
+
 	return plops, nil
 }

@@ -13,14 +13,13 @@ import (
 	pgStore "github.com/stackrox/rox/central/resourcecollection/datastore/store/postgres"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
-	"gorm.io/gorm"
 )
 
 func TestCollectionDataStoreWithPostgres(t *testing.T) {
@@ -31,32 +30,21 @@ type CollectionPostgresDataStoreTestSuite struct {
 	suite.Suite
 
 	ctx       context.Context
-	db        postgres.DB
-	gormDB    *gorm.DB
+	testDB    *pgtest.TestPostgres
 	store     pgStore.Store
 	datastore DataStore
 	qr        QueryResolver
 }
 
 func (s *CollectionPostgresDataStoreTestSuite) SetupSuite() {
-
 	s.ctx = context.Background()
+	s.testDB = pgtest.ForT(s.T())
 
-	source := pgtest.GetConnectionString(s.T())
-	config, err := postgres.ParseConfig(source)
-	s.Require().NoError(err)
-
-	pool, err := postgres.New(s.ctx, config)
+	s.store = pgStore.New(s.testDB)
+	ds, qs, err := New(s.store, search.New(s.store))
 	s.NoError(err)
-	s.db = pool
-
-	pgStore.Destroy(s.ctx, s.db)
-
-	s.gormDB = pgtest.OpenGormDB(s.T(), source)
-	s.store = pgStore.CreateTableAndNewStore(s.ctx, s.db, s.gormDB)
-	index := pgStore.NewIndexer(s.db)
-	s.datastore, s.qr, err = New(s.store, index, search.New(s.store, index))
-	s.NoError(err)
+	s.datastore = ds
+	s.qr = qs
 }
 
 // SetupTest removes the local graph before every test
@@ -65,9 +53,7 @@ func (s *CollectionPostgresDataStoreTestSuite) SetupTest() {
 }
 
 func (s *CollectionPostgresDataStoreTestSuite) TearDownSuite() {
-	pgStore.Destroy(s.ctx, s.db)
-	s.db.Close()
-	pgtest.CloseGormDB(s.T(), s.gormDB)
+	s.testDB.Teardown(s.T())
 }
 
 func (s *CollectionPostgresDataStoreTestSuite) TestGraphInit() {
@@ -129,7 +115,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestGraphInit() {
 			// get data and check it
 			batch, err := s.datastore.GetMany(ctx, objIDs)
 			assert.NoError(s.T(), err)
-			assert.ElementsMatch(s.T(), objs, batch)
+			protoassert.ElementsMatch(s.T(), objs, batch)
 
 			// clean up data
 			for i := len(objIDs) - 1; i >= 0; i-- {
@@ -152,7 +138,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	assert.Error(s.T(), err)
 
 	// add object with an id set
-	err = s.datastore.AddCollection(ctx, objID)
+	_, err = s.datastore.AddCollection(ctx, objID)
 	assert.Error(s.T(), err)
 
 	// dryrun add 'a', verify not present
@@ -165,13 +151,13 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	assert.Equal(s.T(), 0, count)
 
 	// add 'a', verify present
-	err = s.datastore.AddCollection(ctx, objA)
+	_, err = s.datastore.AddCollection(ctx, objA)
 	assert.NoError(s.T(), err)
 	assert.NotEqual(s.T(), "", objA.Id)
 	obj, ok, err := s.datastore.Get(ctx, objA.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objA, obj)
+	protoassert.Equal(s.T(), objA, obj)
 
 	// dryrun add duplicate 'a'
 	objADup := getTestCollection("a", nil)
@@ -180,7 +166,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	assert.Equal(s.T(), "", objADup.Id)
 
 	// add duplicate 'a'
-	err = s.datastore.AddCollection(ctx, objADup)
+	_, err = s.datastore.AddCollection(ctx, objADup)
 	assert.Error(s.T(), err)
 	assert.Equal(s.T(), "", objADup.Id)
 
@@ -194,13 +180,13 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	assert.Equal(s.T(), 1, count)
 
 	// add 'b' which points to 'a', verify present
-	err = s.datastore.AddCollection(ctx, objB)
+	_, err = s.datastore.AddCollection(ctx, objB)
 	assert.NoError(s.T(), err)
 	assert.NotEqual(s.T(), "", objB.Id)
 	obj, ok, err = s.datastore.Get(ctx, objB.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objB, obj)
+	protoassert.Equal(s.T(), objB, obj)
 
 	// try to delete 'a' while 'b' points to it
 	err = s.datastore.DeleteCollection(ctx, objA.GetId())
@@ -244,14 +230,14 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	assert.Error(s.T(), err)
 
 	// dryrun update 'a' with a new name
-	objADup = objA.Clone()
+	objADup = objA.CloneVT()
 	objA.Name = "A"
 	err = s.datastore.DryRunUpdateCollection(ctx, objA)
 	assert.NoError(s.T(), err)
 	obj, ok, err = s.datastore.Get(ctx, objA.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objADup, obj)
+	protoassert.Equal(s.T(), objADup, obj)
 
 	// update 'a' with a new name
 	err = s.datastore.UpdateCollection(ctx, objA)
@@ -259,27 +245,27 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	obj, ok, err = s.datastore.Get(ctx, objA.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objA, obj)
+	protoassert.Equal(s.T(), objA, obj)
 
 	// add 'e' that points to 'b' and verify
 	objE := getTestCollection("e", []string{objB.GetId()})
-	err = s.datastore.AddCollection(ctx, objE)
+	_, err = s.datastore.AddCollection(ctx, objE)
 	assert.NoError(s.T(), err)
 	assert.NotEqual(s.T(), "", objE.Id)
 	obj, ok, err = s.datastore.Get(ctx, objE.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objE, obj)
+	protoassert.Equal(s.T(), objE, obj)
 
 	// dryrun update 'e' to point to only 'a'
-	objEDup := objE.Clone()
+	objEDup := objE.CloneVT()
 	updateTestCollection(objE, []string{objA.GetId()})
 	err = s.datastore.DryRunUpdateCollection(ctx, objE)
 	assert.NoError(s.T(), err)
 	obj, ok, err = s.datastore.Get(ctx, objE.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objEDup, obj)
+	protoassert.Equal(s.T(), objEDup, obj)
 
 	// update 'e' to point to only 'a', this tests addition and removal of edges
 	updateTestCollection(objE, []string{objA.GetId()})
@@ -288,17 +274,17 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	obj, ok, err = s.datastore.Get(ctx, objE.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objE, obj)
+	protoassert.Equal(s.T(), objE, obj)
 
 	// dryrun update 'b' to point to only 'e'
-	objBDup := objB.Clone()
+	objBDup := objB.CloneVT()
 	updateTestCollection(objB, []string{objE.GetId()})
 	err = s.datastore.DryRunUpdateCollection(ctx, objB)
 	assert.NoError(s.T(), err)
 	obj, ok, err = s.datastore.Get(ctx, objB.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objBDup, obj)
+	protoassert.Equal(s.T(), objBDup, obj)
 
 	// update 'b' to point to only 'e', making sure the original 'e' -> 'b' edge was removed
 	err = s.datastore.UpdateCollection(ctx, objB)
@@ -306,7 +292,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	obj, ok, err = s.datastore.Get(ctx, objB.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objB, obj)
+	protoassert.Equal(s.T(), objB, obj)
 
 	// successful updates preserve createdAt and createdBy
 	objC := getTestCollection("c", nil)
@@ -315,7 +301,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 		Id:   "uid",
 		Name: "uname",
 	}
-	err = s.datastore.AddCollection(ctx, objC)
+	_, err = s.datastore.AddCollection(ctx, objC)
 	assert.NoError(s.T(), err)
 	objC.Name = "C"
 	err = s.datastore.UpdateCollection(ctx, objC)
@@ -323,7 +309,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionWorkflows() {
 	obj, ok, err = s.datastore.Get(ctx, objC.GetId())
 	assert.NoError(s.T(), err)
 	assert.True(s.T(), ok)
-	assert.Equal(s.T(), objC, obj)
+	protoassert.Equal(s.T(), objC, obj)
 
 	// clean up testing data and verify the datastore is empty
 	assert.NoError(s.T(), s.datastore.DeleteCollection(ctx, objB.GetId()))
@@ -728,7 +714,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestCollectionToQueries() {
 				assert.NoError(t, err)
 				assert.Equal(t, len(test.expectedQueries), len(parsedQueries))
 				for i := 0; i < len(test.expectedQueries) && i < len(parsedQueries); i++ {
-					assert.Equal(t, test.expectedQueries[i], parsedQueries[i])
+					protoassert.Equal(t, test.expectedQueries[i], parsedQueries[i])
 				}
 			}
 		})
@@ -757,7 +743,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestResolveCollectionQuery() {
 			},
 		},
 	}
-	err = s.datastore.AddCollection(ctx, objA)
+	_, err = s.datastore.AddCollection(ctx, objA)
 	s.NoError(err)
 	objB := getTestCollection("b", []string{objA.GetId()})
 	objB.ResourceSelectors = []*storage.ResourceSelector{
@@ -775,7 +761,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestResolveCollectionQuery() {
 			},
 		},
 	}
-	err = s.datastore.AddCollection(ctx, objB)
+	_, err = s.datastore.AddCollection(ctx, objB)
 	s.NoError(err)
 	objC := getTestCollection("c", []string{objB.GetId()})
 	objC.ResourceSelectors = []*storage.ResourceSelector{
@@ -793,7 +779,7 @@ func (s *CollectionPostgresDataStoreTestSuite) TestResolveCollectionQuery() {
 			},
 		},
 	}
-	err = s.datastore.AddCollection(ctx, objC)
+	_, err = s.datastore.AddCollection(ctx, objC)
 	s.NoError(err)
 
 	expectedQuery := &v1.Query{

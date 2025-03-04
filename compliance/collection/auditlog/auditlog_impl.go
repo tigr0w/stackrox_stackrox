@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/nxadm/tail"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/protoutils"
 	"github.com/stackrox/rox/pkg/set"
 )
@@ -25,10 +25,24 @@ var (
 	stagesAllowList = set.NewFrozenStringSet("ResponseComplete", "Panic")
 
 	// resourceTypesAllowList is set of resources that will be sent.
-	resourceTypesAllowList = set.NewFrozenStringSet("secrets", "configmaps")
+	resourceTypesAllowList = set.NewFrozenStringSet("secrets", "configmaps", "clusterrolebindings", "clusterroles", "networkpolicies", "securitycontextconstraints", "egressfirewalls")
 
 	// verbsDenyList is the set of verbs that will NOT be sent if encountered.
 	verbsDenyList = set.NewFrozenStringSet("WATCH", "LIST")
+
+	// verbsDenyListWithGet is the set of verbs that will NOT be sent if encountered.
+	verbsDenyListWithGet = set.NewFrozenStringSet("WATCH", "LIST", "GET")
+
+	// verbsDenyListPerResource is the set of verbs that will NOT be sent if encountered.
+	verbsDenyListPerResource = map[string]set.FrozenStringSet{
+		"secrets":                    verbsDenyList,
+		"configmaps":                 verbsDenyList,
+		"clusterrolebindings":        verbsDenyListWithGet,
+		"clusterroles":               verbsDenyListWithGet,
+		"networkpolicies":            verbsDenyListWithGet,
+		"securitycontextconstraints": verbsDenyListWithGet,
+		"egressfirewalls":            verbsDenyListWithGet,
+	}
 )
 
 type auditLogReaderImpl struct {
@@ -40,9 +54,10 @@ type auditLogReaderImpl struct {
 
 func (s *auditLogReaderImpl) StartReader(ctx context.Context) (bool, error) {
 	t, err := tail.TailFile(s.logPath, tail.Config{
-		ReOpen:    true,
-		MustExist: true,
-		Follow:    true,
+		ReOpen:        true,
+		MustExist:     true,
+		Follow:        true,
+		CompleteLines: true,
 	})
 
 	if err != nil {
@@ -105,13 +120,7 @@ func (s *auditLogReaderImpl) readAndForwardAuditLogs(ctx context.Context, tailer
 				continue // just move on
 			}
 
-			eventTS, err := auditLine.getEventTime()
-			if err != nil {
-				log.Errorf("Unable to parse timestamp from audit log: %v", err)
-				continue
-			}
-
-			if !s.shouldSendEvent(&auditLine, eventTS) {
+			if !s.shouldSendEvent(&auditLine) {
 				continue
 			}
 
@@ -127,9 +136,23 @@ func (s *auditLogReaderImpl) readAndForwardAuditLogs(ctx context.Context, tailer
 	}
 }
 
-func (s *auditLogReaderImpl) shouldSendEvent(event *auditEvent, eventTS *types.Timestamp) bool {
+func (s *auditLogReaderImpl) shouldSendEvent(event *auditEvent) bool {
 	if s.startState != nil {
-		if !protoutils.After(eventTS, s.startState.CollectLogsSince) {
+		protoTime, err := protocompat.ParseRFC3339NanoTimestamp(event.StageTimestamp)
+		if err != nil {
+			log.Errorf("Failed to parse stage time %s from audit log, so falling back to received time: %v", event.StageTimestamp, err)
+			// If StageTimestamp (which is the time for this particular stage) is not parsable, try the RequestReceivedTimestamp
+			// While it's not as accurate it should be relatively close. This should also be a rare occurrence.
+			protoTime, err = protocompat.ParseRFC3339NanoTimestamp(event.RequestReceivedTimestamp)
+			if err != nil {
+				protoTime = nil
+			}
+		}
+		if err != nil {
+			log.Errorf("Unable to parse timestamp from audit log: %v", err)
+			return false
+		}
+		if !protoutils.After(protoTime, s.startState.CollectLogsSince) {
 			// don't send since time hasn't matched yet
 			// but if the id matches then we're in the same time and everything after can be sent
 			if event.AuditID == s.startState.LastAuditId {
@@ -146,7 +169,7 @@ func (s *auditLogReaderImpl) shouldSendEvent(event *auditEvent, eventTS *types.T
 	// and when verb is not disallowed
 	return stagesAllowList.Contains(event.Stage) &&
 		resourceTypesAllowList.Contains(event.ObjectRef.Resource) &&
-		!verbsDenyList.Contains(strings.ToUpper(event.Verb))
+		!verbsDenyListPerResource[event.ObjectRef.Resource].Contains(strings.ToUpper(event.Verb))
 }
 
 func (s *auditLogReaderImpl) cleanupTailOnStop(tailer *tail.Tail) {

@@ -6,7 +6,6 @@ import (
 	"github.com/stackrox/rox/central/globaldb"
 	"github.com/stackrox/rox/central/image/datastore/keyfence"
 	"github.com/stackrox/rox/pkg/sync"
-	"github.com/stackrox/rox/pkg/utils"
 )
 
 var (
@@ -17,11 +16,8 @@ var (
 
 func initialize() {
 	storage := pgStore.New(globaldb.GetPostgres())
-	indexer := pgStore.NewIndexer(globaldb.GetPostgres())
 
-	var err error
-	ds, err = New(storage, indexer, search.New(storage, indexer), keyfence.ImageKeyFenceSingleton())
-	utils.CrashOnError(err)
+	ds = New(storage, search.New(storage), keyfence.ImageKeyFenceSingleton())
 }
 
 // Singleton returns a singleton instance of cve datastore

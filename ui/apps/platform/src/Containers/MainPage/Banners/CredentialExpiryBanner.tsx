@@ -5,6 +5,7 @@ import { generateCertSecretForComponent } from 'services/CertGenerationService';
 import { fetchCertExpiryForComponent } from 'services/CredentialExpiryService';
 import { CertExpiryComponent } from 'types/credentialExpiryService.proto';
 import {
+    getBannerVariant,
     getCredentialExpiryPhrase,
     getCredentialExpiryVariant,
     nameOfComponent,
@@ -12,12 +13,12 @@ import {
 
 type CredentialExpiryProps = {
     component: CertExpiryComponent;
-    hasAdministrationWritePermission: boolean;
+    showCertGenerateAction: boolean;
 };
 
 function CredentialExpiryBanner({
     component,
-    hasAdministrationWritePermission,
+    showCertGenerateAction,
 }: CredentialExpiryProps): ReactElement | null {
     const [expirationDate, setExpirationDate] = useState('');
     useEffect(() => {
@@ -52,7 +53,7 @@ function CredentialExpiryBanner({
     const message = (
         <span className="flex-1 text-center">
             {`${name} certificate ${getCredentialExpiryPhrase(expirationDate, now)}. `}
-            {hasAdministrationWritePermission ? (
+            {showCertGenerateAction ? (
                 <>To use renewed certificates, {downloadLink} and apply it to your cluster.</>
             ) : (
                 'Contact your administrator.'
@@ -61,7 +62,7 @@ function CredentialExpiryBanner({
     );
 
     return (
-        <Banner className="pf-u-text-align-center" variant={type}>
+        <Banner className="pf-v5-u-text-align-center" variant={getBannerVariant(type)}>
             {message}
         </Banner>
     );

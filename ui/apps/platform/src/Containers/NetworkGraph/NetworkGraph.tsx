@@ -8,24 +8,36 @@ import { CustomModel, CustomNodeModel } from './types/topology.type';
 import { Simulation } from './utils/getSimulation';
 
 import './Topology.css';
-import useNetworkPolicySimulator from './hooks/useNetworkPolicySimulator';
+import {
+    NetworkPolicySimulator,
+    SetNetworkPolicyModification,
+} from './hooks/useNetworkPolicySimulator';
 import SimulationFrame from './simulation/SimulationFrame';
 import TopologyComponent from './TopologyComponent';
 import { EdgeState } from './components/EdgeStateSelect';
+import { NetworkScopeHierarchy } from './types/networkScopeHierarchy';
 
 export type NetworkGraphProps = {
+    isReadyForVisualization: boolean;
     model: CustomModel;
     simulation: Simulation;
     selectedNode?: CustomNodeModel;
-    selectedClusterId: string;
     edgeState: EdgeState;
+    simulator: NetworkPolicySimulator;
+    setNetworkPolicyModification: SetNetworkPolicyModification;
+    scopeHierarchy: NetworkScopeHierarchy;
+    isSimulating: boolean;
 };
 function NetworkGraph({
+    isReadyForVisualization,
     model,
     simulation,
-    selectedClusterId,
     selectedNode,
     edgeState,
+    simulator,
+    setNetworkPolicyModification,
+    scopeHierarchy,
+    isSimulating,
 }: NetworkGraphProps) {
     const controller = useMemo(() => {
         const newController = new Visualization();
@@ -34,28 +46,19 @@ function NetworkGraph({
         newController.registerComponentFactory(stylesComponentFactory);
         return newController;
     }, []);
-    const { simulator, setNetworkPolicyModification } = useNetworkPolicySimulator({
-        simulation,
-        clusterId: selectedClusterId,
-    });
-
-    const isSimulating =
-        simulator.state === 'GENERATED' ||
-        simulator.state === 'UNDO' ||
-        simulator.state === 'UPLOAD' ||
-        (simulation.isOn && simulation.type === 'baseline');
 
     return (
         <SimulationFrame isSimulating={isSimulating}>
             <VisualizationProvider controller={controller}>
                 <TopologyComponent
+                    isReadyForVisualization={isReadyForVisualization}
                     model={model}
                     simulation={simulation}
-                    selectedClusterId={selectedClusterId}
                     simulator={simulator}
                     selectedNode={selectedNode}
                     setNetworkPolicyModification={setNetworkPolicyModification}
                     edgeState={edgeState}
+                    scopeHierarchy={scopeHierarchy}
                 />
             </VisualizationProvider>
         </SimulationFrame>

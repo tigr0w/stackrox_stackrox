@@ -1,26 +1,22 @@
 import { useState, useEffect } from 'react';
-import { ScopeObject, getNamespacesForClusterAndPermissions } from 'services/RolesService';
+import { NamespaceScopeObject, getNamespacesForClusterAndPermissions } from 'services/RolesService';
+import { ResourceName } from 'types/roleResources';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
-
-export type Namespace = {
-    id: string;
-    name: string;
-};
 
 type NamespaceResponse = {
     loading: boolean;
     error: string;
-    namespaces: Namespace[];
+    namespaces: NamespaceScopeObject[];
 };
 
 const emptyResponse: NamespaceResponse = {
     loading: false,
     error: '',
-    namespaces: [] as Namespace[],
+    namespaces: [],
 };
 
 export function useFetchClusterNamespacesForPermissions(
-    permissions: string[],
+    permissions: ResourceName[],
     selectedClusterId?: string | null
 ) {
     const [requestedPermissions] = useState<string[]>(permissions);
@@ -35,16 +31,10 @@ export function useFetchClusterNamespacesForPermissions(
             });
             getNamespacesForClusterAndPermissions(selectedClusterId, requestedPermissions)
                 .then((data) => {
-                    const namespaces: Namespace[] = data.namespaces.map((ns: ScopeObject) => {
-                        return {
-                            id: ns.id,
-                            name: ns.name,
-                        } as Namespace;
-                    });
                     setNamespaceResponse({
                         loading: false,
                         error: '',
-                        namespaces,
+                        namespaces: data.namespaces,
                     });
                 })
                 .catch((error) => {

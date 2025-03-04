@@ -9,21 +9,20 @@ import java.nio.file.Paths
 import java.text.SimpleDateFormat
 
 import org.codehaus.groovy.runtime.powerassert.PowerAssertionError
+import org.javers.core.Javers
+import org.javers.core.JaversBuilder
 import org.junit.AssumptionViolatedException
 import org.spockframework.runtime.SpockAssertionError
 
 // Helpers defines useful helper methods. Is mixed in to every object in order to be visible everywhere.
 @Slf4j
 class Helpers {
-    private static final int MAX_RETRY_ATTEMPTS = 2
-    private static int retryAttempt = 0
-
     static <V> V evaluateWithRetry(int retries, int pauseSecs, Closure<V> closure) {
         for (int i = 0; i < retries; i++) {
             try {
                 return closure()
             } catch (Exception | PowerAssertionError | SpockAssertionError t) {
-                log.debug("Caught exception. Retrying in ${pauseSecs}s. " + t)
+                log.debug("Caught exception. Retrying in ${pauseSecs}s (attempt ${i} of ${retries}): " + t)
             }
             sleep pauseSecs * 1000
         }
@@ -50,22 +49,14 @@ class Helpers {
         evaluateWithK8sClientRetry(retries, pauseSecs, closure)
     }
 
-    static boolean determineRetry(Throwable failure) {
-        if (failure instanceof AssumptionViolatedException) {
-            log.debug "Skipping retry for: " + failure
-            return false
+    static boolean waitForTrue(int retries, int intervalSeconds, Closure closure) {
+        if (!trueWithin(retries, intervalSeconds, closure)) {
+            throw new RuntimeException("All ${retries} attempts failed, could not reach desired state")
         }
-
-        retryAttempt++
-        def willRetry = retryAttempt <= MAX_RETRY_ATTEMPTS
-        if (willRetry) {
-            log.debug("An exception occurred which will cause a retry: ", failure)
-            log.debug "Test Failed... Attempting Retry #${retryAttempt}"
-        }
-        return willRetry
+        return true
     }
 
-    static boolean waitForTrue(int retries, int intervalSeconds, Closure closure) {
+    static boolean trueWithin(int retries, int intervalSeconds, Closure closure) {
         Timer t = new Timer(retries, intervalSeconds)
         int attempt = 0
         while (t.IsValid()) {
@@ -75,19 +66,7 @@ class Helpers {
             }
             log.debug "Attempt ${attempt} failed, retrying"
         }
-        throw new RuntimeException("All ${attempt} attempts failed, could not reach desired state")
-    }
-
-    static void resetRetryAttempts() {
-        retryAttempt = 0
-    }
-
-    static int getAttemptCount() {
-        return retryAttempt + 1
-    }
-
-    static void sleepWithRetryBackoff(int milliseconds) {
-        sleep milliseconds * getAttemptCount()
+        return false
     }
 
     static boolean containsNoWhitespace(Object ignored, String baseString, String subString) {
@@ -114,6 +93,11 @@ class Helpers {
             return
         }
 
+        if (exception && exception.getMessage()?.contains("Ignored via @IgnoreIf")) {
+            log.info("Won't collect logs for: " + exception)
+            return
+        }
+
         if (exception) {
             log.error("An exception occurred in test", exception)
         }
@@ -135,6 +119,8 @@ class Helpers {
             shellCmd("./scripts/ci/collect-service-logs.sh stackrox ${collectionDir}/stackrox-k8s-logs")
             shellCmd("./scripts/ci/collect-service-logs.sh kube-system ${collectionDir}/kube-system-k8s-logs")
             shellCmd("./scripts/ci/collect-qa-service-logs.sh ${collectionDir}/qa-k8s-logs")
+            shellCmd("./scripts/ci/collect-splunk-logs.sh ${Constants.SPLUNK_TEST_NAMESPACE} "+
+                     "${collectionDir}/splunk-logs")
             shellCmd("./scripts/grab-data-from-central.sh ${collectionDir}/central-data")
         }
         catch (Exception e) {
@@ -182,6 +168,15 @@ class Helpers {
         log.debug "Ran: ${cmd}\nExit: ${proc.exitValue()}\nStdout: $sout\nStderr: $serr"
     }
 
+    static int shellCmdExitValue(String cmd) {
+        def sout = new StringBuilder(), serr = new StringBuilder()
+        def proc = cmd.execute(null, new File(".."))
+        proc.consumeProcessOutput(sout, serr)
+        proc.waitFor()
+        log.debug "Ran: ${cmd}\nExit: ${proc.exitValue()}\nStdout: $sout\nStderr: $serr"
+        return proc.exitValue()
+    }
+
     private static boolean collectDebug() {
         if ((Env.IN_CI || Env.GATHER_QA_TEST_DEBUG_LOGS) && (Env.QA_TEST_DEBUG_LOGS != "")) {
             return true
@@ -193,5 +188,39 @@ class Helpers {
                  " QA_TEST_DEBUG_LOGS: ${Env.QA_TEST_DEBUG_LOGS}]")
 
         return false
+    }
+
+    static void compareAnnotations(Map<String, String> orchestratorAnnotations,
+                                   Map<String, String> stackroxAnnotations) {
+        if (stackroxAnnotations == orchestratorAnnotations) {
+            return
+        }
+
+        Map<String, String> orchestratorTruncated = orchestratorAnnotations.clone()
+        Map<String, String> stackroxTruncated = new HashMap<>(stackroxAnnotations)
+        orchestratorAnnotations.keySet().each { name ->
+            if (orchestratorTruncated[name].length() > Constants.STACKROX_ANNOTATION_TRUNCATION_LENGTH) {
+                // Assert that the stackrox node has an entry for that annotation
+                assert stackroxTruncated.get(name) && stackroxTruncated[name].length() > 0
+
+                // Remove the annotation because the logic for truncation tries to maintain words and
+                // is more complicated than we'd like to test
+                log.info "Removing long annotation value from comparison: " +
+                         "key: ${name}, length: ${orchestratorTruncated[name].length()}"
+                stackroxTruncated.remove(name)
+                orchestratorTruncated.remove(name)
+            }
+        }
+
+        if (stackroxTruncated == orchestratorTruncated) {
+            return
+        }
+
+        log.info "There is an annotation difference"
+        // Javers helps provide an useful error in the test log
+        Javers javers = JaversBuilder.javers().build()
+        def diff = javers.compare(stackroxTruncated, orchestratorTruncated)
+        assert diff.changes.size() == 0
+        assert diff.changes.size() != 0 // should not get here
     }
 }

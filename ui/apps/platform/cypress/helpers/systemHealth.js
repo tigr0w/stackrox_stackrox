@@ -2,7 +2,7 @@ import * as api from '../constants/apiEndpoints';
 import { systemHealthUrl } from '../constants/SystemHealth';
 
 import { visitFromLeftNavExpandable } from './nav';
-import { visit } from './visit';
+import { visit, visitWithStaticResponseForCapabilities } from './visit';
 
 // clock
 
@@ -13,8 +13,14 @@ export function setClock(currentDatetime) {
 
 // visit
 
-export const integrationHealthVulnDefinitionsAlias = 'integrationhealth/vulndefinitions';
+export const integrationHealthVulnDefinitionsAlias =
+    'integrationhealth/vulndefinitions?component=*';
+export const integrationHealthDeclarativeConfigsAlias = 'declarative-config/health';
+export const credentialForCentralExpiryAlias = 'credentialexpiry?component=CENTRAL';
+export const credentialForCentralDbExpiryAlias = 'credentialexpiry?component=CENTRAL_DB';
+export const credentialForScannerExpiryAlias = 'credentialexpiry?component=SCANNER';
 
+const SystemHealthHeadingSelector = 'h1:contains("System Health")';
 const routeMatcherMap = {
     'integrationhealth/imageintegrations': {
         method: 'GET',
@@ -36,6 +42,18 @@ const routeMatcherMap = {
         method: 'GET',
         url: api.integrationHealth.externalBackups,
     },
+    [credentialForCentralExpiryAlias]: {
+        method: 'GET',
+        url: api.credentialHealth.central,
+    },
+    [credentialForCentralDbExpiryAlias]: {
+        method: 'GET',
+        url: api.credentialHealth.centralDb,
+    },
+    [credentialForScannerExpiryAlias]: {
+        method: 'GET',
+        url: api.credentialHealth.scanner,
+    },
     externalbackups: {
         method: 'GET',
         url: api.integrations.externalBackups,
@@ -48,9 +66,9 @@ const routeMatcherMap = {
         method: 'GET',
         url: api.integrationHealth.vulnDefinitions,
     },
-    'integrationhealth/declarativeconfigs': {
+    [integrationHealthDeclarativeConfigsAlias]: {
         method: 'GET',
-        url: '/v1/integrationhealth/declarativeconfigs',
+        url: '/v1/declarative-config/health',
     },
 };
 
@@ -58,11 +76,27 @@ export function visitSystemHealthFromLeftNav() {
     visitFromLeftNavExpandable('Platform Configuration', 'System Health', routeMatcherMap);
 
     cy.location('pathname').should('eq', systemHealthUrl);
-    cy.get('h1:contains("System Health")');
+    cy.get(SystemHealthHeadingSelector);
 }
 
 export function visitSystemHealth(staticResponseMap) {
     visit(systemHealthUrl, routeMatcherMap, staticResponseMap);
 
-    cy.get('h1:contains("System Health")');
+    cy.get(SystemHealthHeadingSelector);
+}
+
+export function visitSystemHealthWithStaticResponseForCapabilities(
+    staticResponseForCapabilities,
+    keysToRemoveFromRouteMatcherMap = []
+) {
+    const updatedRouteMatcherMap = { ...routeMatcherMap };
+    keysToRemoveFromRouteMatcherMap.forEach((key) => delete updatedRouteMatcherMap[key]);
+
+    visitWithStaticResponseForCapabilities(
+        systemHealthUrl,
+        staticResponseForCapabilities,
+        updatedRouteMatcherMap
+    );
+
+    cy.get(SystemHealthHeadingSelector);
 }

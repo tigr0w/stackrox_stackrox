@@ -18,10 +18,9 @@ import (
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/cve"
-	"github.com/stackrox/rox/pkg/dackbox/edges"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/features"
 	pkgMetrics "github.com/stackrox/rox/pkg/metrics"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/scoped"
 	"github.com/stackrox/rox/pkg/utils"
@@ -93,9 +92,6 @@ type ImageComponentResolver interface {
 // ImageComponent returns an image component based on an input id (name:version)
 func (resolver *Resolver) ImageComponent(ctx context.Context, args IDQuery) (ImageComponentResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "ImageComponent")
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return resolver.imageComponentV2(ctx, args)
-	}
 
 	// check permissions
 	if err := readImages(ctx); err != nil {
@@ -115,11 +111,6 @@ func (resolver *Resolver) ImageComponent(ctx context.Context, args IDQuery) (Ima
 // ImageComponents returns image components that match the input query.
 func (resolver *Resolver) ImageComponents(ctx context.Context, q PaginatedQuery) ([]ImageComponentResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "ImageComponents")
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		query := queryWithImageIDRegexFilter(q.String())
-
-		return resolver.imageComponentsV2(ctx, PaginatedQuery{Query: &query, Pagination: q.Pagination})
-	}
 
 	// check permissions
 	if err := readImages(ctx); err != nil {
@@ -156,11 +147,6 @@ func (resolver *Resolver) ImageComponents(ctx context.Context, q PaginatedQuery)
 // ImageComponentCount returns count of image components that match the input query
 func (resolver *Resolver) ImageComponentCount(ctx context.Context, args RawQuery) (int32, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.Root, "ImageComponentCount")
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		query := queryWithImageIDRegexFilter(args.String())
-
-		return resolver.componentCountV2(ctx, RawQuery{Query: &query})
-	}
 
 	// check permissions
 	if err := readImages(ctx); err != nil {
@@ -206,10 +192,6 @@ func (resolver *imageComponentResolver) componentQuery() *v1.Query {
 	return search.NewQueryBuilder().AddExactMatches(search.ComponentID, resolver.data.GetId()).ProtoQuery()
 }
 
-func (resolver *imageComponentResolver) componentRawQuery() string {
-	return search.NewQueryBuilder().AddExactMatches(search.ComponentID, resolver.data.GetId()).Query()
-}
-
 func getDeploymentIDFromQuery(q *v1.Query) string {
 	if q == nil {
 		return ""
@@ -247,24 +229,11 @@ func getImageIDFromScope(contexts ...context.Context) string {
 	var scope scoped.Scope
 	var hasScope bool
 	for _, ctx := range contexts {
-		if features.VulnMgmtWorkloadCVEs.Enabled() {
-			if scope, hasScope = scoped.GetScopeAtLevel(ctx, v1.SearchCategory_IMAGES); hasScope {
-				return scope.ID
-			}
-		} else {
-			if scope, ok := scoped.GetScope(ctx); ok {
-				if scope.Level == v1.SearchCategory_IMAGES {
-					return scope.ID
-				}
-			}
+		if scope, hasScope = scoped.GetScopeAtLevel(ctx, v1.SearchCategory_IMAGES); hasScope {
+			return scope.ID
 		}
 	}
 	return ""
-}
-
-func queryWithImageIDRegexFilter(q string) string {
-	return search.AddRawQueriesAsConjunction(q,
-		search.NewQueryBuilder().AddRegexes(search.ImageSHA, ".+").Query())
 }
 
 func getImageCVEResolvers(ctx context.Context, root *Resolver, os string, vulns []*storage.EmbeddedVulnerability, query *v1.Query) ([]ImageVulnerabilityResolver, error) {
@@ -314,7 +283,7 @@ Sub Resolver Functions
 */
 
 func (resolver *imageComponentResolver) ActiveState(ctx context.Context, args RawQuery) (*activeStateResolver, error) {
-	if !env.ActiveVulnMgmt.BooleanSetting() {
+	if !features.ActiveVulnMgmt.Enabled() {
 		return &activeStateResolver{}, nil
 	}
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.ImageComponents, "ActiveState")
@@ -423,7 +392,7 @@ func (resolver *imageComponentResolver) LastScanned(ctx context.Context) (*graph
 
 	// Short path. Full image is embedded when image scan resolver is called.
 	if scanTime := embeddedobjs.LastScannedFromContext(resolver.ctx); scanTime != nil {
-		return timestamp(scanTime)
+		return &graphql.Time{Time: *scanTime}, nil
 	}
 
 	imageLoader, err := loaders.GetImageLoader(resolver.ctx)
@@ -450,7 +419,7 @@ func (resolver *imageComponentResolver) LastScanned(ctx context.Context) (*graph
 		return nil, errors.New("multiple images matched for last scanned image component query")
 	}
 
-	return timestamp(images[0].GetScan().GetScanTime())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(images[0].GetScan().GetScanTime())
 }
 
 // Location returns the location of the component.
@@ -477,14 +446,6 @@ func (resolver *imageComponentResolver) Location(ctx context.Context, args RawQu
 		return "", nil
 	}
 
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		edgeID := edges.EdgeID{ParentID: imageID, ChildID: resolver.data.GetId()}.ToString()
-		edge, found, err := resolver.root.ImageComponentEdgeDataStore.Get(resolver.ctx, edgeID)
-		if err != nil || !found {
-			return "", err
-		}
-		return edge.GetLocation(), nil
-	}
 	query := search.NewQueryBuilder().AddExactMatches(search.ImageSHA, imageID).AddExactMatches(search.ComponentID, resolver.data.GetId()).ProtoQuery()
 	edges, err := resolver.root.ImageComponentEdgeDataStore.SearchRawEdges(resolver.ctx, query)
 	if err != nil || len(edges) == 0 {
@@ -501,7 +462,7 @@ func (resolver *imageComponentResolver) PlottedImageVulnerabilities(ctx context.
 
 func (resolver *imageComponentResolver) TopImageVulnerability(ctx context.Context) (ImageVulnerabilityResolver, error) {
 	defer metrics.SetGraphQLOperationDurationTime(time.Now(), pkgMetrics.ImageComponents, "TopImageVulnerability")
-	if resolver.ctx == nil || !env.PostgresDatastoreEnabled.BooleanSetting() {
+	if resolver.ctx == nil {
 		resolver.ctx = ctx
 	}
 
@@ -521,13 +482,6 @@ func (resolver *imageComponentResolver) TopImageVulnerability(ctx context.Contex
 		)
 	}
 
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		vulnResolver, err := resolver.unwrappedTopVulnQuery(resolver.ctx)
-		if err != nil || vulnResolver == nil {
-			return nil, err
-		}
-		return vulnResolver, nil
-	}
 	return resolver.root.TopImageVulnerability(resolver.imageComponentScopeContext(ctx), RawQuery{})
 }
 
@@ -542,16 +496,9 @@ func (resolver *imageComponentResolver) LayerIndex() (*int32, error) {
 		return &v, nil
 	}
 
-	var scope scoped.Scope
-	var hasScope bool
-	if features.VulnMgmtWorkloadCVEs.Enabled() {
-		if scope, hasScope = scoped.GetScopeAtLevel(resolver.ctx, v1.SearchCategory_IMAGES); !hasScope {
-			return nil, nil
-		}
-	} else {
-		if scope, hasScope = scoped.GetScope(resolver.ctx); !hasScope || scope.Level != v1.SearchCategory_IMAGES {
-			return nil, nil
-		}
+	scope, hasScope := scoped.GetScopeAtLevel(resolver.ctx, v1.SearchCategory_IMAGES)
+	if !hasScope {
+		return nil, nil
 	}
 
 	edges, err := resolver.root.ImageComponentEdgeDataStore.SearchRawEdges(resolver.ctx, resolver.componentQuery())

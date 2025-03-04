@@ -25,13 +25,15 @@ import services.ClusterService
 import services.ImageService
 import services.NodeService
 import services.PolicyService
-import util.Timer
 
 import org.junit.Assume
+import spock.lang.IgnoreIf
 import spock.lang.Shared
 import spock.lang.Tag
 import spock.lang.Unroll
+import util.Env
 
+@Tag("PZ")
 class PolicyConfigurationTest extends BaseSpecification {
     static final private String DEPLOYMENTNGINX = "deploymentnginx"
     static final private String DNS = "qaapachedns"
@@ -40,7 +42,7 @@ class PolicyConfigurationTest extends BaseSpecification {
     static final private String DEPLOYMENTNGINX_NP = "deploymentnginx-np"
     static final private String DEPLOYMENT_RBAC = "deployment-rbac"
     static final private String SERVICE_ACCOUNT_NAME = "policy-config-sa"
-    static final private String NGINX_LATEST_WITH_DIGEST_NAME = "nginx-1-17-with-tag-and-digest"
+    static final private String NGINX_LATEST_WITH_DIGEST_NAME = "nginx-1-12-1-with-tag-and-digest"
     static final private String NGINX_LATEST_NAME = "nginx-latest"
     private static final String CLUSTER_ROLE_NAME = "policy-config-role"
 
@@ -79,11 +81,11 @@ class PolicyConfigurationTest extends BaseSpecification {
                             mountPath: "/tmp/test")),
             new Deployment()
                     .setName(STRUTS)
-                    .setImage("quay.io/rhacs-eng/qa:struts-app")
+                    .setImage("quay.io/rhacs-eng/qa-multi-arch:struts-app")
                     .addLabel("app", "test"),
             new Deployment()
                     .setName(DNS)
-                    .setImage("quay.io/rhacs-eng/qa:apache-dns")
+                    .setImage("quay.io/rhacs-eng/qa-multi-arch:apache-dns")
                     .addLabel("app", "test"),
             new Deployment()
                     .setName(DEPLOYMENTNGINX_LB)
@@ -92,7 +94,9 @@ class PolicyConfigurationTest extends BaseSpecification {
                     .addAnnotation("test", "annotation")
                     .setEnv(["CLUSTER_NAME": "main"])
                     .addLabel("app", "test")
-                    .setCreateLoadBalancer(true).setExposeAsService(true),
+                    .setCreateLoadBalancer(
+                        !(Env.REMOTE_CLUSTER_ARCH == "ppc64le" || Env.REMOTE_CLUSTER_ARCH == "s390x"))
+                    .setExposeAsService(true),
             new Deployment()
                     .setName(DEPLOYMENTNGINX_NP)
                     .setImage(TEST_IMAGE)
@@ -104,19 +108,21 @@ class PolicyConfigurationTest extends BaseSpecification {
                     .setName(DEPLOYMENT_RBAC)
                     .setNamespace(Constants.ORCHESTRATOR_NAMESPACE)
                     .setServiceAccountName(SERVICE_ACCOUNT_NAME)
-                    .setImage("quay.io/rhacs-eng/qa:nginx-1-15-4-alpine")
+                    .setImage("quay.io/rhacs-eng/qa-multi-arch:nginx-1-15-4-alpine")
                     .setSkipReplicaWait(true),
     ]
 
     static final private Deployment NGINX_WITH_DIGEST = new Deployment()
             .setName(NGINX_LATEST_WITH_DIGEST_NAME)
-            .setImage("nginx:1.17@sha256:86ae264c3f4acb99b2dee4d0098c40cb8c46dcf9e1148f05d3a51c4df6758c12")
+            .setImage("quay.io/rhacs-eng/qa-multi-arch:nginx-1.21.1" +
+                "@sha256:a05b0cdd4fc1be3b224ba9662ebdf98fe44c09c0c9215b45f84344c12867002e")
             .setCommand(["sleep", "60000"])
             .setSkipReplicaWait(false)
 
     static final private Deployment NGINX_LATEST = new Deployment()
             .setName(NGINX_LATEST_NAME)
-            .setImage("nginx:latest@sha256:86ae264c3f4acb99b2dee4d0098c40cb8c46dcf9e1148f05d3a51c4df6758c12")
+            .setImage("quay.io/rhacs-eng/qa-multi-arch:latest" +
+                "@sha256:a05b0cdd4fc1be3b224ba9662ebdf98fe44c09c0c9215b45f84344c12867002e")
             .setCommand(["sleep", "60000"])
             .setSkipReplicaWait(false)
 
@@ -159,13 +165,11 @@ class PolicyConfigurationTest extends BaseSpecification {
         orchestrator.createDeployment(NGINX_WITH_DIGEST)
 
         when:
-        Timer t = new Timer(60, 1)
-        def image
-        while (image == null && t.IsValid()) {
-            image = ImageService.getImage(
-                    "sha256:86ae264c3f4acb99b2dee4d0098c40cb8c46dcf9e1148f05d3a51c4df6758c12")
+        withRetry(30, 2) {
+            def image = ImageService.getImage(
+                    "sha256:a05b0cdd4fc1be3b224ba9662ebdf98fe44c09c0c9215b45f84344c12867002e")
+            assert image != null
         }
-        assert image != null
 
         and:
         "Run busybox latest with same digest as previous image"
@@ -201,10 +205,10 @@ class PolicyConfigurationTest extends BaseSpecification {
         Policy updatedPolicy = Services.getPolicyByName(name).toBuilder()
                 .setDescription(description)
                 .build()
-        long beforeTime = System.currentTimeMillis() / 1000L
+        long beforeTime = System.currentTimeMillis() / 1000L - 5
         Services.updatePolicy(updatedPolicy)
         sleep(2000)
-        long afterTime = System.currentTimeMillis() / 1000L
+        long afterTime = System.currentTimeMillis() / 1000L + 5
         Policy policy1 = Services.getPolicy(policyId)
         then:
         "Check the last_updated value is updated correctly"
@@ -219,6 +223,7 @@ class PolicyConfigurationTest extends BaseSpecification {
     @Unroll
     @Tag("BAT")
     @Tag("SMOKE")
+    @IgnoreIf({ Env.getTestTarget() in ["bat-test", "smoke-test"] && data.policyName == "CVE is available" })
     def "Verify policy configuration #policyName can be triggered"() {
         Assume.assumeTrue(canRun == null || canRun())
 
@@ -271,7 +276,7 @@ class PolicyConfigurationTest extends BaseSpecification {
                                         PolicyOuterClass.PolicyGroup.newBuilder()
                                                 .setFieldName("Image Tag")
                                                 .addValues(PolicyOuterClass.PolicyValue.newBuilder()
-                                                        .setValue("nginx-1-7-9").build())
+                                                        .setValue("nginx-1.12").build())
                                                 .build()
                                 ).build()
                         ).build()       | DEPLOYMENTNGINX | null | false
@@ -290,7 +295,7 @@ class PolicyConfigurationTest extends BaseSpecification {
                                         PolicyOuterClass.PolicyGroup.newBuilder()
                                                 .setFieldName("Image Remote")
                                                 .addValues(PolicyOuterClass.PolicyValue.newBuilder()
-                                                        .setValue("rhacs-eng/qa")
+                                                        .setValue("rhacs-eng/qa-multi-arch")
                                                         .build()).build()
                                 ).build()
                         ).build()  | DEPLOYMENTNGINX | null | false
@@ -312,7 +317,7 @@ class PolicyConfigurationTest extends BaseSpecification {
                                                         .build()).build()
                                 ).build()
                         ).build()   | DEPLOYMENTNGINX | { containerRuntimeVersion.contains("docker") &&
-                                                                       !ClusterService.isAKS() } /* ROX-6994 */ | false
+                            !ClusterService.isAzure() } /* ROX-6994 */ | false
 
         "Dockerfile Line"                     |
                 Policy.newBuilder()
@@ -332,7 +337,7 @@ class PolicyConfigurationTest extends BaseSpecification {
                                                         .build()).build()
                                 ).build()
                         ).build() | DEPLOYMENTNGINX | { containerRuntimeVersion.contains("docker") &&
-                                                                       !ClusterService.isAKS() } /* ROX-6994 */ | false
+                            !ClusterService.isAzure() } /* ROX-6994 */ | false
 
 //        TODO(ROX-3102)
 //        "Image is NOT Scanned"     |
@@ -362,10 +367,10 @@ class PolicyConfigurationTest extends BaseSpecification {
                                         PolicyOuterClass.PolicyGroup.newBuilder()
                                                 .setFieldName("CVE")
                                                 .addValues(PolicyOuterClass.PolicyValue.newBuilder()
-                                                        .setValue("CVE-2017-5638")
+                                                        .setValue("CVE-2017-18269")
                                                         .build()).build()
                                 ).build()
-                        ).build()  | STRUTS | null | true
+                        ).build()  | DEPLOYMENTNGINX | null | true
 
         "Port"                                |
                 Policy.newBuilder()
@@ -404,7 +409,8 @@ class PolicyConfigurationTest extends BaseSpecification {
                                                 ])
                                                 .build()
                                 ).build()
-                        ).build() | DEPLOYMENTNGINX_LB | null | false
+                        ).build() | DEPLOYMENTNGINX_LB | { Env.REMOTE_CLUSTER_ARCH != "ppc64le" &&
+                                                           Env.REMOTE_CLUSTER_ARCH != "s390x" } | false
         "Port Exposure by Node Port"         |
                 Policy.newBuilder()
                         .setName("TestPortExposurePolicy")
