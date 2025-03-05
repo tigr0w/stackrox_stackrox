@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/roxctl/common/config"
 	"github.com/stackrox/rox/roxctl/common/environment"
 	"github.com/stackrox/rox/roxctl/common/io"
 	"github.com/stackrox/rox/roxctl/common/printer"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 )
 
@@ -22,7 +22,7 @@ func NewEnvWithConn(conn *grpc.ClientConn, t *testing.T) (environment.Environmen
 
 	envMock.EXPECT().InputOutput().AnyTimes().Return(env.InputOutput())
 	envMock.EXPECT().Logger().AnyTimes().Return(env.Logger())
-	envMock.EXPECT().GRPCConnection().AnyTimes().Return(conn, nil)
+	envMock.EXPECT().GRPCConnection(gomock.Any()).AnyTimes().Return(conn, nil)
 	envMock.EXPECT().ColorWriter().AnyTimes().Return(env.ColorWriter())
 
 	return envMock, out, errOut
@@ -38,7 +38,7 @@ func NewEnv(conn *grpc.ClientConn, store config.Store, t *testing.T) (environmen
 
 	envMock.EXPECT().InputOutput().AnyTimes().Return(env.InputOutput())
 	envMock.EXPECT().Logger().AnyTimes().Return(env.Logger())
-	envMock.EXPECT().GRPCConnection().AnyTimes().Return(conn, nil)
+	envMock.EXPECT().GRPCConnection(gomock.Any()).AnyTimes().Return(conn, nil)
 	envMock.EXPECT().ColorWriter().AnyTimes().Return(env.ColorWriter())
 	envMock.EXPECT().ConfigStore().AnyTimes().Return(store, nil)
 

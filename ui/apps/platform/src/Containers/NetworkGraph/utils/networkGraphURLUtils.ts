@@ -1,5 +1,6 @@
-import { networkBasePathPF } from 'routePaths';
+import { networkBasePath } from 'routePaths';
 import { getQueryString } from 'utils/queryStringUtils';
+import { SearchFilter } from 'types/search';
 
 type GetURLLinkToDeploymentParams = {
     cluster: string;
@@ -18,6 +19,18 @@ export function getURLLinkToDeployment({
             Namespace: namespace,
         },
     });
-    const networkGraphLink = `${networkBasePathPF}/deployment/${deploymentId}${queryString}`;
+    const networkGraphLink = `${networkBasePath}/deployment/${deploymentId}${queryString}`;
     return networkGraphLink;
+}
+
+export function getPropertiesForAnalytics(searchFilter: SearchFilter) {
+    const cluster = searchFilter?.Cluster?.toString() ? 1 : 0;
+    const namespaces = searchFilter?.Namespace?.length || 0;
+    const deployments = searchFilter?.Deployment?.length || 0;
+
+    return {
+        cluster,
+        namespaces,
+        deployments,
+    };
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/pkg/errors"
 	namespaceMocks "github.com/stackrox/rox/central/namespace/datastore/mocks"
 	"github.com/stackrox/rox/generated/storage"
@@ -12,6 +11,7 @@ import (
 	"github.com/stackrox/rox/pkg/fixtures/fixtureconsts"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/mock/gomock"
 )
 
 func namespaceWithAnnotation(annotationKey, annotationValue string) *storage.NamespaceMetadata {
@@ -71,8 +71,13 @@ func TestGetAnnotationValue(t *testing.T) {
 	alertWithNoClusterID := fixtures.GetResourceAlert()
 	alertWithNoClusterID.GetResource().ClusterId = ""
 
-	alertWithNoNamespace := fixtures.GetResourceAlert()
-	alertWithNoNamespace.GetResource().Namespace = ""
+	deployAlertWithNoNamespace := fixtures.GetAlert()
+	deployAlertWithNoNamespace.GetDeployment().Namespace = ""
+
+	resourceAlertWithNoNamespace := fixtures.GetResourceAlert()
+	resourceAlertWithNoNamespace.GetResource().Namespace = ""
+
+	clusterResourceAlert := fixtures.GetClusterResourceAlert()
 
 	cases := []struct {
 		name          string
@@ -131,10 +136,24 @@ func TestGetAnnotationValue(t *testing.T) {
 			expectedValue: "default",
 		},
 		{
-			name:          "Get default when no namespace name available to lookup namespace",
+			name:          "Get default when no namespace name available to lookup namespace in a deployment alert",
 			namespace:     []*storage.NamespaceMetadata{namespaceWithAnnotation("annotKey", "nsValue")},
 			annotationKey: "annotKey",
-			alert:         alertWithNoNamespace,
+			alert:         deployAlertWithNoNamespace,
+			expectedValue: "default",
+		},
+		{
+			name:          "Get default when no namespace name available to lookup namespace in a resource alert",
+			namespace:     []*storage.NamespaceMetadata{namespaceWithAnnotation("annotKey", "nsValue")},
+			annotationKey: "annotKey",
+			alert:         resourceAlertWithNoNamespace,
+			expectedValue: "default",
+		},
+		{
+			name:          "Get default when no namespace name available to lookup namespace in a cluster level resource alert",
+			namespace:     []*storage.NamespaceMetadata{namespaceWithAnnotation("annotKey", "nsValue")},
+			annotationKey: "annotKey",
+			alert:         clusterResourceAlert,
 			expectedValue: "default",
 		},
 		{

@@ -1,18 +1,10 @@
 import React from 'react';
-import {
-    Modal,
-    ModalVariant,
-    Button,
-    Bullseye,
-    Spinner,
-    AlertVariant,
-    Alert,
-} from '@patternfly/react-core';
+import { Alert, Bullseye, Button, Modal, Spinner } from '@patternfly/react-core';
 
-import { NetworkPolicyModification } from 'Containers/Network/networkTypes';
+import { NetworkPolicyModification } from 'types/networkPolicy.proto';
 import useFetchNotifiers from 'hooks/useFetchNotifiers';
 import useTableSelection from 'hooks/useTableSelection';
-import { TableComposable, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { notifyNetworkPolicyModification } from 'services/NetworkService';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 
@@ -21,11 +13,6 @@ type NotifyYAMLModalProps = {
     setIsModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
     clusterId: string;
     modification: NetworkPolicyModification | null;
-};
-
-const columnNames = {
-    name: 'Name',
-    type: 'Type',
 };
 
 function NotifyYAMLModal({
@@ -65,12 +52,12 @@ function NotifyYAMLModal({
     if (isLoading) {
         content = (
             <Bullseye>
-                <Spinner isSVG size="lg" />
+                <Spinner size="lg" />
             </Bullseye>
         );
     } else {
         content = (
-            <TableComposable aria-label="Notifiers table" variant="compact" borders>
+            <Table aria-label="Notifiers table" variant="compact" borders>
                 <Thead>
                     <Tr>
                         <Th
@@ -79,8 +66,8 @@ function NotifyYAMLModal({
                                 isSelected: allRowsSelected,
                             }}
                         />
-                        <Th>{columnNames.name}</Th>
-                        <Th>{columnNames.type}</Th>
+                        <Th>Name</Th>
+                        <Th>Type</Th>
                     </Tr>
                 </Thead>
                 <Tbody>
@@ -94,19 +81,19 @@ function NotifyYAMLModal({
                                         isSelected: selected[rowIndex],
                                     }}
                                 />
-                                <Td dataLabel={columnNames.name}>{notifier.name}</Td>
-                                <Td dataLabel={columnNames.type}>{notifier.type}</Td>
+                                <Td dataLabel="Name">{notifier.name}</Td>
+                                <Td dataLabel="Type">{notifier.type}</Td>
                             </Tr>
                         );
                     })}
                 </Tbody>
-            </TableComposable>
+            </Table>
         );
     }
 
     return (
         <Modal
-            variant={ModalVariant.small}
+            variant="small"
             title="Share network policy YAML with team"
             isOpen={isModalOpen}
             onClose={onClose}
@@ -122,9 +109,10 @@ function NotifyYAMLModal({
             {errorMessage && (
                 <Alert
                     isInline
-                    variant={AlertVariant.danger}
+                    variant="danger"
                     title={errorMessage}
-                    className="pf-u-mb-lg"
+                    component="p"
+                    className="pf-v5-u-mb-lg"
                 />
             )}
             {content}

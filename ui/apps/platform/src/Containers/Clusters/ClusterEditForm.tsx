@@ -1,17 +1,17 @@
 import React, { ReactElement } from 'react';
+import { Alert, Flex, FlexItem } from '@patternfly/react-core';
 
 import Loader from 'Components/Loader';
 import { labelClassName } from 'constants/form.constants';
+import { Cluster, ClusterManagerType } from 'types/cluster.proto';
 import { DecommissionedClusterRetentionInfo } from 'types/clusterService.proto';
 
 import ClusterSummary from './Components/ClusterSummary';
 import StaticConfigurationSection from './StaticConfigurationSection';
 import DynamicConfigurationSection from './DynamicConfigurationSection';
 import ClusterLabelsTable from './ClusterLabelsTable';
-import { CentralEnv, Cluster, ClusterManagerType } from './clusterTypes';
 
 type ClusterEditFormProps = {
-    centralEnv: CentralEnv;
     centralVersion: string;
     clusterRetentionInfo: DecommissionedClusterRetentionInfo;
     selectedCluster: Cluster;
@@ -22,7 +22,6 @@ type ClusterEditFormProps = {
 };
 
 function ClusterEditForm({
-    centralEnv,
     centralVersion,
     clusterRetentionInfo,
     selectedCluster,
@@ -40,22 +39,48 @@ function ClusterEditForm({
     return (
         <div className="bg-base-200 px-4 w-full">
             {/* @TODO, replace open prop with dynamic logic, based on clusterType */}
-            {selectedCluster.id && (
+            {selectedCluster.id && selectedCluster.healthStatus ? (
                 <ClusterSummary
                     healthStatus={selectedCluster.healthStatus}
                     status={selectedCluster.status}
                     centralVersion={centralVersion}
                     clusterId={selectedCluster.id}
+                    autoRefreshEnabled={selectedCluster.sensorCapabilities?.includes(
+                        'SecuredClusterCertificatesRefresh'
+                    )}
                     clusterRetentionInfo={clusterRetentionInfo}
                     isManagerTypeNonConfigurable={isManagerTypeNonConfigurable}
                 />
+            ) : (
+                <Alert variant="warning" isInline title="Legacy installation method" component="p">
+                    <Flex direction={{ default: 'column' }}>
+                        <FlexItem>
+                            <p>
+                                To avoid extra operational complexity, use a{' '}
+                                <strong>cluster init bundle</strong> with either of the following
+                                installation methods:
+                            </p>
+                            <p>
+                                <strong>Operator</strong> for Red Hat OpenShift
+                            </p>
+                            <p>
+                                <strong>Helm chart</strong> for other platforms
+                            </p>
+                        </FlexItem>
+                        <FlexItem>
+                            <p>
+                                Only use the legacy installation method if you have a specific
+                                installation need that requires using this method.
+                            </p>
+                        </FlexItem>
+                    </Flex>
+                </Alert>
             )}
             <form
                 className="grid grid-columns-1 md:grid-columns-2 grid-gap-4 xl:grid-gap-6 mb-4 w-full"
                 data-testid="cluster-form"
             >
                 <StaticConfigurationSection
-                    centralEnv={centralEnv}
                     isManagerTypeNonConfigurable={isManagerTypeNonConfigurable}
                     handleChange={handleChange}
                     selectedCluster={selectedCluster}

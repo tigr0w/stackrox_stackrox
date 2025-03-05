@@ -21,13 +21,11 @@ provision_gke_cluster() {
 assign_env_variables() {
     info "Assigning environment variables for later steps"
 
-    if [[ "$#" -lt 1 ]]; then
-        die "missing args. usage: assign_env_variables <cluster-id> [<num-nodes> <machine-type>]"
+    if [[ "$#" -ne 1 ]]; then
+        die "missing args. usage: assign_env_variables <cluster-id>"
     fi
 
     local cluster_id="$1"
-    local num_nodes="${2:-3}"
-    local machine_type="${3:-e2-standard-4}"
 
     ensure_CI
 
@@ -46,12 +44,6 @@ assign_env_variables() {
     cluster_name="${cluster_name:0:40}" # (for GKE name limit)
     ci_export CLUSTER_NAME "$cluster_name"
     echo "Assigned cluster name is $cluster_name"
-
-    ci_export NUM_NODES "$num_nodes"
-    echo "Number of nodes for cluster is $num_nodes"
-
-    ci_export MACHINE_TYPE "$machine_type"
-    echo "Machine type is set as to $machine_type"
 
     choose_release_channel
     choose_cluster_version
@@ -90,6 +82,8 @@ choose_cluster_version() {
 
 create_cluster() {
     info "Creating a GKE cluster"
+    # Store requested timestamp to create log query link with time range.
+    date -u +"%Y-%m-%dT%H:%M:%SZ" > /tmp/GKE_CLUSTER_REQUESTED_TIMESTAMP
 
     ensure_CI
 
@@ -111,20 +105,25 @@ create_cluster() {
         die "Support is missing for this CI environment"
     fi
 
+    # Refresher on bash shell parameter expansion:
+    # https://www.gnu.org/software/bash/manual/bash.html#Shell-Parameter-Expansion
+    # ${VAR//./-} : Replaces all "." with a "-"
+    # ${VAR/%-/}  : Deletes the last "-"
+    # ${VAR,,}    : Converts all alphabetic to their lowercase form
     tags="${tags},stackrox-ci-${job_name:0:50}"
-    tags="${tags/%-/x}"
+    tags="${tags//./-}"
+    tags="${tags/%-/}"
     labels="${labels},stackrox-ci-job=${job_name:0:63}"
-    labels="${labels/%-/x}"
+    labels="${labels//./-}"
+    labels="${labels/%-/}"
     labels="${labels},stackrox-ci-build-id=${build_num:0:63}"
-    labels="${labels/%-/x}"
+    labels="${labels//./-}"
+    labels="${labels/%-/}"
 
     if is_in_PR_context; then
         labels="${labels},pr=$(get_PR_number)"
     fi
 
-    # remove . from branch names
-    tags="${tags//./-}"
-    labels="${labels//./-}"
     # lowercase
     tags="${tags,,}"
     labels="${labels,,}"
@@ -141,8 +140,9 @@ create_cluster() {
     POD_SECURITY_POLICIES="${POD_SECURITY_POLICIES:-false}"
     GKE_RELEASE_CHANNEL="${GKE_RELEASE_CHANNEL:-stable}"
     MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-4}"
+    DISK_SIZE_GB=${DISK_SIZE_GB:-40}
 
-    echo "Creating ${NUM_NODES} node cluster with image type \"${GCP_IMAGE_TYPE}\""
+    echo "Creating ${NUM_NODES} node cluster with image type \"${GCP_IMAGE_TYPE}\" and ${DISK_SIZE_GB}GB disks."
 
     if [[ -n "${GKE_CLUSTER_VERSION:-}" ]]; then
         ensure_supported_cluster_version
@@ -168,8 +168,8 @@ create_cluster() {
         timeout 830 gcloud beta container clusters create \
             --machine-type "${MACHINE_TYPE}" \
             --num-nodes "${NUM_NODES}" \
-            --disk-type=pd-standard \
-            --disk-size=40GB \
+            --disk-type=pd-ssd \
+            --disk-size="${DISK_SIZE_GB}GB" \
             --create-subnetwork range=/28 \
             --cluster-ipv4-cidr=/20 \
             --services-ipv4-cidr=/24 \
@@ -222,7 +222,19 @@ create_cluster() {
         return 1
     fi
 
-    date -u +"%Y-%m-%dT%H:%M:%SZ" > /tmp/GKE_CLUSTER_CREATED_TIMESTAMP
+    add_a_maintenance_exclusion
+}
+
+add_a_maintenance_exclusion() {
+    from_now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    plus_five_epoch=$(($(date -u '+%s') + 5*3600))
+    plus_five="$(date -u --date=@${plus_five_epoch} +"%Y-%m-%dT%H:%M:%SZ")"
+
+    gcloud container clusters update "${CLUSTER_NAME}" \
+        --add-maintenance-exclusion-name leave-these-clusters-alone \
+        --add-maintenance-exclusion-start "${from_now}" \
+        --add-maintenance-exclusion-end "${plus_five}" \
+        --add-maintenance-exclusion-scope no_upgrades
 }
 
 wait_for_cluster() {
@@ -283,7 +295,9 @@ refresh_gke_token() {
         sleep 900 &
         pid="$!"
         kill_sleep() {
+            # shellcheck disable=SC2317
             echo "refresh_gke_token() terminated, killing the background sleep ($pid)"
+            # shellcheck disable=SC2317
             kill "$pid"
         }
         trap kill_sleep SIGINT SIGTERM
@@ -294,7 +308,7 @@ refresh_gke_token() {
         echo >/tmp/kubeconfig-new
         chmod 0600 /tmp/kubeconfig-new
         # shellcheck disable=SC2153
-        KUBECONFIG=/tmp/kubeconfig-new gcloud container clusters get-credentials --project stackrox-ci --zone "$ZONE" "$CLUSTER_NAME"
+        KUBECONFIG=/tmp/kubeconfig-new gcloud container clusters get-credentials --project acs-san-stackroxci --zone "$ZONE" "$CLUSTER_NAME"
         KUBECONFIG=/tmp/kubeconfig-new kubectl get ns >/dev/null
         mv /tmp/kubeconfig-new "$real_kubeconfig"
     done
@@ -313,6 +327,15 @@ teardown_gke_cluster() {
         "$SCRIPTS_ROOT/scripts/ci/cleanup-deployment.sh" 2>&1 | sed -e 's/^/out: /' || true
     fi
 
+    for i in {1..10}; do
+        gcloud container clusters describe "${CLUSTER_NAME}" --format "flattened(status)"
+        if [[ ! "$(gcloud container clusters describe "${CLUSTER_NAME}" --format 'get(status)')" =~ PROVISIONING|RECONCILING ]]; then
+            break
+        fi
+        info "Before deleting, waiting for cluster ${CLUSTER_NAME} to leave provisioning state (wait $i of 10)"
+        sleep 60
+    done
+
     gcloud container clusters delete "$CLUSTER_NAME" --async
 
     info "Cluster deleting asynchronously"
@@ -326,12 +349,12 @@ create_log_explorer_links() {
         return
     fi
 
-    artifact_file="$ARTIFACT_DIR/gke-logs-summary.html"
+    artifact_file="$ARTIFACT_DIR/gke-logs.html"
 
     cat > "$artifact_file" <<- HEAD
 <html>
     <head>
-        <title><h4>GKE Logs Explorer</h4></title>
+        <title>GKE Logs Explorer</title>
         <style>
           body { color: #e8e8e8; background-color: #424242; font-family: "Roboto", "Helvetica", "Arial", sans-serif }
           a { color: #ff8caa }
@@ -339,32 +362,39 @@ create_log_explorer_links() {
         </style>
     </head>
     <body>
-    <p>(These links require a 'right-click -> open in new tab'. The authUser is the number for your @stackrox.com account.)</p>
+
+    <p>These links require a 'right-click -> open in new tab'.
+    The authUser is the number for your @redhat.com account.
+    You can check this by clicking on the user avatar in the top right corner of Google Cloud Console page
+    after following the link.</p>
+
     <ul style="padding-bottom: 28px; padding-left: 30px; font-family: Roboto,Helvetica,Arial,sans-serif;">
 HEAD
 
     local start_ts
-    start_ts="$(cat /tmp/GKE_CLUSTER_CREATED_TIMESTAMP)"
+    start_ts="$(cat /tmp/GKE_CLUSTER_REQUESTED_TIMESTAMP)"
     local end_ts
     end_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     local project
     project="$(gcloud config get project --quiet)"
 
     for authUser in {0..2}; do
-    cat >> "$artifact_file" << LINK
+    cat << LINK |
       <li>
-        <a href="https://console.cloud.google.com/logs/query
+        <a target="_blank" href="https://console.cloud.google.com/logs/query
 ;query=
-resource.type=%22k8s_container%22%0A
-resource.labels.cluster_name%3D%22$CLUSTER_NAME%22%0A
+resource.type%3D%22k8s_container%22%0A
+resource.labels.cluster_name%3D%22${CLUSTER_NAME}%22%0A
 resource.labels.namespace_name%3D%22stackrox%22%0A
-;timeRange=$start_ts%2F$end_ts
-;cursorTimestamp=$start_ts
-?authuser=$authUser
-&project=$project
-&orgonly=true&supportedpurview=organizationId">authUser $authUser</a>
+;timeRange=${start_ts}%2F${end_ts}
+;cursorTimestamp=${start_ts}
+?authuser=${authUser}
+&amp;project=${project}
+&amp;orgonly=true
+&amp;supportedpurview=organizationId">authUser $authUser</a>
       </li>
 LINK
+tr -d '\n' >> "$artifact_file"
     done
 
     cat >> "$artifact_file" <<- FOOT

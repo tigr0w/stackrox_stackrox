@@ -9,6 +9,7 @@ import (
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	pkgMetrics "github.com/stackrox/rox/pkg/metrics"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/paginated"
 	"github.com/stackrox/rox/pkg/utils"
@@ -37,7 +38,7 @@ func (resolver *Resolver) Violations(ctx context.Context, args PaginatedQuery) (
 
 	q = paginated.FillDefaultSortOption(q, paginated.GetViolationTimeSortOption())
 	return resolver.wrapListAlerts(
-		resolver.ViolationsDataStore.SearchListAlerts(ctx, q))
+		resolver.ViolationsDataStore.SearchListAlerts(ctx, q, true))
 }
 
 // ViolationCount returns count of all violations, or those that match the requested query
@@ -50,7 +51,7 @@ func (resolver *Resolver) ViolationCount(ctx context.Context, args RawQuery) (in
 	if err != nil {
 		return 0, err
 	}
-	count, err := resolver.ViolationsDataStore.Count(ctx, q)
+	count, err := resolver.ViolationsDataStore.Count(ctx, q, true)
 	if err != nil {
 		return 0, err
 	}
@@ -99,12 +100,12 @@ func getLatestViolationTime(ctx context.Context, root *Resolver, q *v1.Query) (*
 		Offset: 0,
 	}
 
-	alerts, err := root.ViolationsDataStore.SearchRawAlerts(ctx, q)
+	alerts, err := root.ViolationsDataStore.SearchRawAlerts(ctx, q, true)
 	if err != nil || len(alerts) == 0 || alerts[0] == nil {
 		return nil, err
 	}
 
-	return timestamp(alerts[0].GetTime())
+	return protocompat.ConvertTimestampToGraphqlTimeOrError(alerts[0].GetTime())
 }
 
 func anyActiveDeployAlerts(ctx context.Context, root *Resolver, q *v1.Query) (bool, error) {
@@ -124,6 +125,6 @@ func anyActiveDeployAlerts(ctx context.Context, root *Resolver, q *v1.Query) (bo
 		Limit: 1,
 	}
 
-	results, err := root.ViolationsDataStore.Search(ctx, q)
+	results, err := root.ViolationsDataStore.Search(ctx, q, true)
 	return len(results) != 0, err
 }

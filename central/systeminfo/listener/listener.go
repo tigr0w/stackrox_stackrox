@@ -4,11 +4,10 @@ import (
 	"context"
 
 	"github.com/cloudflare/cfssl/log"
-	timestamp "github.com/gogo/protobuf/types"
 	systemInfoStorage "github.com/stackrox/rox/central/systeminfo/store/postgres"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/grpc/authn"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/sync"
 )
@@ -34,10 +33,6 @@ func (l *backupListenerImpl) OnBackupFail(ctx context.Context) {
 	l.lock.Lock()
 	defer l.lock.Unlock()
 
-	// Unless we add rocksDB store, we can only run on postgre.
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return
-	}
 	l.updateSystemInfo(ctx, storage.OperationStatus_FAIL)
 }
 
@@ -45,16 +40,12 @@ func (l *backupListenerImpl) OnBackupSuccess(ctx context.Context) {
 	l.lock.Lock()
 	defer l.lock.Unlock()
 
-	// Unless we add rocksDB store, we can only run on postgre.
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		return
-	}
 	l.updateSystemInfo(ctx, storage.OperationStatus_PASS)
 }
 
 func (l *backupListenerImpl) updateSystemInfo(ctx context.Context, backupStatus storage.OperationStatus) {
 	backupInfo := &storage.BackupInfo{
-		BackupLastRunAt: timestamp.TimestampNow(),
+		BackupLastRunAt: protocompat.TimestampNow(),
 		Status:          backupStatus,
 		Requestor:       authn.UserFromContext(ctx),
 	}

@@ -1,11 +1,11 @@
 package runtime
 
 import (
-	ptypes "github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/alert/convert"
 	"github.com/stackrox/rox/pkg/booleanpolicy"
 	"github.com/stackrox/rox/pkg/booleanpolicy/augmentedobjs"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/uuid"
 )
 
@@ -74,11 +74,11 @@ func constructGenericRuntimeAlert(
 ) *storage.Alert {
 	return &storage.Alert{
 		Id:             uuid.NewV4().String(),
-		Policy:         policy.Clone(),
+		Policy:         policy.CloneVT(),
 		LifecycleStage: storage.LifecycleStage_RUNTIME,
 		Entity:         convert.ToAlertDeployment(deployment),
 		Violations:     violations,
-		Time:           ptypes.TimestampNow(),
+		Time:           protocompat.TimestampNow(),
 	}
 }
 
@@ -89,11 +89,11 @@ func constructResourceRuntimeAlert(
 ) *storage.Alert {
 	return &storage.Alert{
 		Id:             uuid.NewV4().String(),
-		Policy:         policy.Clone(),
+		Policy:         policy.CloneVT(),
 		LifecycleStage: storage.LifecycleStage_RUNTIME,
 		Entity:         convert.ToAlertResource(kubeEvent),
 		Violations:     violations,
-		Time:           ptypes.TimestampNow(),
+		Time:           protocompat.TimestampNow(),
 	}
 }
 

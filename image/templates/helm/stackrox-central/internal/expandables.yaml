@@ -46,3 +46,26 @@ scanner:
   dbServiceTLS:
     cert: true
     key: true
+scannerV4:
+  indexer:
+    nodeSelector: true
+    resources: true
+    serviceTLS:
+      cert: true
+      key: true
+  matcher:
+    nodeSelector: true
+    resources: true
+    serviceTLS:
+      cert: true
+      key: true
+  db:
+    nodeSelector: true
+    resources: true
+    postgresConfig: true
+    hbaConfig: true
+    password:
+      value: true
+    serviceTLS:
+      cert: true
+      key: true

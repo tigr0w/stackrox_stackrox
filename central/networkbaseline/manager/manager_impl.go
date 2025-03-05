@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blevesearch/bleve"
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	deploymentDS "github.com/stackrox/rox/central/deployment/datastore"
 	"github.com/stackrox/rox/central/deployment/queue"
@@ -14,13 +12,10 @@ import (
 	networkEntityDS "github.com/stackrox/rox/central/networkgraph/entity/datastore"
 	networkFlowDS "github.com/stackrox/rox/central/networkgraph/flow/datastore"
 	networkPolicyDS "github.com/stackrox/rox/central/networkpolicies/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/sensor/service/connection"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/dackbox"
-	"github.com/stackrox/rox/pkg/dackbox/concurrency"
 	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errorhelpers"
 	"github.com/stackrox/rox/pkg/errox"
@@ -30,15 +25,14 @@ import (
 	"github.com/stackrox/rox/pkg/networkgraph/networkbaseline"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
-	"github.com/stackrox/rox/pkg/protoutils"
-	rocksdbBase "github.com/stackrox/rox/pkg/rocksdb"
+	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/timestamp"
 	"github.com/stackrox/rox/pkg/utils"
-	"go.etcd.io/bbolt"
 )
 
 const (
@@ -166,7 +160,7 @@ func (m *manager) persistNetworkBaselines(deploymentIDs set.StringSet, baselines
 			Namespace:            baselineInfo.Namespace,
 			Peers:                peers,
 			ForbiddenPeers:       forbiddenPeers,
-			ObservationPeriodEnd: baselineInfo.ObservationPeriodEnd.GogoProtobuf(),
+			ObservationPeriodEnd: protoconv.ConvertMicroTSToProtobufTS(baselineInfo.ObservationPeriodEnd),
 			Locked:               baselineInfo.UserLocked,
 			DeploymentName:       baselineInfo.DeploymentName,
 		})
@@ -242,6 +236,8 @@ func (m *manager) lookUpPeerInfo(entity networkgraph.Entity) peerInfo {
 		}
 	case storage.NetworkEntityInfo_INTERNET:
 		return peerInfo{name: networkgraph.InternetExternalSourceName}
+	case storage.NetworkEntityInfo_INTERNAL_ENTITIES:
+		return peerInfo{name: networkgraph.InternalEntitiesName}
 	default:
 		// Unsupported type.
 		log.Warnf("unsupported entity type in network baseline: %v", entity)
@@ -305,7 +301,7 @@ func (m *manager) processDeploymentCreate(deploymentID, _ string) error {
 		&queue.DeploymentObservation{
 			DeploymentID:   deploymentID,
 			InObservation:  true,
-			ObservationEnd: getNewObservationPeriodEnd().GogoProtobuf(),
+			ObservationEnd: getNewObservationPeriodEnd().GoTime(),
 		})
 
 	return nil
@@ -318,6 +314,27 @@ func (m *manager) ProcessDeploymentCreate(deploymentID, _, clusterID, _ string) 
 	return m.processDeploymentCreate(deploymentID, clusterID)
 }
 
+func (m *manager) deleteDeploymentFromBaselines(deploymentID string) error {
+	modifiedDeployments := set.NewStringSet()
+	for id, baseline := range m.baselinesByDeploymentID {
+		if ok, peer := baseline.GetPeer(deploymentID); ok {
+			delete(baseline.BaselinePeers, peer)
+			modifiedDeployments.Add(id)
+		}
+
+		if ok, forbiddenPeer := baseline.GetForbiddenPeer(deploymentID); ok {
+			delete(baseline.ForbiddenPeers, forbiddenPeer)
+			modifiedDeployments.Add(id)
+		}
+	}
+
+	if err := m.persistNetworkBaselines(modifiedDeployments, nil); err != nil {
+		return errors.Wrapf(err, "deleting baseline of deployment ID %s", deploymentID)
+	}
+
+	return nil
+}
+
 func (m *manager) processDeploymentDelete(deploymentID string) error {
 	deletingBaseline, found := m.baselinesByDeploymentID[deploymentID]
 	if !found {
@@ -325,8 +342,8 @@ func (m *manager) processDeploymentDelete(deploymentID string) error {
 		return nil
 	}
 
-	// If the deployment is being tracked, but the baseline is not yet created, we cannot look at hte peers.  If we
-	// have a peer at all, then the peer will have been created
+	// If baseline for deleting deploynment exists, then we should look at all entries in its baseline
+	// in order to the delete its reference from peer baselines.
 	if deletingBaseline != nil {
 		modifiedDeployments := set.NewStringSet()
 		for peer := range deletingBaseline.BaselinePeers {
@@ -357,6 +374,12 @@ func (m *manager) processDeploymentDelete(deploymentID string) error {
 		err := m.persistNetworkBaselines(modifiedDeployments, nil)
 		if err != nil {
 			return errors.Wrapf(err, "deleting baseline of deployment %q", deletingBaseline.DeploymentName)
+		}
+	} else {
+		// If baseline does not exist yet, it could still be that this deployment is already present in some other
+		// deployment's baseline. So we need to manually look through all the baselines
+		if err := m.deleteDeploymentFromBaselines(deploymentID); err != nil {
+			return err
 		}
 	}
 
@@ -537,7 +560,7 @@ func (m *manager) processNetworkPolicyUpdate(
 				&queue.DeploymentObservation{
 					DeploymentID:   deployment.GetId(),
 					InObservation:  true,
-					ObservationEnd: newObservationPeriodEnd.GogoProtobuf(),
+					ObservationEnd: newObservationPeriodEnd.GoTime(),
 				})
 		} else {
 			baseline.ObservationPeriodEnd = newObservationPeriodEnd
@@ -743,14 +766,14 @@ func (m *manager) initFromStore() error {
 			return nil
 		})
 	}
-	return pgutils.RetryIfPostgres(walkFn)
+	return pgutils.RetryIfPostgres(context.Background(), walkFn)
 }
 
 func (m *manager) flushBaselineQueue() {
 	for {
 		// ObservationEnd is in the future so we have nothing to do at this time
 		head := m.deploymentObservationQueue.Peek()
-		if head == nil || protoutils.After(head.ObservationEnd, types.TimestampNow()) {
+		if head == nil || head.ObservationEnd.After(time.Now()) {
 			return
 		}
 
@@ -769,7 +792,7 @@ func (m *manager) flushBaselineQueue() {
 			continue
 		}
 
-		err = m.addBaseline(deployment.GetId(), deployment.GetName(), deployment.GetClusterId(), deployment.GetNamespace(), timestamp.FromProtobuf(observedDep.ObservationEnd))
+		err = m.addBaseline(deployment.GetId(), deployment.GetName(), deployment.GetClusterId(), deployment.GetNamespace(), timestamp.FromGoTime(observedDep.ObservationEnd))
 		if err != nil {
 			log.Error(err)
 		}
@@ -875,7 +898,7 @@ func (m *manager) CreateNetworkBaseline(deploymentID string) error {
 	if depDetails == nil {
 		t = getNewObservationPeriodEnd()
 	} else {
-		t = timestamp.FromProtobuf(depDetails.ObservationEnd)
+		t = timestamp.FromGoTime(depDetails.ObservationEnd)
 	}
 
 	// Now build the baseline
@@ -951,32 +974,6 @@ func GetTestPostgresManager(t *testing.T, pool postgres.DB) (Manager, error) {
 		return nil, err
 	}
 	networkFlowClusterStore, err := networkFlowDS.GetTestPostgresClusterDataStore(t, pool)
-	if err != nil {
-		return nil, err
-	}
-	sensorCnxMgr := connection.ManagerSingleton()
-	return New(networkBaselineStore, networkEntityStore, deploymentStore, networkPolicyStore, networkFlowClusterStore, sensorCnxMgr)
-}
-
-// GetTestRocksBleveManager provides a network baseline manager connected to rocksdb and bleve for testing purposes.
-func GetTestRocksBleveManager(t *testing.T, rocksengine *rocksdbBase.RocksDB, bleveIndex bleve.Index, dacky *dackbox.DackBox, keyFence concurrency.KeyFence, boltengine *bbolt.DB) (Manager, error) {
-	networkBaselineStore, err := datastore.GetTestRocksBleveDataStore(t, rocksengine)
-	if err != nil {
-		return nil, err
-	}
-	networkEntityStore, err := networkEntityDS.GetTestRocksBleveDataStore(t, rocksengine)
-	if err != nil {
-		return nil, err
-	}
-	deploymentStore, err := deploymentDS.GetTestRocksBleveDataStore(t, rocksengine, bleveIndex, dacky, keyFence)
-	if err != nil {
-		return nil, err
-	}
-	networkPolicyStore, err := networkPolicyDS.GetTestRocksBleveDataStore(t, rocksengine, boltengine)
-	if err != nil {
-		return nil, err
-	}
-	networkFlowClusterStore, err := networkFlowDS.GetTestRocksBleveClusterDataStore(t, rocksengine)
 	if err != nil {
 		return nil, err
 	}

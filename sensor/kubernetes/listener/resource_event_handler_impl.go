@@ -1,6 +1,8 @@
 package listener
 
 import (
+	"context"
+
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/pkg/concurrency"
@@ -17,6 +19,7 @@ import (
 // resourceEventHandlerImpl processes OnAdd, OnUpdate, and OnDelete events, and joins the results to an output
 // channel
 type resourceEventHandlerImpl struct {
+	context    context.Context
 	eventLock  *sync.Mutex
 	dispatcher resources.Dispatcher
 
@@ -29,7 +32,7 @@ type resourceEventHandlerImpl struct {
 	hasSeenAllInitialIDsSignal concurrency.Signal
 }
 
-func (h *resourceEventHandlerImpl) OnAdd(obj interface{}) {
+func (h *resourceEventHandlerImpl) OnAdd(obj interface{}, _ bool) {
 	// If we are listing the initial objects, then we treat them as updates so enforcement isn't done
 	if h.syncingResources != nil && h.syncingResources.Get() {
 		h.sendResourceEvent(obj, nil, central.ResourceAction_SYNC_RESOURCE)
@@ -106,6 +109,7 @@ func (h *resourceEventHandlerImpl) sendResourceEvent(obj, oldObj interface{}, ac
 	}
 
 	message := h.dispatcher.ProcessEvent(obj, oldObj, action)
+	message.Context = h.context
 	h.resolver.Send(message)
 }
 

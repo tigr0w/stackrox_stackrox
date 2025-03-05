@@ -10,6 +10,7 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/search/postgres/mapping"
 )
@@ -41,6 +42,7 @@ var (
 			v1.SearchCategory_POLICY_CATEGORY_EDGE,
 			v1.SearchCategory_POLICY_CATEGORIES,
 		}...)
+		schema.ScopingResource = resources.WorkflowAdministration
 		RegisterTable(schema, CreateTablePolicyCategoryEdgesStmt)
 		mapping.RegisterCategoryToTable(v1.SearchCategory_POLICY_CATEGORY_EDGE, schema)
 		return schema
@@ -48,14 +50,15 @@ var (
 )
 
 const (
+	// PolicyCategoryEdgesTableName specifies the name of the table in postgres.
 	PolicyCategoryEdgesTableName = "policy_category_edges"
 )
 
 // PolicyCategoryEdges holds the Gorm model for Postgres table `policy_category_edges`.
 type PolicyCategoryEdges struct {
-	Id                  string           `gorm:"column:id;type:varchar;primaryKey"`
-	PolicyId            string           `gorm:"column:policyid;type:varchar"`
-	CategoryId          string           `gorm:"column:categoryid;type:varchar"`
+	ID                  string           `gorm:"column:id;type:varchar;primaryKey"`
+	PolicyID            string           `gorm:"column:policyid;type:varchar"`
+	CategoryID          string           `gorm:"column:categoryid;type:varchar"`
 	Serialized          []byte           `gorm:"column:serialized;type:bytea"`
 	PoliciesRef         Policies         `gorm:"foreignKey:policyid;references:id;belongsTo;constraint:OnDelete:CASCADE"`
 	PolicyCategoriesRef PolicyCategories `gorm:"foreignKey:categoryid;references:id;belongsTo;constraint:OnDelete:CASCADE"`

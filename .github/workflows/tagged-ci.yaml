@@ -10,13 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
       - name: Slack
         env:
-          NIGHTLY_WORKFLOW_NOTIFY_WEBHOOK: ${{ secrets.NIGHTLY_WORKFLOW_NOTIFY_WEBHOOK }}
           RELEASE_WORKFLOW_NOTIFY_WEBHOOK: ${{ secrets.RELEASE_WORKFLOW_NOTIFY_WEBHOOK }}
           SLACK_MAIN_WEBHOOK: ${{ secrets.SLACK_MAIN_WEBHOOK }}
         run: |

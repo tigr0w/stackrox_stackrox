@@ -1,13 +1,14 @@
 import React from 'react';
-import { Button, ButtonVariant } from '@patternfly/react-core';
-import { TableComposable, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
+import { Link } from 'react-router-dom';
+import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { gql } from '@apollo/client';
 
-import LinkShim from 'Components/PatternFly/LinkShim';
 import { UseURLSortResult } from 'hooks/useURLSort';
-import DatePhraseTd from '../components/DatePhraseTd';
+import DateDistance from 'Components/DateDistance';
 import EmptyTableResults from '../components/EmptyTableResults';
-import { getEntityPagePath } from '../searchUtils';
+import { getWorkloadEntityPagePath } from '../../utils/searchUtils';
+import useVulnerabilityState from '../hooks/useVulnerabilityState';
+import useWorkloadCveViewContext from '../hooks/useWorkloadCveViewContext';
 
 export type DeploymentResources = {
     deploymentCount: number;
@@ -39,8 +40,10 @@ export type DeploymentResourceTableProps = {
 };
 
 function DeploymentResourceTable({ data, getSortParams }: DeploymentResourceTableProps) {
+    const { getAbsoluteUrl } = useWorkloadCveViewContext();
+    const vulnerabilityState = useVulnerabilityState();
     return (
-        <TableComposable borders={false} variant="compact">
+        <Table borders={false} variant="compact">
             <Thead noWrap>
                 <Tr>
                     <Th sort={getSortParams('Deployment')}>Name</Th>
@@ -55,30 +58,33 @@ function DeploymentResourceTable({ data, getSortParams }: DeploymentResourceTabl
                     <Tbody
                         key={id}
                         style={{
-                            borderBottom: '1px solid var(--pf-c-table--BorderColor)',
+                            borderBottom: '1px solid var(--pf-v5-c-table--BorderColor)',
                         }}
                     >
                         <Tr>
-                            <Td>
-                                <Button
-                                    variant={ButtonVariant.link}
-                                    isInline
-                                    component={LinkShim}
-                                    href={getEntityPagePath('Deployment', id)}
+                            <Td dataLabel="Name">
+                                <Link
+                                    to={getAbsoluteUrl(
+                                        getWorkloadEntityPagePath(
+                                            'Deployment',
+                                            id,
+                                            vulnerabilityState
+                                        )
+                                    )}
                                 >
                                     {name}
-                                </Button>
+                                </Link>
                             </Td>
-                            <Td>{clusterName}</Td>
-                            <Td>{namespace}</Td>
-                            <Td>
-                                <DatePhraseTd date={created} />
+                            <Td dataLabel="Cluster">{clusterName}</Td>
+                            <Td dataLabel="Namespace">{namespace}</Td>
+                            <Td dataLabel="Created">
+                                <DateDistance date={created} />
                             </Td>
                         </Tr>
                     </Tbody>
                 );
             })}
-        </TableComposable>
+        </Table>
     );
 }
 

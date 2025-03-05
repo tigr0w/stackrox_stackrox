@@ -2,13 +2,15 @@ package aggregator
 
 import (
 	"testing"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/net"
 	"github.com/stackrox/rox/pkg/networkgraph"
 	"github.com/stackrox/rox/pkg/networkgraph/externalsrcs"
 	"github.com/stackrox/rox/pkg/networkgraph/testutils"
 	"github.com/stackrox/rox/pkg/networkgraph/tree"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -83,33 +85,32 @@ func TestSubnetToSupernetAggregator(t *testing.T) {
 			f10: d2 -> e4:8000/tcp:ts2
 	*/
 
-	ts1 := types.TimestampNow()
-	ts2 := ts1.Clone()
-	ts2.Seconds = ts2.Seconds + 1000
+	ts1 := time.Now()
+	ts2 := ts1.Add(1000 * time.Second)
 
-	f1 := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts1)
-	f2 := testutils.GetNetworkFlow(d1, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f1 := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts1)
+	f2 := testutils.GetNetworkFlow(d1, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 	f3 := testutils.GetNetworkFlow(d1, e5, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, nil)
 	f4 := testutils.GetNetworkFlow(d1, e6, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
 	f5 := testutils.GetNetworkFlow(e6, d2, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
-	f6 := testutils.GetNetworkFlow(e6, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, ts2)
+	f6 := testutils.GetNetworkFlow(e6, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, &ts2)
 	f7 := testutils.GetNetworkFlow(internet, d2, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
-	f8 := testutils.GetNetworkFlow(internet, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, ts1)
-	f9 := testutils.GetNetworkFlow(d1, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
-	f10 := testutils.GetNetworkFlow(d2, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f8 := testutils.GetNetworkFlow(internet, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, &ts1)
+	f9 := testutils.GetNetworkFlow(d1, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
+	f10 := testutils.GetNetworkFlow(d2, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 
 	flows := []*storage.NetworkFlow{f1, f2, f3, f4, f5, f6, f7, f8, f9, f10}
 
 	f3x := testutils.GetNetworkFlow(d1, e6, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, nil)
-	f9x := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
-	f10x := testutils.GetNetworkFlow(d2, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f9x := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
+	f10x := testutils.GetNetworkFlow(d2, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 
 	expected := []*storage.NetworkFlow{f2, f3x, f4, f5, f6, f7, f8, f9x, f10x}
 
 	aggr, err := NewSubnetToSupernetConnAggregator(tree.NewMultiNetworkTree(tree1, tree2))
 	assert.NoError(t, err)
 	actual := aggr.Aggregate(flows)
-	assert.ElementsMatch(t, expected, actual)
+	protoassert.ElementsMatch(t, expected, actual)
 }
 
 func TestHideDefaultExtSrcsAggregator(t *testing.T) {
@@ -167,7 +168,7 @@ func TestHideDefaultExtSrcsAggregator(t *testing.T) {
 	networkTree, err := tree.NewNetworkTreeWrapper([]*storage.NetworkEntityInfo{e1, e2, e3, e4, e5, e6})
 	assert.NoError(t, err)
 
-	assert.Equal(t, e2, networkTree.GetSupernet(e1.GetId()))
+	protoassert.Equal(t, e2, networkTree.GetSupernet(e1.GetId()))
 	assert.Equal(t, internet.GetId(), networkTree.GetSupernet(e6.GetId()).GetId())
 	/*
 
@@ -205,39 +206,37 @@ func TestHideDefaultExtSrcsAggregator(t *testing.T) {
 
 	*/
 
-	ts1 := types.TimestampNow()
-	ts2 := ts1.Clone()
-	ts2.Seconds = ts2.Seconds + 1000
+	ts1 := time.Now()
+	ts2 := ts1.Add(1000 * time.Second)
 
-	f1 := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts1)
-	f2 := testutils.GetNetworkFlow(d1, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f1 := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts1)
+	f2 := testutils.GetNetworkFlow(d1, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 	f3 := testutils.GetNetworkFlow(d1, e5, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, nil)
 	f4 := testutils.GetNetworkFlow(d1, e6, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
 	f5 := testutils.GetNetworkFlow(e6, d2, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
-	f6 := testutils.GetNetworkFlow(e6, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, ts2)
+	f6 := testutils.GetNetworkFlow(e6, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, &ts2)
 	f7 := testutils.GetNetworkFlow(internet, d2, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
-	f8 := testutils.GetNetworkFlow(internet, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, ts1)
-	f9 := testutils.GetNetworkFlow(d1, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
-	f10 := testutils.GetNetworkFlow(d2, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f8 := testutils.GetNetworkFlow(internet, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, &ts1)
+	f9 := testutils.GetNetworkFlow(d1, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
+	f10 := testutils.GetNetworkFlow(d2, e4, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 
 	flows := []*storage.NetworkFlow{f1, f2, f3, f4, f5, f6, f7, f8, f9, f10}
 
 	f4x := testutils.GetNetworkFlow(d1, internet, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
-	f8x := testutils.GetNetworkFlow(internet, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, ts2)
-	f10x := testutils.GetNetworkFlow(d2, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f8x := testutils.GetNetworkFlow(internet, d2, 8000, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, &ts2)
+	f10x := testutils.GetNetworkFlow(d2, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 
 	expected := []*storage.NetworkFlow{f2, f3, f4x, f7, f8x, f10x}
 
 	aggr, err := NewDefaultToCustomExtSrcConnAggregator(networkTree)
 	assert.NoError(t, err)
 	actual := aggr.Aggregate(flows)
-	assert.ElementsMatch(t, expected, actual)
+	protoassert.ElementsMatch(t, expected, actual)
 }
 
 func TestAggregateExtConnsByName(t *testing.T) {
-	ts1 := types.TimestampNow()
-	ts2 := ts1.Clone()
-	ts2.Seconds = ts2.Seconds + 1000
+	ts1 := time.Now()
+	ts2 := ts1.Add(1000 * time.Second)
 
 	d1 := testutils.GetDeploymentNetworkEntity("d1", "d1")
 	d2 := testutils.GetDeploymentNetworkEntity("d2", "d2")
@@ -249,8 +248,8 @@ func TestAggregateExtConnsByName(t *testing.T) {
 	e5 := testutils.GetExtSrcNetworkEntityInfo("cluster1__nameless", "", "", false)
 	e6 := testutils.GetExtSrcNetworkEntityInfo("cluster1__e6", "extSrc6", "net6", false)
 
-	f1 := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts1)
-	f2 := testutils.GetNetworkFlow(d1, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f1 := testutils.GetNetworkFlow(d1, e1, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts1)
+	f2 := testutils.GetNetworkFlow(d1, e2, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 	f3 := testutils.GetNetworkFlow(d1, e3, 8080, storage.L4Protocol_L4_PROTOCOL_TCP, nil)
 	f4 := testutils.GetNetworkFlow(d1, d2, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
 	f5 := testutils.GetNetworkFlow(e4, d2, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
@@ -287,7 +286,7 @@ func TestAggregateExtConnsByName(t *testing.T) {
 		f8 -> f8x
 	*/
 
-	f2x := testutils.GetNetworkFlow(d1, e2x, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, ts2)
+	f2x := testutils.GetNetworkFlow(d1, e2x, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts2)
 	f3x := testutils.GetNetworkFlow(d1, e2x, 8080, storage.L4Protocol_L4_PROTOCOL_TCP, nil)
 	f6x := testutils.GetNetworkFlow(e5x, d2, 0, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
 	f8x := testutils.GetNetworkFlow(e5x, d2, 8080, storage.L4Protocol_L4_PROTOCOL_UNKNOWN, nil)
@@ -297,5 +296,60 @@ func TestAggregateExtConnsByName(t *testing.T) {
 	actual := NewDuplicateNameExtSrcConnAggregator().Aggregate(flows)
 
 	assert.Len(t, actual, len(expected))
-	assert.ElementsMatch(t, expected, actual)
+	protoassert.ElementsMatch(t, expected, actual)
+}
+
+func TestAggregateExtConnsByNameAnonymizeDiscoveredExtEntities(t *testing.T) {
+	ts1 := time.Now()
+
+	d1 := testutils.GetDeploymentNetworkEntity("d1", "d1")
+
+	discovered_entity := networkgraph.DiscoveredExternalEntity(net.IPNetworkFromCIDRBytes([]byte{35, 187, 144, 4, 32})).ToProto()
+	internet := networkgraph.InternetEntity().ToProto()
+
+	detailed_flow := testutils.GetNetworkFlow(d1, discovered_entity, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts1)
+	anonymized_flow := testutils.GetNetworkFlow(d1, internet, 8000, storage.L4Protocol_L4_PROTOCOL_TCP, &ts1)
+
+	flows := []*storage.NetworkFlow{detailed_flow}
+
+	expected := []*storage.NetworkFlow{anonymized_flow}
+
+	actual := NewDuplicateNameExtSrcConnAggregator().Aggregate(flows)
+
+	assert.Len(t, actual, len(expected))
+	protoassert.ElementsMatch(t, expected, actual)
+}
+
+func TestAnonymizeDiscoveredEntity(t *testing.T) {
+	type TestSetEntry struct {
+		name     string
+		input    *storage.NetworkEntityInfo
+		expected *storage.NetworkEntityInfo
+	}
+
+	testSet := []TestSetEntry{
+		{
+			name:     "Deployment",
+			input:    testutils.GetDeploymentNetworkEntity("d1", "d1"),
+			expected: testutils.GetDeploymentNetworkEntity("d1", "d1"),
+		},
+		{
+			name:     "NonDiscoveredExternalEntity",
+			input:    testutils.GetExtSrcNetworkEntityInfo("cluster1__e1", "google", "net1", false),
+			expected: testutils.GetExtSrcNetworkEntityInfo("cluster1__e1", "google", "net1", false),
+		},
+		{
+			name:     "DiscoveredExternalEntity",
+			input:    networkgraph.DiscoveredExternalEntity(net.IPNetworkFromCIDRBytes([]byte{35, 187, 144, 4, 32})).ToProto(),
+			expected: networkgraph.InternetEntity().ToProto(), // <- anonymization
+		},
+	}
+
+	for _, testEntry := range testSet {
+		t.Run(testEntry.name, func(t *testing.T) {
+			actual := anonymizeDiscoveredEntity(testEntry.input)
+
+			protoassert.Equal(t, testEntry.expected, actual)
+		})
+	}
 }

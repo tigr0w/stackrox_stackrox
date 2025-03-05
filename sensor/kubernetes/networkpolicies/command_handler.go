@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/pkg/centralsensor"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/sensor/common"
+	"github.com/stackrox/rox/sensor/common/message"
 	"k8s.io/client-go/kubernetes"
 	networkingV1Client "k8s.io/client-go/kubernetes/typed/networking/v1"
 )
@@ -23,7 +24,7 @@ type commandHandler struct {
 	networkingV1Client networkingV1Client.NetworkingV1Interface
 
 	commandsC  chan *central.NetworkPoliciesCommand
-	responsesC chan *central.MsgFromSensor
+	responsesC chan *message.ExpiringMessage
 
 	stopSig concurrency.Signal
 }
@@ -37,7 +38,7 @@ func newCommandHandler(networkingV1Client networkingV1Client.NetworkingV1Interfa
 	return &commandHandler{
 		networkingV1Client: networkingV1Client,
 		commandsC:          make(chan *central.NetworkPoliciesCommand),
-		responsesC:         make(chan *central.MsgFromSensor),
+		responsesC:         make(chan *message.ExpiringMessage),
 		stopSig:            concurrency.NewSignal(),
 	}
 }
@@ -57,7 +58,7 @@ func (h *commandHandler) Capabilities() []centralsensor.SensorCapability {
 	return nil
 }
 
-func (h *commandHandler) ResponsesC() <-chan *central.MsgFromSensor {
+func (h *commandHandler) ResponsesC() <-chan *message.ExpiringMessage {
 	return h.responsesC
 }
 
@@ -89,15 +90,15 @@ func (h *commandHandler) ProcessMessage(msg *central.MsgToSensor) error {
 	case h.commandsC <- cmd:
 		return nil
 	case <-h.stopSig.Done():
-		return errors.Errorf("unable to apply network policies: %s", proto.MarshalTextString(cmd))
+		return errors.Errorf("unable to apply network policies: %s", protocompat.MarshalTextString(cmd))
 	}
 }
 
 func (h *commandHandler) sendResponse(resp *central.NetworkPoliciesResponse) bool {
 	select {
-	case h.responsesC <- &central.MsgFromSensor{
+	case h.responsesC <- message.New(&central.MsgFromSensor{
 		Msg: &central.MsgFromSensor_NetworkPoliciesResponse{NetworkPoliciesResponse: resp},
-	}:
+	}):
 		return true
 	case <-h.stopSig.Done():
 		return false

@@ -17,6 +17,8 @@ spec:
     declarativeConfiguration:
       configMaps:
       - name: "declarative-configurations"
+      secrets:
+      - name: "sensitive-declarative-configurations"
     db:
       resources:
         limits:
@@ -25,6 +27,11 @@ spec:
         requests:
           cpu: 1
           memory: 1Gi
+${disableSpecTLS}  tls:
+${disableSpecTLS}    additionalCAs:
+${disableSpecTLS}    - name: additional-ca
+${disableSpecTLS}      content: |
+$centralAdditionalCAIndented
   customize:
     envVars:$customize_envVars
   scanner:

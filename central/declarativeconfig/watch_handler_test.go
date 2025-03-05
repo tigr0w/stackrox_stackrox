@@ -3,19 +3,19 @@ package declarativeconfig
 import (
 	"context"
 	"crypto/md5"
+	"maps"
 	"os"
 	"path"
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/central/declarativeconfig/mocks"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/k8scfgwatch"
-	"github.com/stackrox/rox/pkg/maputil"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"gopkg.in/yaml.v3"
 )
 
@@ -163,7 +163,7 @@ func TestWatchHandler_WithEmptyDirectory(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		wh.mutex.RLock()
 		defer wh.mutex.RUnlock()
-		return maputil.Equal(expectedCache, wh.cachedFileHashes)
+		return maps.Equal(expectedCache, wh.cachedFileHashes)
 	}, 500*time.Millisecond, 100*time.Millisecond)
 }
 
@@ -211,7 +211,7 @@ func TestWatchHandler_WithPrefilledDirectory(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		wh.mutex.RLock()
 		defer wh.mutex.RUnlock()
-		return maputil.Equal(expectedCache, wh.cachedFileHashes)
+		return maps.Equal(expectedCache, wh.cachedFileHashes)
 	}, 500*time.Millisecond, 100*time.Millisecond)
 
 	// 4.  Add another valid YAML file to the directory the handler will be watching.
@@ -245,7 +245,7 @@ func TestWatchHandler_WithPrefilledDirectory(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		wh.mutex.RLock()
 		defer wh.mutex.RUnlock()
-		return maputil.Equal(expectedCache, wh.cachedFileHashes)
+		return maps.Equal(expectedCache, wh.cachedFileHashes)
 	}, 500*time.Millisecond, 100*time.Millisecond)
 }
 
@@ -292,7 +292,7 @@ func TestWatchHandler_WithRemovedFiles(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		wh.mutex.RLock()
 		defer wh.mutex.RUnlock()
-		return maputil.Equal(expectedCache, wh.cachedFileHashes)
+		return maps.Equal(expectedCache, wh.cachedFileHashes)
 	}, 500*time.Millisecond, 100*time.Millisecond)
 
 	// 4.Set the expected calls to the updater.
@@ -307,6 +307,6 @@ func TestWatchHandler_WithRemovedFiles(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		wh.mutex.RLock()
 		defer wh.mutex.RUnlock()
-		return maputil.Equal(expectedCache, wh.cachedFileHashes)
+		return maps.Equal(expectedCache, wh.cachedFileHashes)
 	}, 500*time.Millisecond, 100*time.Millisecond)
 }

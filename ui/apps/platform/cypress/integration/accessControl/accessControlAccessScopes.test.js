@@ -1,4 +1,5 @@
 import withAuth from '../../helpers/basicAuth';
+import { assertCannotFindThePage } from '../../helpers/visit';
 
 import {
     accessScopesKey as entitiesKey,
@@ -15,7 +16,7 @@ const defaultNames = ['Unrestricted', 'Deny All'];
 describe('Access Control Access scopes', () => {
     withAuth();
 
-    it('displays alert if no permission', () => {
+    it('cannot find the page if no permission', () => {
         const staticResponseForPermissions = {
             fixture: 'auth/mypermissionsMinimalAccess.json',
         };
@@ -24,10 +25,7 @@ describe('Access Control Access scopes', () => {
             staticResponseForPermissions
         );
 
-        cy.get(selectors.alertTitle).should(
-            'contain', // not have.text because it contains "Info alert:" for screen reader
-            'You do not have permission to view access scopes.'
-        );
+        assertCannotFindThePage();
     });
 
     it('list has heading, button, and table head cells', () => {
@@ -41,7 +39,7 @@ describe('Access Control Access scopes', () => {
         cy.get('th:contains("Origin")');
         cy.get('th:contains("Description")');
         cy.get('th:contains("Roles")');
-        cy.get('th[aria-label="Row actions"]');
+        cy.get(`th:has('span.pf-v5-screen-reader:contains("Row actions")')`);
     });
 
     it('list has default names', () => {
@@ -58,8 +56,8 @@ describe('Access Control Access scopes', () => {
         const entityName = 'Deny All';
         clickEntityNameInTable(entitiesKey, entityName);
 
-        cy.get(`h2:contains("${entityName}")`);
-        cy.get(`li.pf-c-breadcrumb__item:nth-child(2):contains("${entityName}")`);
+        cy.get(`h1:contains("${entityName}")`);
+        cy.get(`li.pf-v5-c-breadcrumb__item:nth-child(2):contains("${entityName}")`);
 
         cy.get(selectors.form.notEditableLabel).should('exist');
         cy.get(selectors.form.editButton).should('not.exist');

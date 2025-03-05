@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/activecomponent/updater/aggregator"
+	"github.com/stackrox/rox/central/deployment/cache"
 	deploymentDatastore "github.com/stackrox/rox/central/deployment/datastore"
 	"github.com/stackrox/rox/central/deployment/queue"
 	"github.com/stackrox/rox/central/detection/alertmanager"
+	"github.com/stackrox/rox/central/detection/buildtime"
 	"github.com/stackrox/rox/central/detection/deploytime"
 	"github.com/stackrox/rox/central/detection/lifecycle/metrics"
 	"github.com/stackrox/rox/central/detection/runtime"
@@ -20,17 +20,16 @@ import (
 	baselineDataStore "github.com/stackrox/rox/central/processbaseline/datastore"
 	processIndicatorDatastore "github.com/stackrox/rox/central/processindicator/datastore"
 	"github.com/stackrox/rox/central/reprocessor"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/env"
-	"github.com/stackrox/rox/pkg/expiringcache"
 	"github.com/stackrox/rox/pkg/policies"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/process/filter"
 	processBaselinePkg "github.com/stackrox/rox/pkg/processbaseline"
-	"github.com/stackrox/rox/pkg/protoutils"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
@@ -42,8 +41,7 @@ var (
 	lifecycleMgrCtx = sac.WithGlobalAccessScopeChecker(context.Background(),
 		sac.AllowFixedScopes(sac.AccessModeScopeKeys(storage.Access_READ_ACCESS, storage.Access_READ_WRITE_ACCESS),
 			sac.ResourceScopeKeys(resources.Alert, resources.Deployment, resources.Image,
-				// TODO: ROX-13888 Replace Policy with WorkflowAdministration.
-				resources.DeploymentExtension, resources.Policy, resources.Namespace)))
+				resources.DeploymentExtension, resources.WorkflowAdministration, resources.Namespace)))
 
 	genDuration = env.BaselineGenerationDuration.DurationSetting()
 )
@@ -56,15 +54,18 @@ type processBaselineKey struct {
 }
 
 type managerImpl struct {
-	reprocessor        reprocessor.Loop
+	reprocessor reprocessor.Loop
+
+	buildTimeDetector  buildtime.Detector
 	runtimeDetector    runtime.Detector
-	deploytimeDetector deploytime.Detector
-	alertManager       alertmanager.AlertManager
+	deployTimeDetector deploytime.Detector
+
+	alertManager alertmanager.AlertManager
 
 	deploymentDataStore     deploymentDatastore.DataStore
 	processesDataStore      processIndicatorDatastore.DataStore
 	baselines               baselineDataStore.DataStore
-	deletedDeploymentsCache expiringcache.Cache
+	deletedDeploymentsCache cache.DeletedDeployments
 	processFilter           filter.Filter
 
 	queuedIndicators           map[string]*storage.ProcessIndicator
@@ -118,7 +119,7 @@ func (m *managerImpl) buildIndicatorFilter() {
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		utils.Should(errors.Wrap(err, "error building indicator filter"))
 	}
 
@@ -156,7 +157,7 @@ func (m *managerImpl) flushBaselineQueue() {
 	for {
 		// ObservationEnd is in the future so we have nothing to do at this time
 		head := m.deploymentObservationQueue.Peek()
-		if head == nil || protoutils.After(head.ObservationEnd, types.TimestampNow()) {
+		if head == nil || head.ObservationEnd.After(time.Now()) {
 			return
 		}
 
@@ -187,7 +188,7 @@ func (m *managerImpl) flushIndicatorQueue() {
 	// Map copiedQueue to slice
 	indicatorSlice := make([]*storage.ProcessIndicator, 0, len(copiedQueue))
 	for _, indicator := range copiedQueue {
-		if deleted, _ := m.deletedDeploymentsCache.Get(indicator.GetDeploymentId()).(bool); deleted {
+		if m.deletedDeploymentsCache.Contains(indicator.GetDeploymentId()) {
 			continue
 		}
 		indicatorSlice = append(indicatorSlice, indicator)
@@ -308,7 +309,7 @@ func (m *managerImpl) checkAndUpdateBaseline(baselineKey processBaselineKey, ind
 
 func (m *managerImpl) IndicatorAdded(indicator *storage.ProcessIndicator) error {
 	if indicator.GetId() == "" {
-		return fmt.Errorf("invalid indicator received: %s, id was empty", proto.MarshalTextString(indicator))
+		return fmt.Errorf("invalid indicator received: %s, id was empty", protocompat.MarshalTextString(indicator))
 	}
 
 	// Evaluate filter before even adding to the queue
@@ -318,7 +319,7 @@ func (m *managerImpl) IndicatorAdded(indicator *storage.ProcessIndicator) error 
 	}
 	metrics.ProcessFilterCounterInc("Added")
 
-	observationEnd, _ := types.TimestampProto(time.Now().Add(genDuration))
+	observationEnd := time.Now().Add(genDuration)
 	m.deploymentObservationQueue.Push(&queue.DeploymentObservation{DeploymentID: indicator.GetDeploymentId(), InObservation: true, ObservationEnd: observationEnd})
 
 	m.addToIndicatorQueue(indicator)
@@ -369,48 +370,78 @@ func (m *managerImpl) HandleResourceAlerts(clusterID string, alerts []*storage.A
 	if len(alerts) == 0 && stage == storage.LifecycleStage_RUNTIME {
 		return nil
 	}
-	// These alerts are all for a single cluster but may belong to any number of namespaces or resource types (except deployment)
-	// Ideally search filters should be for lifecycle stage && (namespace1 || namespace2...) && resource_type!=DEPLOYMENT
-	// But with these filters they are all ANDs
-	// Therefore for now, we will have to pull all non-deployment alerts for this lifecycle stage within specified cluster.
-	if _, err := m.alertManager.AlertAndNotify(lifecycleMgrCtx, alerts,
-		alertmanager.WithLifecycleStage(stage), alertmanager.WithClusterID(clusterID), alertmanager.WithoutResourceType(storage.ListAlert_DEPLOYMENT)); err != nil {
-		return err
-	}
 
+	// Split the alerts into unique groups so that we can do targeted lookups of alerts that need to be merged.
+	// Based on the current Sensor logic, this should only ever result in a single group as the alert results are
+	// multiple policy evaluations against the same audit event which only ever references a single resource type and name.
+	type alertKey struct {
+		namespace    string
+		resourceName string
+		resourceType storage.Alert_Resource_ResourceType
+	}
+	alertGroups := make(map[alertKey][]*storage.Alert)
+	for _, alert := range alerts {
+		key := alertKey{
+			namespace:    alert.GetNamespace(),
+			resourceName: alert.GetResource().GetName(),
+			resourceType: alert.GetResource().GetResourceType(),
+		}
+		alertGroups[key] = append(alertGroups[key], alert)
+	}
+	for key, alerts := range alertGroups {
+		opts := []alertmanager.AlertFilterOption{
+			alertmanager.WithLifecycleStage(stage),
+			// Use cluster id and namespace name to align with sac filters
+			alertmanager.WithClusterID(clusterID),
+			alertmanager.WithNamespace(key.namespace),
+			alertmanager.WithResource(key.resourceName, key.resourceType),
+		}
+		if _, err := m.alertManager.AlertAndNotify(lifecycleMgrCtx, alerts, opts...); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (m *managerImpl) UpsertPolicy(policy *storage.Policy) error {
 	m.policyAlertsLock.Lock()
 	defer m.policyAlertsLock.Unlock()
+
 	// Add policy to set.
+	if policies.AppliesAtBuildTime(policy) {
+		if err := m.buildTimeDetector.PolicySet().UpsertPolicy(policy); err != nil {
+			return errors.Wrapf(err, "adding policy %s to build time detector", policy.GetName())
+		}
+	} else {
+		m.buildTimeDetector.PolicySet().RemovePolicy(policy.GetId())
+	}
+
 	if policies.AppliesAtDeployTime(policy) {
-		if err := m.deploytimeDetector.PolicySet().UpsertPolicy(policy); err != nil {
+		if err := m.deployTimeDetector.PolicySet().UpsertPolicy(policy); err != nil {
 			return errors.Wrapf(err, "adding policy %s to deploy time detector", policy.GetName())
 		}
 	} else {
-		m.deploytimeDetector.PolicySet().RemovePolicy(policy.GetId())
+		m.deployTimeDetector.PolicySet().RemovePolicy(policy.GetId())
 	}
 
 	if policies.AppliesAtRunTime(policy) {
 		if err := m.runtimeDetector.PolicySet().UpsertPolicy(policy); err != nil {
 			return errors.Wrapf(err, "adding policy %s to runtime detector", policy.GetName())
 		}
-	} else {
-		m.runtimeDetector.PolicySet().RemovePolicy(policy.GetId())
-	}
-
-	if policies.AppliesAtRunTime(policy) {
 		// Perform notifications and update DB.
-		modifiedDeployments, err := m.alertManager.AlertAndNotify(lifecycleMgrCtx, nil, alertmanager.WithPolicyID(policy.GetId()))
+		modifiedDeployments, err := m.alertManager.AlertAndNotify(lifecycleMgrCtx, nil,
+			alertmanager.WithPolicyID(policy.GetId()))
 		if err != nil {
 			return err
 		}
 		if modifiedDeployments.Cardinality() > 0 {
 			defer m.reprocessor.ReprocessRiskForDeployments(modifiedDeployments.AsSlice()...)
 		}
+
+	} else {
+		m.runtimeDetector.PolicySet().RemovePolicy(policy.GetId())
 	}
+
 	if policy.GetDisabled() {
 		m.removedOrDisabledPolicies.Add(policy.GetId())
 	} else {
@@ -435,16 +466,18 @@ func (m *managerImpl) RemovePolicy(policyID string) error {
 	m.policyAlertsLock.Lock()
 	defer m.policyAlertsLock.Unlock()
 
-	m.deploytimeDetector.PolicySet().RemovePolicy(policyID)
+	m.buildTimeDetector.PolicySet().RemovePolicy(policyID)
 
-	numRuntimeAlerts := len(m.runtimeDetector.PolicySet().GetCompiledPolicies())
+	m.deployTimeDetector.PolicySet().RemovePolicy(policyID)
+
+	numRuntimePolicies := len(m.runtimeDetector.PolicySet().GetCompiledPolicies())
 	m.runtimeDetector.PolicySet().RemovePolicy(policyID)
-	runtimeAlertRemoved := numRuntimeAlerts-len(m.runtimeDetector.PolicySet().GetCompiledPolicies()) > 0
+	runtimePolicyRemoved := numRuntimePolicies-len(m.runtimeDetector.PolicySet().GetCompiledPolicies()) > 0
 
 	m.removedOrDisabledPolicies.Add(policyID)
 
-	// Runtime alerts need to be explicitly removed as their updates are not synced from sensors
-	if runtimeAlertRemoved {
+	// Runtime alerts need to be explicitly marked resolved as their updates are not synced from sensors
+	if runtimePolicyRemoved {
 		modifiedDeployments, err := m.alertManager.AlertAndNotify(lifecycleMgrCtx, nil, alertmanager.WithPolicyID(policyID))
 		if err != nil {
 			return err

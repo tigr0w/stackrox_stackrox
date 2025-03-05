@@ -1,6 +1,10 @@
 package retry
 
-import "time"
+import (
+	"context"
+	"math"
+	"time"
+)
 
 // WithRetry allows you to call an error returning function with a suite of retry options and modifiers.
 func WithRetry(f func() error, retriableOptions ...OptionsModifier) error {
@@ -40,11 +44,17 @@ func BetweenAttempts(between func(previousAttemptNumber int)) OptionsModifier {
 	return func(o *retryOptions) { o.between = between }
 }
 
+// WithContext allows providing a context that will be checked for expiry once per attempt.
+func WithContext(ctx context.Context) OptionsModifier {
+	return func(o *retryOptions) { o.ctx = ctx }
+}
+
 // OptionsModifier applies a mutation to a retryOptions.
 type OptionsModifier func(*retryOptions)
 
 type retryOptions struct {
 	function               func() error
+	ctx                    context.Context
 	onFailure              func(error)
 	canRetry               func(error) bool
 	between                func(int)
@@ -54,6 +64,9 @@ type retryOptions struct {
 
 func (t *retryOptions) do() (err error) {
 	for i := 0; i < t.tries; i++ {
+		if t.ctx != nil && t.ctx.Err() != nil {
+			return t.ctx.Err()
+		}
 		// If we've run previously and have an error
 		if err != nil {
 			// Check if we can retry the error, and if so, run onFailure and between.
@@ -65,9 +78,9 @@ func (t *retryOptions) do() (err error) {
 					t.between(i)
 				}
 				if t.withExponentialBackoff {
-					// Back off by 100 milliseconds after the first attempt,
-					// 400 milliseconds after the second, 900 milliseconds after the third, etc.
-					time.Sleep(time.Duration(100*(i+1)*(i+1)) * time.Millisecond)
+					// First retry after 100 milliseconds, second retry after 200 milliseconds,
+					// third retry after 400 milliseconds. Backoff time doubles after each attempt.
+					time.Sleep(time.Duration(100*math.Pow(2, float64(i))) * time.Millisecond)
 				}
 			} else {
 				// If we can't retry then return.

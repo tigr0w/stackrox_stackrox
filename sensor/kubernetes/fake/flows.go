@@ -6,10 +6,10 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/net"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/timestamp"
@@ -105,8 +105,8 @@ func (p *EndpointPool) remove(containerID string) {
 	defer p.lock.Unlock()
 
 	p.EndpointsToBeClosed = append(p.EndpointsToBeClosed, p.Endpoints[containerID]...)
-	delete(p.Endpoints, containerID)
 	p.Size -= len(p.Endpoints[containerID])
+	delete(p.Endpoints, containerID)
 }
 
 func (p *EndpointPool) clearEndpointsToBeClosed() {
@@ -114,19 +114,6 @@ func (p *EndpointPool) clearEndpointsToBeClosed() {
 	defer p.lock.Unlock()
 
 	p.EndpointsToBeClosed = []*sensor.NetworkEndpoint{}
-}
-
-func (p *EndpointPool) getRandomEndpoint(containerID string) *sensor.NetworkEndpoint {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-
-	size := len(p.Endpoints[containerID])
-	if size > 0 {
-		randIdx := rand.Intn(size)
-		return p.Endpoints[containerID][randIdx]
-	}
-
-	return nil
 }
 
 func generateIP() string {
@@ -174,7 +161,17 @@ func getNetworkProcessUniqueKeyFromProcess(process *storage.ProcessSignal) *stor
 }
 
 func getRandomOriginator(containerID string) *storage.NetworkProcessUniqueKey {
-	process := processPool.getRandomProcess(containerID)
+	var process *storage.ProcessSignal
+	var percentMatchedProcess float32 = 0.5
+	p := rand.Float32()
+	if p < percentMatchedProcess {
+		// There is a chance that the process has been filtered out or hasn't gotten to
+		// the central-db for some other reason so this is not a guarantee that the
+		// process is in the central-db
+		process = processPool.getRandomProcess(containerID)
+	} else {
+		process = getGoodProcess(containerID)
+	}
 
 	return getNetworkProcessUniqueKeyFromProcess(process)
 }
@@ -190,7 +187,12 @@ func getNetworkEndpointFromConnectionAndOriginator(conn *sensor.NetworkConnectio
 	}
 }
 
-func makeNetworkConnection(src string, dst string, containerID string, closeTS *types.Timestamp) *sensor.NetworkConnection {
+func makeNetworkConnection(src string, dst string, containerID string, closeTimestamp time.Time) *sensor.NetworkConnection {
+	closeTS, err := protocompat.ConvertTimeToTimestampOrError(closeTimestamp)
+	if err != nil {
+		log.Errorf("Unable to set closeTS %+v", err)
+	}
+
 	return &sensor.NetworkConnection{
 		SocketFamily: sensor.SocketFamily_SOCKET_FAMILY_IPV4,
 		LocalAddress: &sensor.NetworkAddress{
@@ -229,12 +231,7 @@ func (w *WorkloadManager) getFakeNetworkConnectionInfo(workload NetworkWorkload)
 			continue
 		}
 
-		closeTS, err := types.TimestampProto(time.Now().Add(-5 * time.Second))
-		if err != nil {
-			log.Errorf("Unable to set closeTS %+v", err)
-		}
-
-		conn := makeNetworkConnection(src, dst, containerID, closeTS)
+		conn := makeNetworkConnection(src, dst, containerID, time.Now().Add(-5*time.Second))
 
 		originator := getRandomOriginator(containerID)
 
@@ -243,13 +240,13 @@ func (w *WorkloadManager) getFakeNetworkConnectionInfo(workload NetworkWorkload)
 		conns = append(conns, conn)
 		if endpointPool.Size < endpointPool.Capacity {
 			endpointPool.add(networkEndpoint)
-			networkEndpoints = append(networkEndpoints, networkEndpoint)
 		}
+		networkEndpoints = append(networkEndpoints, networkEndpoint)
 	}
 
 	for _, endpoint := range endpointPool.EndpointsToBeClosed {
 		networkEndpoint := endpoint
-		closeTS, err := types.TimestampProto(time.Now().Add(-5 * time.Second))
+		closeTS, err := protocompat.ConvertTimeToTimestampOrError(time.Now().Add(-5 * time.Second))
 		if err != nil {
 			log.Errorf("Unable to set CloseTimestamp for endpoint %+v", err)
 		} else {
@@ -263,7 +260,7 @@ func (w *WorkloadManager) getFakeNetworkConnectionInfo(workload NetworkWorkload)
 	return &sensor.NetworkConnectionInfo{
 		UpdatedConnections: conns,
 		UpdatedEndpoints:   networkEndpoints,
-		Time:               types.TimestampNow(),
+		Time:               protocompat.TimestampNow(),
 	}
 }
 

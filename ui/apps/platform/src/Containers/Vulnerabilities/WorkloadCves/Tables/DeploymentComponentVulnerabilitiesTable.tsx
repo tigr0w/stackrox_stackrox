@@ -1,10 +1,14 @@
 import React from 'react';
-import { TableComposable, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { gql } from '@apollo/client';
 
+import useFeatureFlags from 'hooks/useFeatureFlags';
 import useTableSort from 'hooks/patternfly/useTableSort';
 import VulnerabilitySeverityIconText from 'Components/PatternFly/IconText/VulnerabilitySeverityIconText';
-import ImageNameTd from '../components/ImageNameTd';
+import { VulnerabilityState } from 'types/cve.proto';
+import CvssFormatted from 'Components/CvssFormatted';
+
+import ImageNameLink from '../components/ImageNameLink';
 import {
     imageMetadataContextFragment,
     ImageMetadataContext,
@@ -12,10 +16,12 @@ import {
     sortTableData,
     flattenDeploymentComponentVulns,
 } from './table.utils';
-import FixedByVersionTd from '../components/FixedByVersionTd';
-import DockerfileLayerTd from '../components/DockerfileLayerTd';
-import ComponentLocationTd from '../components/ComponentLocationTd';
-import CvssTd from '../components/CvssTd';
+import FixedByVersion from '../components/FixedByVersion';
+import DockerfileLayer from '../components/DockerfileLayer';
+import ComponentLocation from '../components/ComponentLocation';
+import PendingExceptionLabelLayout from '../components/PendingExceptionLabelLayout';
+
+import AdvisoryLinkOrText from './AdvisoryLinkOrText';
 
 export { imageMetadataContextFragment };
 export type { ImageMetadataContext, DeploymentComponentVulnerability };
@@ -28,12 +34,13 @@ export const deploymentComponentVulnerabilitiesFragment = gql`
         source
         layerIndex
         imageVulnerabilities(query: $query) {
-            vulnerabilityId: id
             severity
             cvss
             scoreVersion
             fixedByVersion
             discoveredAtImage
+            publishedOn
+            pendingExceptionCount: exceptionCount(requestStatus: $statusesForExceptionCount)
         }
     }
 `;
@@ -47,21 +54,30 @@ export type DeploymentComponentVulnerabilitiesTableProps = {
         imageMetadataContext: ImageMetadataContext;
         componentVulnerabilities: DeploymentComponentVulnerability[];
     }[];
+    cve: string;
+    vulnerabilityState: VulnerabilityState;
 };
 
 function DeploymentComponentVulnerabilitiesTable({
     images,
+    cve,
+    vulnerabilityState,
 }: DeploymentComponentVulnerabilitiesTableProps) {
+    const { isFeatureFlagEnabled } = useFeatureFlags();
+    const isAdvisoryColumnEnabled =
+        isFeatureFlagEnabled('ROX_SCANNER_V4') &&
+        isFeatureFlagEnabled('ROX_CVE_ADVISORY_SEPARATION');
+
     const { sortOption, getSortParams } = useTableSort({ sortFields, defaultSortOption });
     const componentVulns = images.flatMap(({ imageMetadataContext, componentVulnerabilities }) =>
         flattenDeploymentComponentVulns(imageMetadataContext, componentVulnerabilities)
     );
     const sortedComponentVulns = sortTableData(componentVulns, sortOption);
+
     return (
-        <TableComposable
-            className="pf-u-p-md"
+        <Table
             style={{
-                border: '1px solid var(--pf-c-table--BorderColor)',
+                border: '1px solid var(--pf-v5-c-table--BorderColor)',
             }}
             borders={false}
         >
@@ -73,6 +89,8 @@ function DeploymentComponentVulnerabilitiesTable({
                     <Th sort={getSortParams('Component')}>Component</Th>
                     <Th>Version</Th>
                     <Th>CVE fixed in</Th>
+                    {isAdvisoryColumnEnabled && <Th>Advisory</Th>}
+                    <Th>Source</Th>
                     <Th>Location</Th>
                 </Tr>
             </Thead>
@@ -80,7 +98,6 @@ function DeploymentComponentVulnerabilitiesTable({
                 const {
                     image,
                     name,
-                    vulnerabilityId,
                     severity,
                     version,
                     cvss,
@@ -90,46 +107,62 @@ function DeploymentComponentVulnerabilitiesTable({
                     source,
                     layer,
                 } = componentVuln;
+                const advisory = undefined; // placeholder until response includes property
                 // No border on the last row
                 const style =
                     index !== componentVulns.length - 1
-                        ? { borderBottom: '1px solid var(--pf-c-table--BorderColor)' }
+                        ? { borderBottom: '1px solid var(--pf-v5-c-table--BorderColor)' }
                         : {};
+                const hasPendingException = componentVulns.some(
+                    (vuln) => vuln.pendingExceptionCount > 0
+                );
 
                 return (
-                    <Tbody key={`${image.id}:${name}:${version}:${vulnerabilityId}`} style={style}>
+                    <Tbody key={`${image.id}:${name}:${version}`} style={style}>
                         <Tr>
-                            <Td>
+                            <Td dataLabel="Image">
                                 {image.name ? (
-                                    <ImageNameTd name={image.name} id={image.id} />
+                                    <PendingExceptionLabelLayout
+                                        hasPendingException={hasPendingException}
+                                        cve={cve}
+                                        vulnerabilityState={vulnerabilityState}
+                                    >
+                                        <ImageNameLink name={image.name} id={image.id} />
+                                    </PendingExceptionLabelLayout>
                                 ) : (
                                     'Image name not available'
                                 )}
                             </Td>
-                            <Td modifier="nowrap">
+                            <Td dataLabel="CVE severity" modifier="nowrap">
                                 <VulnerabilitySeverityIconText severity={severity} />
                             </Td>
-                            <Td modifier="nowrap">
-                                <CvssTd cvss={cvss} scoreVersion={scoreVersion} />
+                            <Td dataLabel="CVSS" modifier="nowrap">
+                                <CvssFormatted cvss={cvss} scoreVersion={scoreVersion} />
                             </Td>
-                            <Td>{name}</Td>
-                            <Td>{version}</Td>
-                            <Td modifier="nowrap">
-                                <FixedByVersionTd fixedByVersion={fixedByVersion} />
+                            <Td dataLabel="Component">{name}</Td>
+                            <Td dataLabel="Version">{version}</Td>
+                            <Td dataLabel="CVE fixed in" modifier="nowrap">
+                                <FixedByVersion fixedByVersion={fixedByVersion} />
                             </Td>
-                            <Td>
-                                <ComponentLocationTd location={location} source={source} />
+                            {isAdvisoryColumnEnabled && (
+                                <Td dataLabel="Advisory" modifier="nowrap">
+                                    <AdvisoryLinkOrText advisory={advisory} />
+                                </Td>
+                            )}
+                            <Td dataLabel="Source">{source}</Td>
+                            <Td dataLabel="Location">
+                                <ComponentLocation location={location} source={source} />
                             </Td>
                         </Tr>
                         <Tr>
-                            <Td colSpan={7} className="pf-u-pt-0">
-                                <DockerfileLayerTd layer={layer} />
+                            <Td colSpan={8} className="pf-v5-u-pt-0">
+                                <DockerfileLayer layer={layer} />
                             </Td>
                         </Tr>
                     </Tbody>
                 );
             })}
-        </TableComposable>
+        </Table>
     );
 }
 

@@ -1,8 +1,17 @@
 import { gql } from '@apollo/client';
-import { severityRankings } from 'constants/vulnerabilities';
-import { sortBy } from 'lodash';
-import { VulnerabilitySeverity, isVulnerabilitySeverity } from 'types/cve.proto';
-import { ApiSortOption } from 'types/search';
+import { min, parse } from 'date-fns';
+import sortBy from 'lodash/sortBy';
+import uniq from 'lodash/uniq';
+import pluralize from 'pluralize';
+
+import { CveBaseInfo, VulnerabilitySeverity, isVulnerabilitySeverity } from 'types/cve.proto';
+import { SourceType } from 'types/image.proto';
+import { ApiSortOptionSingle } from 'types/search';
+
+import {
+    getHighestVulnerabilitySeverity,
+    getIsSomeVulnerabilityFixable,
+} from '../../utils/vulnerabilityUtils';
 
 export type ImageMetadataContext = {
     id: string;
@@ -40,17 +49,6 @@ export const imageMetadataContextFragment = gql`
     }
 `;
 
-// This is a general type that isn't specific to this component, so should be moved elsewhere if
-// there is a more appropriate location. (top level ./types/ directory?)
-export type SourceType =
-    | 'OS'
-    | 'PYTHON'
-    | 'JAVA'
-    | 'RUBY'
-    | 'NODEJS'
-    | 'DOTNETCORERUNTIME'
-    | 'INFRASTRUCTURE';
-
 // TODO Enforce a non-empty imageVulnerabilities array at a higher level?
 export type ComponentVulnerabilityBase = {
     type: 'Image' | 'Deployment';
@@ -60,9 +58,9 @@ export type ComponentVulnerabilityBase = {
     source: SourceType;
     layerIndex: number | null;
     imageVulnerabilities: {
-        vulnerabilityId: string;
         severity: string;
         fixedByVersion: string;
+        pendingExceptionCount: number;
     }[];
 };
 
@@ -73,12 +71,13 @@ export type DeploymentComponentVulnerability = Omit<
     'imageVulnerabilities'
 > & {
     imageVulnerabilities: {
-        vulnerabilityId: string;
         severity: string;
         cvss: number;
         scoreVersion: string;
         fixedByVersion: string;
         discoveredAtImage: string | null;
+        publishedOn: string | null;
+        pendingExceptionCount: number;
     }[];
 };
 
@@ -92,7 +91,6 @@ export type TableDataRow = {
         } | null;
     };
     name: string;
-    vulnerabilityId: string;
     fixedByVersion: string;
     severity: VulnerabilitySeverity;
     version: string;
@@ -103,6 +101,7 @@ export type TableDataRow = {
         instruction: string;
         value: string;
     } | null;
+    pendingExceptionCount: number;
 };
 
 /**
@@ -172,12 +171,12 @@ function extractCommonComponentFields(
         }
     }
 
-    const vulnerabilityId = vulnerability?.vulnerabilityId ?? 'N/A';
     const severity =
         vulnerability?.severity && isVulnerabilitySeverity(vulnerability.severity)
             ? vulnerability.severity
             : 'UNKNOWN_VULNERABILITY_SEVERITY';
     const fixedByVersion = vulnerability?.fixedByVersion ?? 'N/A';
+    const pendingExceptionCount = vulnerability?.pendingExceptionCount ?? 0;
 
     return {
         name,
@@ -186,15 +185,15 @@ function extractCommonComponentFields(
         source,
         image,
         layer,
-        vulnerabilityId,
         severity,
         fixedByVersion,
+        pendingExceptionCount,
     };
 }
 
 export function sortTableData<TableRowType extends TableDataRow>(
     tableData: TableRowType[],
-    sortOption: ApiSortOption
+    sortOption: ApiSortOptionSingle
 ): TableRowType[] {
     const sortedRows = sortBy(tableData, (row) => {
         switch (sortOption.field) {
@@ -213,57 +212,152 @@ export function sortTableData<TableRowType extends TableDataRow>(
     return sortedRows;
 }
 
-/**
- * Get the highest severity of any vulnerability in the image.
- */
-export function getHighestVulnerabilitySeverity(
-    imageComponents: ImageComponentVulnerability[]
-): VulnerabilitySeverity {
-    let topSeverity: VulnerabilitySeverity = 'UNKNOWN_VULNERABILITY_SEVERITY';
-    imageComponents.forEach((component) => {
-        component.imageVulnerabilities.forEach(({ severity }) => {
-            if (
-                isVulnerabilitySeverity(severity) &&
-                severityRankings[severity] > severityRankings[topSeverity]
-            ) {
-                topSeverity = severity;
-            }
-        });
-    });
-    return topSeverity;
-}
-
-/**
- * Get whether or not the image has any fixable vulnerabilities.
- */
-export function getAnyVulnerabilityIsFixable(
-    imageComponents: ImageComponentVulnerability[]
-): boolean {
-    return imageComponents.some((component) =>
-        component.imageVulnerabilities.some(({ fixedByVersion }) => fixedByVersion !== '')
-    );
-}
-
-export function getHighestCvssScore(
-    imageComponents: {
-        imageVulnerabilities: {
-            cvss: number;
-            scoreVersion: string;
+export type DeploymentWithVulnerabilities = {
+    id: string;
+    images: ImageMetadataContext[];
+    imageVulnerabilities: {
+        vulnerabilityId: string;
+        cve: string;
+        cveBaseInfo: CveBaseInfo;
+        operatingSystem: string;
+        publishedOn: string | null;
+        summary: string;
+        pendingExceptionCount: number;
+        images: {
+            imageId: string;
+            imageComponents: DeploymentComponentVulnerability[];
         }[];
-    }[]
-): {
-    cvss: number;
-    scoreVersion: string;
-} {
-    let topCvss = 0;
-    let topScoreVersion = 'N/A';
-    imageComponents.forEach((component) => {
-        component.imageVulnerabilities.forEach(({ cvss, scoreVersion }) => {
-            if (cvss > topCvss) {
-                topCvss = cvss;
-                topScoreVersion = scoreVersion;
+    }[];
+};
+
+type DeploymentVulnerabilityImageMapping = {
+    imageMetadataContext: ImageMetadataContext;
+    componentVulnerabilities: DeploymentComponentVulnerability[];
+};
+
+export type FormattedDeploymentVulnerability = {
+    vulnerabilityId: string;
+    cve: string;
+    cveBaseInfo: CveBaseInfo;
+    operatingSystem: string;
+    severity: VulnerabilitySeverity;
+    isFixable: boolean;
+    discoveredAtImage: Date | null;
+    publishedOn: Date | null;
+    summary: string;
+    affectedComponentsText: string;
+    images: DeploymentVulnerabilityImageMapping[];
+    pendingExceptionCount: number;
+};
+
+export function formatVulnerabilityData(
+    deployment: DeploymentWithVulnerabilities
+): FormattedDeploymentVulnerability[] {
+    // Create a map of image ID to image metadata for easy lookup
+    // We use 'Partial' here because there is no guarantee that the image will be found
+    const imageMap: Partial<Record<string, ImageMetadataContext>> = {};
+    deployment.images.forEach((image) => {
+        imageMap[image.id] = image;
+    });
+
+    return deployment.imageVulnerabilities.map((vulnerability) => {
+        const {
+            vulnerabilityId,
+            cve,
+            cveBaseInfo,
+            operatingSystem,
+            summary,
+            images,
+            pendingExceptionCount,
+        } = vulnerability;
+        // Severity, Fixability, and Discovered date are all based on the aggregate value of all components
+        const allVulnerableComponents = vulnerability.images.flatMap((img) => img.imageComponents);
+        const allVulnerabilities = allVulnerableComponents.flatMap((c) => c.imageVulnerabilities);
+        const highestVulnSeverity = getHighestVulnerabilitySeverity(allVulnerabilities);
+        const isFixableInDeployment = getIsSomeVulnerabilityFixable(allVulnerabilities);
+        const allDiscoveredDates = allVulnerableComponents
+            .flatMap((c) => c.imageVulnerabilities.map((v) => v.discoveredAtImage))
+            .filter((d): d is string => d !== null);
+        const oldestDiscoveredVulnDate = min(...allDiscoveredDates);
+        // TODO This logic is used in many places, could extract to a util
+        const uniqueComponents = uniq(allVulnerableComponents.map((c) => c.name));
+        const affectedComponentsText =
+            uniqueComponents.length === 1
+                ? uniqueComponents[0]
+                : `${uniqueComponents.length} components`;
+
+        const vulnerabilityImages = images
+            .map((img) => ({
+                imageMetadataContext: imageMap[img.imageId],
+                componentVulnerabilities: img.imageComponents,
+            }))
+            // filter out values where the vulnerability->image mapping is missing
+            .filter(
+                (vulnImageMap): vulnImageMap is DeploymentVulnerabilityImageMapping =>
+                    !!vulnImageMap.imageMetadataContext
+            );
+
+        const publishedOnDate = allVulnerabilities[0].publishedOn
+            ? parse(allVulnerabilities[0].publishedOn)
+            : null;
+
+        return {
+            vulnerabilityId,
+            cve,
+            cveBaseInfo,
+            operatingSystem,
+            severity: highestVulnSeverity,
+            isFixable: isFixableInDeployment,
+            discoveredAtImage: oldestDiscoveredVulnDate,
+            publishedOn: publishedOnDate,
+            summary,
+            affectedComponentsText,
+            images: vulnerabilityImages,
+            pendingExceptionCount,
+        };
+    });
+}
+
+export function getCveBaseInfoFromDistroTuples(
+    distroTuples: { cveBaseInfo: CveBaseInfo }[]
+): CveBaseInfo | undefined {
+    // Return cveBaseInfo that has max value of epssProbability,
+    // consistent with aggregateFunc: 'max' property in sortUtils.tsx file.
+    let cveBaseInfoMax: CveBaseInfo | undefined;
+
+    if (Array.isArray(distroTuples)) {
+        let epssProbabilityMax = -1; // in case epssProbability is ever zero
+        distroTuples.forEach(({ cveBaseInfo }) => {
+            if (cveBaseInfo?.epss && cveBaseInfo.epss?.epssProbability > epssProbabilityMax) {
+                cveBaseInfoMax = cveBaseInfo;
+                epssProbabilityMax = cveBaseInfo.epss.epssProbability;
             }
         });
-    });
-    return { cvss: topCvss, scoreVersion: topScoreVersion };
+    }
+
+    return cveBaseInfoMax;
+}
+
+// Given probability as float fraction, return as percent with 3 decimal digits.
+export function formatEpssProbabilityAsPercent(epssProbability: number | undefined) {
+    if (typeof epssProbability === 'number' && epssProbability >= 0 && epssProbability <= 1) {
+        const epssPercent = epssProbability * 100;
+        return `${epssPercent.toFixed(3)}%`;
+    }
+
+    // For any of the following: null, undefined, or number out of range
+    return 'Not available';
+}
+
+export function formatTotalAdvisories(totalAdvisories: number | undefined) {
+    if (
+        typeof totalAdvisories === 'number' &&
+        Number.isSafeInteger(totalAdvisories) &&
+        totalAdvisories > 0
+    ) {
+        return `${totalAdvisories} ${pluralize('advisory', totalAdvisories)}`;
+    }
+
+    // For any of the following: undefined, or number out of range
+    return 'No advisories';
 }

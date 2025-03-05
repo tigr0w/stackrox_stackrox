@@ -1,23 +1,32 @@
 import React, { ReactElement, useState } from 'react';
-import {
-    Select,
-    SelectOptionObject,
-    SelectOptionProps,
-    SelectVariant,
-} from '@patternfly/react-core';
+import { Select, SelectOptionObject, SelectOptionProps } from '@patternfly/react-core/deprecated';
 
 export type CheckboxSelectProps = {
+    id?: string;
+    name?: string;
     selections: string[];
     onChange: (selection: string[]) => void;
+    onBlur?: React.FocusEventHandler<HTMLTextAreaElement>;
     ariaLabel: string;
     children: ReactElement<SelectOptionProps>[];
+    placeholderText?: string;
+    toggleIcon?: ReactElement;
+    toggleId?: string;
+    menuAppendTo?: () => HTMLElement;
 };
 
 function CheckboxSelect({
+    id,
+    name,
     selections,
     onChange,
+    onBlur,
     ariaLabel,
     children,
+    placeholderText = 'Filter by value',
+    toggleIcon,
+    toggleId,
+    menuAppendTo,
 }: CheckboxSelectProps): ReactElement {
     const [isOpen, setIsOpen] = useState(false);
 
@@ -41,13 +50,19 @@ function CheckboxSelect({
 
     return (
         <Select
-            variant={SelectVariant.checkbox}
-            onToggle={onToggle}
+            id={id}
+            name={name}
+            variant="checkbox"
+            toggleIcon={toggleIcon}
+            onToggle={(_event, isExpanded: boolean) => onToggle(isExpanded)}
             onSelect={onSelect}
+            onBlur={onBlur}
             selections={selections}
             isOpen={isOpen}
-            placeholderText="Filter by value"
+            placeholderText={placeholderText}
             aria-label={ariaLabel}
+            toggleId={toggleId}
+            menuAppendTo={menuAppendTo}
         >
             {children}
         </Select>

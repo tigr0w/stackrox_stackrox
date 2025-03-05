@@ -27,12 +27,14 @@ type StyleGroupProps = {
     collapsedWidth?: number;
     collapsedHeight?: number;
     onCollapseChange?: (group: Node, collapsed: boolean) => void;
-    getCollapsedShape?: (node: Node) => React.FunctionComponent<ShapeProps>;
+    getCollapsedShape?: (
+        node: Node
+    ) => React.FunctionComponent<React.PropsWithChildren<ShapeProps>>;
     collapsedShadowOffset?: number; // defaults to 10
 } & WithDragNodeProps &
     WithSelectionProps;
 
-const StyleGroup: React.FunctionComponent<StyleGroupProps> = ({
+const StyleGroup: React.FunctionComponent<React.PropsWithChildren<StyleGroupProps>> = ({
     element,
     collapsedWidth = 75,
     collapsedHeight = 75,
@@ -89,6 +91,12 @@ const StyleGroup: React.FunctionComponent<StyleGroupProps> = ({
     className = `${className} ${passedData?.isFadedOut ? 'pf-topology-node-faded' : ''}`.trim();
 
     return (
+        /*
+        (dv 2024-05-01)
+        Upgrading to React types 18 causes a type error below as React 18 no longer includes `children`
+        as a prop of `React.FC` by default
+
+        @ts-expect-error DefaultGroup does not expect children as a prop */
         <DefaultGroup
             element={element}
             collapsedWidth={collapsedWidth}

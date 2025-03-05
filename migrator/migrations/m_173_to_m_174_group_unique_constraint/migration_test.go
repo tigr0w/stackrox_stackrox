@@ -13,6 +13,7 @@ import (
 	pghelper "github.com/stackrox/rox/migrator/migrations/postgreshelper"
 	"github.com/stackrox/rox/migrator/types"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stretchr/testify/suite"
 )
@@ -119,7 +120,7 @@ func TestGroupUniqueConstraintMigration(t *testing.T) {
 }
 
 func (s *groupUniqueConstraintMigrationTestSuite) SetupSuite() {
-	s.db = pghelper.ForT(s.T(), true)
+	s.db = pghelper.ForT(s.T(), false)
 	pgutils.CreateTableFromModel(ctx, s.db.GetGormDB(), frozenSchemav73.CreateTableGroupsStmt)
 }
 
@@ -152,7 +153,7 @@ func (s *groupUniqueConstraintMigrationTestSuite) TestMigration() {
 	var prunedGroupFound bool
 	for _, group := range groupsAfterMigration {
 		if expectedGroup, exists := groupsPostMigration[group.GetProps().GetId()]; exists {
-			s.Equal(expectedGroup, group)
+			protoassert.Equal(s.T(), expectedGroup, group)
 		} else {
 			s.False(prunedGroupFound, "found the pruned group twice")
 			prunedGroupFound = true

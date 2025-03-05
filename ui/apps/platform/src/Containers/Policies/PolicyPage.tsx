@@ -8,7 +8,7 @@ import { policiesBasePath } from 'routePaths';
 import NotFoundMessage from 'Components/NotFoundMessage';
 import PageTitle from 'Components/PageTitle';
 import { getPolicy, updatePolicyDisabledState } from 'services/PoliciesService';
-import { ClientPolicy } from 'types/policy.proto';
+import { ClientPolicy, Policy } from 'types/policy.proto';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 import { ExtendedPageAction } from 'utils/queryStringUtils';
 
@@ -16,7 +16,7 @@ import { getClientWizardPolicy, initialPolicy } from './policies.utils';
 import PolicyDetail from './Detail/PolicyDetail';
 import PolicyWizard from './Wizard/PolicyWizard';
 
-function clonePolicy(policy: ClientPolicy) {
+function clonePolicy(policy: ClientPolicy): ClientPolicy {
     /*
      * Default policies will have the "criteriaLocked" and "mitreVectorsLocked" fields set to true.
      * When we clone these policies, we'll need to set them to false to allow users to edit
@@ -24,6 +24,7 @@ function clonePolicy(policy: ClientPolicy) {
      */
     return {
         ...policy,
+        source: 'IMPERATIVE',
         criteriaLocked: false,
         id: '',
         isDefault: false,
@@ -33,13 +34,10 @@ function clonePolicy(policy: ClientPolicy) {
 }
 
 type WizardPolicyState = {
-    wizardPolicy: ClientPolicy;
+    wizardPolicy: Policy;
 };
 
-const wizardPolicyState = createStructuredSelector<
-    WizardPolicyState,
-    { wizardPolicy: ClientPolicy }
->({
+const wizardPolicyState = createStructuredSelector<WizardPolicyState, { wizardPolicy: Policy }>({
     wizardPolicy: selectors.getWizardPolicy,
 });
 
@@ -56,6 +54,9 @@ function PolicyPage({
 }: PolicyPageProps): ReactElement {
     const { wizardPolicy } = useSelector(wizardPolicyState);
 
+    // If wizardPolicy: ClientPolicy is correct above, then getClientWizardPolicy is unneeded below.
+    // TS2352: Conversion of type 'ClientPolicy' to type 'Policy' may be a mistake because neither type sufficiently overlaps with the other.
+    // If this was intentional, convert the expression to 'unknown' first.
     const [policy, setPolicy] = useState<ClientPolicy>(
         pageAction === 'generate' && wizardPolicy
             ? getClientWizardPolicy(wizardPolicy)
@@ -112,7 +113,7 @@ function PolicyPage({
             <PageTitle title="Policy Management - Policy" />
             {isLoading ? (
                 <Bullseye>
-                    <Spinner isSVG />
+                    <Spinner />
                 </Bullseye>
             ) : (
                 policyError || // TODO ROX-8487: Improve PolicyPage when request fails

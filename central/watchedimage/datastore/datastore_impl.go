@@ -3,11 +3,11 @@ package datastore
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/watchedimage/datastore/internal/store"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 )
 
 var (
@@ -56,7 +56,7 @@ func (d *dataStore) GetAllWatchedImages(ctx context.Context) ([]*storage.Watched
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 	return watchedImages, nil

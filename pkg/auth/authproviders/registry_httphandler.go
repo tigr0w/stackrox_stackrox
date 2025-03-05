@@ -1,7 +1,6 @@
 package authproviders
 
 import (
-	"bytes"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/protobuf/jsonpb"
 	"github.com/pkg/errors"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/pkg/auth"
@@ -23,6 +21,7 @@ import (
 	"github.com/stackrox/rox/pkg/httputil"
 	"github.com/stackrox/rox/pkg/netutil"
 	"github.com/stackrox/rox/pkg/sac"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
@@ -77,9 +76,16 @@ func (r *registryImpl) tokenURL(rawToken, typ, clientState string) *url.URL {
 	}
 }
 
+func getSerializedAuthStatusData(authStatus *v1.AuthStatus) ([]byte, error) {
+	if authStatus == nil {
+		return nil, errors.New("Marshal called with nil")
+	}
+	return new(protojson.MarshalOptions).Marshal(authStatus)
+}
+
 func (r *registryImpl) userMetadataURL(user *v1.AuthStatus, typ, clientState string, testMode bool) *url.URL {
-	var buf bytes.Buffer
-	if err := new(jsonpb.Marshaler).Marshal(&buf, user); err != nil {
+	buf, err := getSerializedAuthStatusData(user)
+	if err != nil {
 		return r.errorURL(err, typ, clientState, testMode)
 	}
 
@@ -87,7 +93,7 @@ func (r *registryImpl) userMetadataURL(user *v1.AuthStatus, typ, clientState str
 		Path: r.redirectURL,
 		Fragment: url.Values{
 			testQueryParameter:  {strconv.FormatBool(testMode)},
-			userQueryParameter:  {base64.RawURLEncoding.EncodeToString(buf.Bytes())},
+			userQueryParameter:  {base64.RawURLEncoding.EncodeToString(buf)},
 			typeQueryParameter:  {typ},
 			stateQueryParameter: {clientState},
 		}.Encode(),
@@ -283,8 +289,8 @@ func (r *registryImpl) providersHTTPHandler(w http.ResponseWriter, req *http.Req
 
 	authResp, err := backend.ProcessHTTPRequest(w, req)
 	if err != nil {
-		log.Errorf(fmt.Sprintf("error processing HTTP request for provider %s of type %s: %v",
-			provider.Name(), provider.Type(), err))
+		log.Errorf("error processing HTTP request for provider %s of type %s: %v",
+			provider.Name(), provider.Type(), err)
 		r.error(w, err, typ, clientState, testMode)
 		return
 	}
@@ -309,6 +315,7 @@ func (r *registryImpl) providersHTTPHandler(w http.ResponseWriter, req *http.Req
 	}
 
 	if testMode {
+		user.IdpToken = authResp.IdpToken
 		w.Header().Set("Location", r.userMetadataURL(user, typ, clientState, testMode).String())
 		w.WriteHeader(http.StatusSeeOther)
 		return

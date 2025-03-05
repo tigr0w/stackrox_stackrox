@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ComplianceOperatorRulesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE compliance_operator_rules CASCADE")
 	s.T().Log("compliance_operator_rules", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ComplianceOperatorRulesStoreSuite) TestStore() {
 	foundComplianceOperatorRule, exists, err = store.Get(ctx, complianceOperatorRule.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(complianceOperatorRule, foundComplianceOperatorRule)
+	protoassert.Equal(s.T(), complianceOperatorRule, foundComplianceOperatorRule)
 
-	complianceOperatorRuleCount, err := store.Count(ctx)
+	complianceOperatorRuleCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, complianceOperatorRuleCount)
-	complianceOperatorRuleCount, err = store.Count(withNoAccessCtx)
+	complianceOperatorRuleCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(complianceOperatorRuleCount)
 
@@ -75,11 +78,6 @@ func (s *ComplianceOperatorRulesStoreSuite) TestStore() {
 	s.True(complianceOperatorRuleExists)
 	s.NoError(store.Upsert(ctx, complianceOperatorRule))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, complianceOperatorRule), sac.ErrResourceAccessDenied)
-
-	foundComplianceOperatorRule, exists, err = store.Get(ctx, complianceOperatorRule.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(complianceOperatorRule, foundComplianceOperatorRule)
 
 	s.NoError(store.Delete(ctx, complianceOperatorRule.GetId()))
 	foundComplianceOperatorRule, exists, err = store.Get(ctx, complianceOperatorRule.GetId())
@@ -99,13 +97,13 @@ func (s *ComplianceOperatorRulesStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, complianceOperatorRules))
 
-	complianceOperatorRuleCount, err = store.Count(ctx)
+	complianceOperatorRuleCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, complianceOperatorRuleCount)
 
 	s.NoError(store.DeleteMany(ctx, complianceOperatorRuleIDs))
 
-	complianceOperatorRuleCount, err = store.Count(ctx)
+	complianceOperatorRuleCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, complianceOperatorRuleCount)
 }

@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gogo/protobuf/types"
-	"github.com/golang/mock/gomock"
 	"github.com/stackrox/rox/central/compliance/framework"
 	"github.com/stackrox/rox/central/compliance/framework/mocks"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestCheck(t *testing.T) {
@@ -58,13 +58,13 @@ func (s *suiteImpl) TestFail() {
 	data.EXPECT().Cluster().AnyTimes().Return(s.cluster())
 	data.EXPECT().ImageIntegrations().AnyTimes().Return(imageIntegrations)
 	data.EXPECT().Images().AnyTimes().Return(images)
-	data.EXPECT().ProcessIndicators().AnyTimes().Return(nil)
-	data.EXPECT().NetworkFlows().AnyTimes().Return(nil)
+	data.EXPECT().HasProcessIndicators().AnyTimes().Return(false)
+	data.EXPECT().NetworkFlowsWithDeploymentDst().AnyTimes().Return(nil)
 
 	run, err := framework.NewComplianceRun(check)
 	s.NoError(err)
 
-	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil, nil)
+	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil)
 	err = run.Run(context.Background(), "standard", domain, data)
 	s.NoError(err)
 
@@ -108,14 +108,9 @@ func (s *suiteImpl) TestPass() {
 			},
 		},
 	}
-	processIndicators := []*storage.ProcessIndicator{
-		{
-			ContainerName: "foo",
-		},
-	}
 	flows := []*storage.NetworkFlow{
 		{
-			LastSeenTimestamp: types.TimestampNow(),
+			LastSeenTimestamp: protocompat.TimestampNow(),
 		},
 	}
 
@@ -123,13 +118,13 @@ func (s *suiteImpl) TestPass() {
 	data.EXPECT().Cluster().AnyTimes().Return(s.cluster())
 	data.EXPECT().ImageIntegrations().AnyTimes().Return(imageIntegrations)
 	data.EXPECT().Images().AnyTimes().Return(images)
-	data.EXPECT().ProcessIndicators().AnyTimes().Return(processIndicators)
-	data.EXPECT().NetworkFlows().AnyTimes().Return(flows)
+	data.EXPECT().HasProcessIndicators().AnyTimes().Return(true)
+	data.EXPECT().NetworkFlowsWithDeploymentDst().AnyTimes().Return(flows)
 
 	run, err := framework.NewComplianceRun(check)
 	s.NoError(err)
 
-	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil, nil)
+	domain := framework.NewComplianceDomain(testCluster, nil, nil, nil)
 	err = run.Run(context.Background(), "standard", domain, data)
 	s.NoError(err)
 

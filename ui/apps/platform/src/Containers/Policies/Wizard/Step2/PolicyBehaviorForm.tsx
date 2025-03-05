@@ -1,38 +1,25 @@
 import React, { useState } from 'react';
 import {
     Alert,
-    Title,
+    Checkbox,
+    Divider,
+    Flex,
     Form,
     FormGroup,
     Radio,
-    Divider,
-    Flex,
-    Checkbox,
-    Card,
-    CardHeader,
-    CardBody,
-    CardTitle,
-    CardActions,
-    Switch,
-    Grid,
-    GridItem,
+    Title,
+    FormHelperText,
+    HelperText,
+    HelperTextItem,
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 import cloneDeep from 'lodash/cloneDeep';
 
 import ConfirmationModal from 'Components/PatternFly/ConfirmationModal';
+import FormLabelGroup from 'Components/PatternFly/FormLabelGroup';
 import { ClientPolicy, LifecycleStage } from 'types/policy.proto';
 
-import {
-    appendEnforcementActionsForAddedLifecycleStage,
-    filterEnforcementActionsForRemovedLifecycleStage,
-    getLifeCyclesUpdates,
-    hasEnforcementActionForLifecycleStage,
-    initialPolicy,
-} from '../../policies.utils';
-import DownloadCLIDropdown from './DownloadCLIDropdown';
-
-import './PolicyBehaviorForm.css';
+import { getLifeCyclesUpdates, initialPolicy } from '../../policies.utils';
 
 type PolicyBehaviorFormProps = {
     hasActiveViolations: boolean;
@@ -51,19 +38,18 @@ function getEventSourceHelperText(eventSource) {
 }
 
 function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
-    const { values, setFieldValue, setValues } = useFormikContext<ClientPolicy>();
+    const { errors, setFieldTouched, setFieldValue, setValues, touched, values } =
+        useFormikContext<ClientPolicy>();
     const [lifeCycleChange, setLifeCycleChange] = useState<{
         lifecycleStage: LifecycleStage;
         isChecked: boolean;
     } | null>(null);
 
-    const hasEnforcementActions =
-        values.enforcementActions?.length > 0 &&
-        !values.enforcementActions?.includes('UNSET_ENFORCEMENT');
-    const [showEnforcement, setShowEnforcement] = React.useState(hasEnforcementActions);
-
     function onChangeLifecycleStage(lifecycleStage: LifecycleStage, isChecked: boolean) {
-        if (values.id) {
+        const hasNonEmptyPolicyGroup = values.policySections.some(
+            (section) => section.policyGroups.length > 0
+        );
+        if (hasNonEmptyPolicyGroup) {
             // for existing policies, warn that changing lifecycles will clear all policy criteria
             setLifeCycleChange({ lifecycleStage, isChecked });
         } else {
@@ -94,20 +80,6 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
         setLifeCycleChange(null);
     }
 
-    function onChangeEnforcementActions(lifecycleStage: LifecycleStage, isChecked: boolean) {
-        const { enforcementActions } = values;
-        setFieldValue(
-            'enforcementActions',
-            isChecked
-                ? appendEnforcementActionsForAddedLifecycleStage(lifecycleStage, enforcementActions)
-                : filterEnforcementActionsForRemovedLifecycleStage(
-                      lifecycleStage,
-                      enforcementActions
-                  ),
-            false // do not validate, because code changes the value
-        );
-    }
-
     function onChangeAuditLogEventSource() {
         setFieldValue('eventSource', 'AUDIT_LOG_EVENT');
 
@@ -119,7 +91,10 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
             }
         });
         values.excludedDeploymentScopes.forEach(({ scope }, idx) => {
+            // disable because unused label might be specified for rest spread idiom.
+            /* eslint-disable @typescript-eslint/no-unused-vars */
             const { label, ...rest } = scope || {};
+            /* eslint-enable @typescript-eslint/no-unused-vars */
             setFieldValue(
                 `excludedDeploymentScopes[${idx}]`,
                 {
@@ -138,10 +113,6 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
 
     const eventSourceHelperText = getEventSourceHelperText(values.eventSource);
 
-    const responseMethodHelperText = showEnforcement
-        ? 'Inform and enforce will execute enforcement behavior at the stages you select.'
-        : 'Inform will always include violations for this policy in the violations list.';
-
     const hasBuild = values.lifecycleStages.includes('BUILD');
     const hasDeploy = values.lifecycleStages.includes('DEPLOY');
     const hasRuntime = values.lifecycleStages.includes('RUNTIME');
@@ -152,6 +123,18 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
             spaceItems={{ default: 'spaceItemsNone' }}
             flexWrap={{ default: 'nowrap' }}
         >
+            <Flex
+                direction={{ default: 'column' }}
+                spaceItems={{ default: 'spaceItemsSm' }}
+                className="pf-v5-u-p-lg"
+            >
+                <Title headingLevel="h2">Lifecycle</Title>
+                <div>
+                    Select which stage of a container lifecycle this policy applies. Event sources
+                    can only be chosen for policies that apply at runtime.
+                </div>
+            </Flex>
+            <Divider component="div" />
             <ConfirmationModal
                 ariaLabel="Reset policy criteria"
                 confirmText="Reset policy criteria"
@@ -165,20 +148,21 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
                 onCancel={onCancelChangeLifecycle}
                 title="Reset policy criteria?"
             >
-                Editing the lifecycle stage will reset and clear any saved criteria for this policy.
-                You will be required to reselect policy criteria in the next step.
+                Editing the lifecycle stage will reset and clear any saved rules for this policy.
+                You will be required to reselect policy rules in the next step.
             </ConfirmationModal>
             <Flex
                 direction={{ default: 'column' }}
                 spaceItems={{ default: 'spaceItemsNone' }}
-                className="pf-u-p-lg"
+                className="pf-v5-u-px-lg pf-v5-u-pt-lg"
             >
-                <Title headingLevel="h2">Policy behavior</Title>
-                <div className="pf-u-mt-sm">
-                    Select which stage of a container lifecycle this policy applies. Event sources
-                    can only be chosen for policies that apply at runtime.
-                </div>
-                <Alert variant="info" isInline title="Info" className="pf-u-my-md">
+                <Alert
+                    variant="info"
+                    isInline
+                    title="Lifecycle stages"
+                    component="p"
+                    className="pf-v5-u-mb-md"
+                >
                     <Flex
                         direction={{ default: 'column' }}
                         spaceItems={{ default: 'spaceItemsSm' }}
@@ -200,19 +184,26 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
                         </p>
                     </Flex>
                 </Alert>
-                <Form>
-                    <FormGroup
-                        helperText="Choose lifecycle stage to which your policy is applicable. You can select more than one stage."
-                        fieldId="policy-lifecycle-stage"
+            </Flex>
+            <Form>
+                <div className="pf-v5-u-px-lg">
+                    <FormLabelGroup
                         label="Lifecycle stages"
+                        fieldId="lifecycleStages"
+                        errors={errors}
                         isRequired
+                        touched={touched}
+                        helperText={
+                            'Choose lifecycle stage to which your policy is applicable. You can select more than one stage.'
+                        }
                     >
-                        <Flex direction={{ default: 'row' }} className="pf-u-pb-sm">
+                        <Flex direction={{ default: 'row' }} className="pf-v5-u-pb-sm">
                             <Checkbox
                                 label="Build"
                                 isChecked={hasBuild}
                                 id="policy-lifecycle-stage-build"
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
+                                    setFieldTouched('lifecycleStages', true, true);
                                     onChangeLifecycleStage('BUILD', isChecked);
                                 }}
                                 isDisabled={hasActiveViolations}
@@ -221,7 +212,8 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
                                 label="Deploy"
                                 isChecked={hasDeploy}
                                 id="policy-lifecycle-stage-deploy"
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
+                                    setFieldTouched('lifecycleStages', true, true);
                                     onChangeLifecycleStage('DEPLOY', isChecked);
                                 }}
                                 isDisabled={hasActiveViolations}
@@ -230,25 +222,27 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
                                 label="Runtime"
                                 isChecked={hasRuntime}
                                 id="policy-lifecycle-stage-runtime"
-                                onChange={(isChecked) => {
+                                onChange={(_event, isChecked) => {
+                                    setFieldTouched('lifecycleStages', true, true);
                                     onChangeLifecycleStage('RUNTIME', isChecked);
                                 }}
                                 isDisabled={hasActiveViolations}
                             />
                         </Flex>
-                    </FormGroup>
+                    </FormLabelGroup>
                     {hasActiveViolations && (
                         <Alert
                             isInline
                             variant="warning"
                             title="Policy has active violations, and the lifecycle stage cannot be changed. To update the lifecycle, clone and create a new policy."
+                            component="p"
                         />
                     )}
                     <FormGroup
                         fieldId="policy-event-source"
                         label="Event sources (Runtime lifecycle only)"
                         isRequired={hasRuntime}
-                        helperText={eventSourceHelperText}
+                        className="pf-v5-u-pt-lg"
                     >
                         <Flex direction={{ default: 'row' }}>
                             <Radio
@@ -268,145 +262,14 @@ function PolicyBehaviorForm({ hasActiveViolations }: PolicyBehaviorFormProps) {
                                 isDisabled={!hasRuntime || hasActiveViolations}
                             />
                         </Flex>
+                        <FormHelperText>
+                            <HelperText>
+                                <HelperTextItem>{eventSourceHelperText}</HelperTextItem>
+                            </HelperText>
+                        </FormHelperText>
                     </FormGroup>
-                </Form>
-            </Flex>
-            <Divider component="div" />
-            <Flex
-                direction={{ default: 'column' }}
-                spaceItems={{ default: 'spaceItemsNone' }}
-                className="pf-u-p-lg"
-            >
-                <Title headingLevel="h2">Response method</Title>
-                <div className="pf-u-mb-md pf-u-mt-sm">
-                    Select a method to address violations of this policy.
                 </div>
-                <Form>
-                    <FormGroup
-                        fieldId="policy-response-method"
-                        className="pf-u-mb-lg"
-                        helperText={responseMethodHelperText}
-                    >
-                        <Flex direction={{ default: 'row' }}>
-                            <Radio
-                                label="Inform"
-                                isChecked={!showEnforcement}
-                                id="policy-response-inform"
-                                name="inform"
-                                onChange={() => {
-                                    setShowEnforcement(false);
-                                    setFieldValue('enforcementActions', [], false); // do not validate, because code changes the value
-                                }}
-                            />
-                            <Radio
-                                label="Inform and enforce"
-                                isChecked={showEnforcement}
-                                id="policy-response-inform-enforce"
-                                name="enforce"
-                                onChange={() => setShowEnforcement(true)}
-                            />
-                        </Flex>
-                    </FormGroup>
-                </Form>
-                {showEnforcement && (
-                    <>
-                        <Title headingLevel="h2" className="pf-u-mt-md">
-                            Configure enforcement behavior
-                        </Title>
-                        <div className="pf-u-mb-lg pf-u-mt-sm">
-                            Based on the fields selected in your policy configuration, you may
-                            choose to apply enforcement at the following stages.
-                        </div>
-                        <Grid hasGutter>
-                            <GridItem span={4}>
-                                <Card className="pf-u-h-100 policy-enforcement-card">
-                                    <CardHeader>
-                                        <CardTitle>Build</CardTitle>
-                                        <CardActions>
-                                            <Switch
-                                                isChecked={hasEnforcementActionForLifecycleStage(
-                                                    'BUILD',
-                                                    values.enforcementActions
-                                                )}
-                                                isDisabled={!hasBuild}
-                                                onChange={(isChecked) => {
-                                                    onChangeEnforcementActions('BUILD', isChecked);
-                                                }}
-                                                label="Enforce on Build"
-                                            />
-                                        </CardActions>
-                                    </CardHeader>
-                                    <CardBody>
-                                        If enabled, your CI builds will be failed when images
-                                        violate this policy. Download the CLI to get started.
-                                        <Flex
-                                            justifyContent={{ default: 'justifyContentCenter' }}
-                                            className="pf-u-pt-md"
-                                        >
-                                            <DownloadCLIDropdown hasBuild={hasBuild} />
-                                        </Flex>
-                                    </CardBody>
-                                </Card>
-                            </GridItem>
-                            <GridItem span={4}>
-                                <Card className="policy-enforcement-card">
-                                    <CardHeader>
-                                        <CardTitle>Deploy</CardTitle>
-                                        <CardActions>
-                                            <Switch
-                                                isChecked={hasEnforcementActionForLifecycleStage(
-                                                    'DEPLOY',
-                                                    values.enforcementActions
-                                                )}
-                                                isDisabled={!hasDeploy}
-                                                onChange={(isChecked) => {
-                                                    onChangeEnforcementActions('DEPLOY', isChecked);
-                                                }}
-                                                label="Enforce on Deploy"
-                                            />
-                                        </CardActions>
-                                    </CardHeader>
-                                    <CardBody>
-                                        If enabled, creation of deployments that violate this policy
-                                        will be blocked. In clusters with the admission controller
-                                        enabled, the Kubernetes API server will block deployments
-                                        that violate this policy to prevent pods from being
-                                        scheduled.
-                                    </CardBody>
-                                </Card>
-                            </GridItem>
-                            <GridItem span={4}>
-                                <Card className="policy-enforcement-card">
-                                    <CardHeader>
-                                        <CardTitle>Runtime</CardTitle>
-                                        <CardActions>
-                                            <Switch
-                                                isChecked={hasEnforcementActionForLifecycleStage(
-                                                    'RUNTIME',
-                                                    values.enforcementActions
-                                                )}
-                                                isDisabled={!hasRuntime}
-                                                onChange={(isChecked) => {
-                                                    onChangeEnforcementActions(
-                                                        'RUNTIME',
-                                                        isChecked
-                                                    );
-                                                }}
-                                                label="Enforce on Runtime"
-                                            />
-                                        </CardActions>
-                                    </CardHeader>
-                                    <CardBody>
-                                        If enabled, executions within a pod that violate this policy
-                                        will result in the pod being killed. Actions taken through
-                                        the API server that violate this policy will be blocked.
-                                    </CardBody>
-                                </Card>
-                            </GridItem>
-                        </Grid>
-                    </>
-                )}
-            </Flex>
+            </Form>
         </Flex>
     );
 }

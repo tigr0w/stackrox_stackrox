@@ -3,8 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
-	"github.com/stackrox/rox/central/role/resources"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/stackrox/rox/central/telemetry/centralclient"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/internalapi/central"
@@ -15,19 +14,21 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz"
 	"github.com/stackrox/rox/pkg/grpc/authz/perrpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"google.golang.org/grpc"
 )
 
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
 		user.With(permissions.View(resources.Administration)): {
-			"/v1.TelemetryService/GetTelemetryConfiguration",
+			v1.TelemetryService_GetTelemetryConfiguration_FullMethodName,
 		},
 		user.With(permissions.Modify(resources.Administration)): {
-			"/v1.TelemetryService/ConfigureTelemetry",
+			v1.TelemetryService_ConfigureTelemetry_FullMethodName,
 		},
-		user.With(): {
-			"/v1.TelemetryService/GetConfig",
+		user.Authenticated(): {
+			v1.TelemetryService_GetConfig_FullMethodName,
+			v1.TelemetryService_PostConfigReload_FullMethodName,
 		},
 	})
 )
@@ -78,4 +79,8 @@ func (s *serviceImpl) GetConfig(ctx context.Context, _ *v1.Empty) (*central.Tele
 		Endpoint:     cfg.Endpoint,
 		StorageKeyV1: cfg.StorageKey,
 	}, nil
+}
+
+func (s *serviceImpl) PostConfigReload(ctx context.Context, _ *v1.Empty) (*v1.Empty, error) {
+	return nil, centralclient.Reload()
 }

@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
+	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/uuid"
 	"github.com/stretchr/testify/suite"
 )
@@ -32,6 +33,14 @@ func TestComplianceAuditLogReader(t *testing.T) {
 
 type ComplianceAuditLogReaderTestSuite struct {
 	suite.Suite
+}
+
+func (s *ComplianceAuditLogReaderTestSuite) TestCompareK8sResourceLists() {
+	for _, r := range resourceTypesAllowList.AsSlice() {
+		if _, ok := auditResourceToKubeResource[fmt.Sprintf("%v", r)]; !ok {
+			s.T().Errorf("Missing entry in auditResourceToKubeResource map for resource %v", r)
+		}
+	}
 }
 
 func (s *ComplianceAuditLogReaderTestSuite) TestReaderReturnsGracefullyIfFileDoesNotExist() {
@@ -102,6 +111,9 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderTailsLog() {
 		lines = append(lines, line)
 	}
 
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
 	// Write to the file in parallel to simulate the log file getting written to in parallel
 	go func() {
 		for _, line := range lines {
@@ -111,14 +123,17 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderTailsLog() {
 		// unlikely scenario is real life since the audit log is constantly being written to
 		line, _ := s.fakeAuditLogLineAtTime("get", "configmaps", "extra-map", "stackrox", eventTime.Format(time.RFC3339Nano))
 		s.appendToFile(logPath, line)
+		wg.Done()
 	}()
-
-	time.Sleep(1 * time.Second)
 
 	for _, expectedEvent := range expectedEvents {
 		event = s.getSentEvent(sender.sentC)
 		s.Equal(expectedEvent, *event)
 	}
+
+	// Wait before removing the temporary directory to avoid calling
+	// appendToFile() after removal.
+	wg.Wait()
 }
 
 func (s *ComplianceAuditLogReaderTestSuite) TestReaderOnlySendsEventsThatMatchResourceTypeFilter() {
@@ -140,18 +155,36 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderOnlySendsEventsThatMatchRe
 	}
 
 	// Then something that doesn't get filtered out
-	line, expectedEvent := s.fakeAuditLogLine("get", "secrets", "fake-token", "stackrox")
-	_, err = f.Write([]byte(line))
-	s.NoError(err)
-	s.NoError(f.Sync())
+	validResources := map[string]string{
+		"secrets":                    "fake-token",
+		"configmaps":                 "fake-map",
+		"clusterrolebindings":        "my-cluster-role-binding",
+		"clusterroles":               "my-cluster-role",
+		"networkpolicies":            "this-net-pol",
+		"securitycontextconstraints": "s-c-c",
+		"egressfirewalls":            "wall-that-fire",
+	}
+	var expectedEvents []auditEvent
+	for r, n := range validResources {
+		line, expectedEvent := s.fakeAuditLogLine("create", r, n, "stackrox")
+		_, err = f.Write([]byte(line))
+		s.NoError(err)
+		s.NoError(f.Sync())
+		expectedEvents = append(expectedEvents, expectedEvent)
+	}
 
 	started, err := reader.StartReader(context.Background())
 	s.True(started)
 	s.NoError(err)
 	defer reader.StopReader()
 
-	event := s.getSentEvent(sender.sentC)
-	s.Equal(expectedEvent, *event) // First event received should match the one not filtered out
+	// Give it a sec to catch up
+	time.Sleep(1 * time.Second)
+
+	for _, expectedEvent := range expectedEvents {
+		event := s.getSentEvent(sender.sentC)
+		s.Equal(expectedEvent, *event)
+	}
 }
 
 func (s *ComplianceAuditLogReaderTestSuite) TestReaderOnlySendsEventsForValidStages() {
@@ -167,7 +200,7 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderOnlySendsEventsForValidSta
 	// Write a few log lines for other stages
 	unsupportedStages := []string{"RequestReceived", "ResponseStarted", "wut"}
 	for _, stage := range unsupportedStages {
-		line, _ := s.fakeAuditLogLineWithStage("get", "secrets", "fake-token", "stackrox", types.TimestampString(types.TimestampNow()), stage)
+		line, _ := s.fakeAuditLogLineWithStage("get", "secrets", "fake-token", "stackrox", time.Now().Format(time.RFC3339Nano), stage)
 		_, err = f.Write([]byte(line))
 		s.NoError(err)
 		s.NoError(f.Sync())
@@ -177,7 +210,7 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderOnlySendsEventsForValidSta
 	supportedStages := []string{"ResponseComplete", "Panic"}
 	expectedEvents := make([]auditEvent, 0, 2)
 	for _, stage := range supportedStages {
-		line, expectedEvent := s.fakeAuditLogLineWithStage("get", "secrets", "fake-token", "stackrox", types.TimestampString(types.TimestampNow()), stage)
+		line, expectedEvent := s.fakeAuditLogLineWithStage("get", "secrets", "fake-token", "stackrox", time.Now().Format(time.RFC3339Nano), stage)
 		_, err = f.Write([]byte(line))
 		s.NoError(err)
 		s.NoError(f.Sync())
@@ -211,7 +244,7 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderOnlySendsEventsForVerbsNot
 	// Write a few log lines for verbs that won't be sent
 	unsupportedVerbs := []string{"WATCH", "watch", "LIST", "list", "Watch", "lIsT"}
 	for _, verb := range unsupportedVerbs {
-		line, _ := s.fakeAuditLogLineWithStage(verb, "secrets", "fake-token", "stackrox", types.TimestampString(types.TimestampNow()), "ResponseComplete")
+		line, _ := s.fakeAuditLogLineWithStage(verb, "secrets", "fake-token", "stackrox", time.Now().Format(time.RFC3339Nano), "ResponseComplete")
 		_, err = f.Write([]byte(line))
 		s.NoError(err)
 		s.NoError(f.Sync())
@@ -221,7 +254,7 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderOnlySendsEventsForVerbsNot
 	supportedVerbs := []string{"GET", "get", "Create", "patCH", "DELETE"}
 	expectedEvents := make([]auditEvent, 0, 2)
 	for _, verb := range supportedVerbs {
-		line, expectedEvent := s.fakeAuditLogLineWithStage(verb, "secrets", "fake-token", "stackrox", types.TimestampString(types.TimestampNow()), "ResponseComplete")
+		line, expectedEvent := s.fakeAuditLogLineWithStage(verb, "secrets", "fake-token", "stackrox", time.Now().Format(time.RFC3339Nano), "ResponseComplete")
 		_, err = f.Write([]byte(line))
 		s.NoError(err)
 		s.NoError(f.Sync())
@@ -300,7 +333,7 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderStartsSendingEventsAfterSt
 	s.NoError(err)
 	s.NoError(f.Sync())
 
-	collectSinceTs, _ := types.TimestampProto(eventTime)
+	collectSinceTs, _ := protocompat.ConvertTimeToTimestampOrError(eventTime)
 	sender, reader := s.getMocksWithStartState(logPath, &storage.AuditLogFileState{
 		CollectLogsSince: collectSinceTs,
 		LastAuditId:      latestEvent.AuditID,
@@ -342,7 +375,7 @@ func (s *ComplianceAuditLogReaderTestSuite) TestReaderStartsSendingEventsAtStart
 	s.NoError(f.Sync())
 
 	// Set CollectLogSince to be same exact time as the last two logs, but the ID should be the first of the two
-	collectSinceTs, _ := types.TimestampProto(eventTime)
+	collectSinceTs, _ := protocompat.ConvertTimeToTimestampOrError(eventTime)
 	sender, reader := s.getMocksWithStartState(logPath, &storage.AuditLogFileState{
 		CollectLogsSince: collectSinceTs,
 		LastAuditId:      latestEvent.AuditID,

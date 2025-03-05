@@ -2,12 +2,12 @@ import React, { useEffect } from 'react';
 import {
     Bullseye,
     EmptyState,
-    EmptyStateVariant,
-    SelectOption,
     Stack,
     StackItem,
-    Title,
+    EmptyStateHeader,
+    DropEvent,
 } from '@patternfly/react-core';
+import { SelectOption } from '@patternfly/react-core/deprecated';
 import { NetworkPolicy } from 'types/networkPolicy.proto';
 import SelectSingle from 'Components/SelectSingle';
 import NetworkPoliciesYAML from './NetworkPoliciesYAML';
@@ -17,10 +17,7 @@ type ViewActiveYamlsProps = {
     networkPolicies: NetworkPolicy[];
     generateNetworkPolicies: () => void;
     undoNetworkPolicies: () => void;
-    onFileInputChange: (
-        _event: React.ChangeEvent<HTMLInputElement> | React.DragEvent<HTMLElement>,
-        file: File
-    ) => void;
+    onFileInputChange: (_event: DropEvent, file: File) => void;
 };
 
 function ViewActiveYamls({
@@ -50,20 +47,18 @@ function ViewActiveYamls({
     if (networkPolicies.length === 0) {
         return (
             <Bullseye>
-                <EmptyState variant={EmptyStateVariant.xs}>
-                    <Title headingLevel="h4" size="md">
-                        No network policies
-                    </Title>
+                <EmptyState variant="xs">
+                    <EmptyStateHeader titleText="No network policies" headingLevel="h4" />
                 </EmptyState>
             </Bullseye>
         );
     }
 
     return (
-        <div className="pf-u-h-100">
+        <div className="pf-v5-u-h-100">
             <Stack>
                 <StackItem>
-                    <div className="pf-u-p-md">
+                    <div className="pf-v5-u-p-md">
                         <SelectSingle
                             id="search-filter-attributes-select"
                             value={selectedNetworkPolicy?.name || ''}

@@ -1,5 +1,4 @@
 //go:build tools
-// +build tools
 
 package tools
 
@@ -11,4 +10,5 @@ import (
 	// Tool dependencies, not used anywhere in the code.
 	_ "github.com/golangci/golangci-lint/cmd/golangci-lint"
 	_ "github.com/nilslice/protolock"
+	_ "golang.org/x/vuln/cmd/govulncheck"
 )

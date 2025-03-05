@@ -4,14 +4,14 @@ import (
 	"context"
 	"io"
 
-	"github.com/gogo/protobuf/types"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/pkg/concurrency"
 	pkgGRPC "github.com/stackrox/rox/pkg/grpc"
 	"github.com/stackrox/rox/pkg/grpc/authz/idcheck"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -138,9 +138,9 @@ func (s *managementService) Communicate(stream sensor.AdmissionControlManagement
 	}
 }
 
-func (s *managementService) PolicyAlerts(_ context.Context, alerts *sensor.AdmissionControlAlerts) (*types.Empty, error) {
-	go s.alertHandler.ProcessAlerts(alerts)
-	return &types.Empty{}, nil
+func (s *managementService) PolicyAlerts(_ context.Context, alerts *sensor.AdmissionControlAlerts) (*protocompat.Empty, error) {
+	err := s.alertHandler.ProcessAlerts(alerts)
+	return protocompat.ProtoEmpty(), err
 }
 
 func (s *managementService) sendSensorEvent(stream sensor.AdmissionControlManagementService_CommunicateServer, iter concurrency.ValueStreamIter[*sensor.AdmCtrlUpdateResourceRequest]) error {

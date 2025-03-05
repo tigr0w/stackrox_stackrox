@@ -4,10 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	hashManager "github.com/stackrox/rox/central/hash/manager"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/central/sensor/service/common"
 	"github.com/stackrox/rox/central/sensor/service/connection/upgradecontroller"
 	"github.com/stackrox/rox/central/sensor/service/pipeline"
@@ -17,10 +15,15 @@ import (
 	"github.com/stackrox/rox/pkg/clusterhealth"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/errorhelpers"
+	"github.com/stackrox/rox/pkg/errox"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/protoconv"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -56,13 +59,19 @@ type manager struct {
 	connectionsByClusterID      map[string]connectionAndUpgradeController
 	connectionsByClusterIDMutex sync.RWMutex
 
+	// connectionPreference stores preferences based on sensor connections
+	connectionPreference sync.Map
+
 	clusters                   common.ClusterManager
 	networkEntities            common.NetworkEntityManager
 	policies                   common.PolicyManager
 	baselines                  common.ProcessBaselineManager
 	networkBaselines           common.NetworkBaselineManager
 	delegatedRegistryConfigMgr common.DelegatedRegistryConfigManager
+	imageIntegrationMgr        common.ImageIntegrationManager
 	manager                    hashManager.Manager
+	complianceOperatorMgr      common.ComplianceOperatorManager
+	initSyncMgr                *initSyncManager
 	autoTriggerUpgrades        *concurrency.Flag
 }
 
@@ -71,6 +80,7 @@ func NewManager(mgr hashManager.Manager) Manager {
 	return &manager{
 		connectionsByClusterID: make(map[string]connectionAndUpgradeController),
 		manager:                mgr,
+		initSyncMgr:            NewInitSyncManager(),
 	}
 }
 
@@ -100,6 +110,8 @@ func (m *manager) Start(clusterManager common.ClusterManager,
 	baselineManager common.ProcessBaselineManager,
 	networkBaselineManager common.NetworkBaselineManager,
 	delegatedRegistryConfigManager common.DelegatedRegistryConfigManager,
+	imageIntegrationMgr common.ImageIntegrationManager,
+	complianceOperatorMgr common.ComplianceOperatorManager,
 	autoTriggerUpgrades *concurrency.Flag,
 ) error {
 	m.clusters = clusterManager
@@ -108,6 +120,8 @@ func (m *manager) Start(clusterManager common.ClusterManager,
 	m.baselines = baselineManager
 	m.networkBaselines = networkBaselineManager
 	m.delegatedRegistryConfigMgr = delegatedRegistryConfigManager
+	m.imageIntegrationMgr = imageIntegrationMgr
+	m.complianceOperatorMgr = complianceOperatorMgr
 	m.autoTriggerUpgrades = autoTriggerUpgrades
 	err := m.initializeUpgradeControllers()
 	if err != nil {
@@ -166,7 +180,7 @@ func (m *manager) updateActiveClusterHealth(cluster *storage.Cluster) {
 	clusterHealthStatus := &storage.ClusterHealthStatus{
 		SensorHealthStatus:    storage.ClusterHealthStatus_HEALTHY,
 		CollectorHealthStatus: storage.ClusterHealthStatus_UNAVAILABLE,
-		LastContact:           types.TimestampNow(),
+		LastContact:           protocompat.TimestampNow(),
 	}
 	clusterHealthStatus.OverallHealthStatus = clusterhealth.PopulateOverallClusterStatus(clusterHealthStatus)
 
@@ -225,6 +239,8 @@ func (m *manager) replaceConnection(ctx context.Context, cluster *storage.Cluste
 
 // CloseConnection is only used when deleting a cluster hence the removal of the deduper
 func (m *manager) CloseConnection(clusterID string) {
+	m.initSyncMgr.Remove(clusterID)
+
 	if conn := m.GetConnection(clusterID); conn != nil {
 		conn.Terminate(errors.New("cluster was deleted"))
 		if !concurrency.WaitWithTimeout(conn.Stopped(), connectionTerminationTimeout) {
@@ -242,6 +258,10 @@ func (m *manager) HandleConnection(ctx context.Context, sensorHello *central.Sen
 	clusterID := cluster.GetId()
 	clusterName := cluster.GetName()
 
+	if !m.initSyncMgr.Add(clusterID) {
+		return errors.Wrap(errox.ResourceExhausted, "Central has reached the maximum number of allowed Sensors in init sync state")
+	}
+
 	conn :=
 		newConnection(
 			ctx,
@@ -254,12 +274,17 @@ func (m *manager) HandleConnection(ctx context.Context, sensorHello *central.Sen
 			m.baselines,
 			m.networkBaselines,
 			m.delegatedRegistryConfigMgr,
-			m.manager)
+			m.imageIntegrationMgr,
+			m.manager,
+			m.complianceOperatorMgr,
+			m.initSyncMgr,
+		)
 	ctx = withConnection(ctx, conn)
 
 	oldConnection, err := m.replaceConnection(ctx, cluster, conn)
 	if err != nil {
 		log.Errorf("Replacing connection: %v", err)
+		m.initSyncMgr.Remove(clusterID)
 		return errors.Wrap(err, "replacing old connection")
 	}
 
@@ -269,7 +294,11 @@ func (m *manager) HandleConnection(ctx context.Context, sensorHello *central.Sen
 	}
 
 	err = conn.Run(ctx, server, conn.capabilities)
-	log.Warnf("Connection to server in cluster %s terminated: %v", clusterID, err)
+	m.handleConnectionError(clusterID, err)
+
+	// Address the scenario in which the sensor loses its connection during
+	// the initial synchronization process.
+	m.initSyncMgr.Remove(clusterID)
 
 	concurrency.WithLock(&m.connectionsByClusterIDMutex, func() {
 		connAndUpgradeCtrl := m.connectionsByClusterID[clusterID]
@@ -280,6 +309,34 @@ func (m *manager) HandleConnection(ctx context.Context, sensorHello *central.Sen
 	})
 
 	return err
+}
+
+func (m *manager) handleConnectionError(clusterID string, err error) {
+	if e, ok := status.FromError(err); ok {
+		if e.Code() == codes.ResourceExhausted {
+			log.Warnf("gRPC connection received a payload too large to be processed: %s", err)
+			log.Warnf("Increase ROX_GRPC_MAX_MESSAGE_SIZE to allow larger payloads. Central will temporarily disable client reconciliation to avoid receiving large payloads from Sensor.")
+			pref := m.GetConnectionPreference(clusterID)
+			pref.SendDeduperState = false
+			m.connectionPreference.Store(clusterID, pref)
+		}
+	}
+	log.Warnf("Connection to server in cluster %s terminated: %v", clusterID, err)
+}
+
+// GetConnectionPreference returns the connection preference for cluster ID.
+func (m *manager) GetConnectionPreference(clusterID string) Preferences {
+	var p Preferences
+	var ok bool
+	if pref, exists := m.connectionPreference.Load(clusterID); !exists {
+		p = Preferences{
+			SendDeduperState: true,
+		}
+		m.connectionPreference.Store(clusterID, p)
+	} else if p, ok = (pref).(Preferences); !ok {
+		log.Warnf("Incorrect entry in Connection preferences map for cluster ID: %s", clusterID)
+	}
+	return p
 }
 
 func (m *manager) getOrCreateUpgradeCtrl(clusterID string) (upgradecontroller.UpgradeController, error) {
@@ -325,9 +382,8 @@ func (m *manager) checkClusterWriteAccessAndRetrieveUpgradeCtrl(ctx context.Cont
 		return nil, err
 	}
 
-	var upgradeCtrl upgradecontroller.UpgradeController
-	concurrency.WithRLock(&m.connectionsByClusterIDMutex, func() {
-		upgradeCtrl = m.connectionsByClusterID[clusterID].upgradeCtrl
+	upgradeCtrl := concurrency.WithRLock1(&m.connectionsByClusterIDMutex, func() upgradecontroller.UpgradeController {
+		return m.connectionsByClusterID[clusterID].upgradeCtrl
 	})
 	if upgradeCtrl == nil {
 		return nil, errors.Errorf("no upgrade controller found for cluster ID %s; either the sensor has not checked in or the clusterID is invalid. Cannot trigger upgrade", clusterID)

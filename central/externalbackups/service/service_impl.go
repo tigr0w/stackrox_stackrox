@@ -3,11 +3,10 @@ package service
 import (
 	"context"
 
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/externalbackups/datastore"
 	"github.com/stackrox/rox/central/externalbackups/manager"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
@@ -19,6 +18,7 @@ import (
 	"github.com/stackrox/rox/pkg/grpc/authz/user"
 	"github.com/stackrox/rox/pkg/integrationhealth"
 	"github.com/stackrox/rox/pkg/protoconv/schedule"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/secrets"
 	"github.com/stackrox/rox/pkg/uuid"
 	"google.golang.org/grpc"
@@ -27,17 +27,17 @@ import (
 var (
 	authorizer = perrpc.FromMap(map[authz.Authorizer][]string{
 		user.With(permissions.View(resources.Integration)): {
-			"/v1.ExternalBackupService/GetExternalBackup",
-			"/v1.ExternalBackupService/GetExternalBackups",
+			v1.ExternalBackupService_GetExternalBackup_FullMethodName,
+			v1.ExternalBackupService_GetExternalBackups_FullMethodName,
 		},
 		user.With(permissions.Modify(resources.Integration)): {
-			"/v1.ExternalBackupService/PutExternalBackup",
-			"/v1.ExternalBackupService/PostExternalBackup",
-			"/v1.ExternalBackupService/TestExternalBackup",
-			"/v1.ExternalBackupService/DeleteExternalBackup",
-			"/v1.ExternalBackupService/TriggerExternalBackup",
-			"/v1.ExternalBackupService/UpdateExternalBackup",
-			"/v1.ExternalBackupService/TestUpdatedExternalBackup",
+			v1.ExternalBackupService_PutExternalBackup_FullMethodName,
+			v1.ExternalBackupService_PostExternalBackup_FullMethodName,
+			v1.ExternalBackupService_TestExternalBackup_FullMethodName,
+			v1.ExternalBackupService_DeleteExternalBackup_FullMethodName,
+			v1.ExternalBackupService_TriggerExternalBackup_FullMethodName,
+			v1.ExternalBackupService_UpdateExternalBackup_FullMethodName,
+			v1.ExternalBackupService_TestUpdatedExternalBackup_FullMethodName,
 		},
 	})
 )

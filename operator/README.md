@@ -7,7 +7,6 @@ Central Services and Secured Cluster Services operator.
 All following commands should be run from this directory (`operator/`).
 
 1. Build and run operator locally. Note that this starts the operator without deploying it as a container in the cluster.  
-It does not install any webhooks either.
 See [Advanced usage](#advanced-usage) for different ways of running operator.
 
 ```bash
@@ -101,13 +100,8 @@ $ make help
 ### Launch the operator on the (local) cluster
 
 While `make install run` can launch the operator, the operator is running outside the cluster and this approach may not be sufficient to test all aspects of it.
-An example are features that need to exercise any of the webhooks.
 
 The recommended approach is the following.
-
-0. Make sure you have [cert-manager installed](https://cert-manager.io/docs/installation/).
-   It takes care of the TLS aspects of the connection from k8s API server to the webhook server
-   embedded in the manager binary.
 
 1. Build operator image
    ```bash
@@ -167,8 +161,6 @@ $ make bundle-test-image
 
 ### Launch the operator on the cluster with OLM and the bundle
 
-Note that unlike the `make deploy` route, deployment with OLM does not require cert-manager to be installed.
-
 ```bash
 # 0. Get the operator-sdk program.
 $ make operator-sdk
@@ -193,8 +185,8 @@ $ kubectl -n bundle-test patch serviceaccount default -p '{"imagePullSecrets": [
 # Use one-liner above.
 
 # 4. Run bundle.
-$ bin/operator-sdk-1.24.1 run bundle \
-  quay.io/rhacs-eng/stackrox-operator-bundle:v$(make --quiet tag) \
+$ `make which-operator-sdk` run bundle \
+  quay.io/rhacs-eng/stackrox-operator-bundle:v$(make --quiet --no-print-directory tag) \
   --pull-secret-name my-opm-image-pull-secrets \
   --service-account default \
   --namespace bundle-test
@@ -208,7 +200,7 @@ $ kubectl -n bundle-test patch serviceaccount rhacs-operator-controller-manager 
 # You may need to bounce operator pods after this if they can't pull images for a while.
 $ kubectl -n bundle-test delete pod -l app=rhacs-operator
 
-# 6. operator-sdk run bundle command should complete successfully.
+# 6. The above operator-sdk run bundle command should complete successfully.
 # If it does not, watch pod statuses and check pod logs.
 $ kubectl -n bundle-test get pods
 # ... and dive deep from there into the ones that are not healthy.
@@ -255,7 +247,7 @@ make kuttl
 
 These make targets will add the executable to your `$GOPATH`.
 If that is not on your `$PATH`, then you can install the Operator SDK from its [release page](https://github.com/operator-framework/operator-sdk/releases)
-and kuttl from its [release page](https://github.com/kudobuilder/kuttl/releases/tag/v0.15.0).
+and kuttl from its [release page](https://github.com/kudobuilder/kuttl/releases).
 
 #### Pull Secret
 
@@ -274,8 +266,6 @@ This can be retrieved on quay.io by:
 If `git describe --dirty` shows a `-dirty` suffix, you'll need to clean up your repo until git considers it "clean".
 Otherwise the make targets below will add `-dirty` to the image tag, and it likely won't be found.
 
-Note that if you run `olm-operator-install.sh` directly, this requirement does not apply.
-
 ### Deploy
 
 Now the latest version (based off of `make tag`) can be installed like so:
@@ -287,16 +277,13 @@ ROX_PRODUCT_BRANDING=RHACS_BRANDING make deploy-via-olm
 ```
 
 This installs the operator into the `stackrox-operator` namespace.
-This can be overridden with the `TEST_NAMESPACE` argument:
+This can be overridden with a `TEST_NAMESPACE` argument.
+The version can be overridden with a `VERSION` argument.
+
+For example:
 
 ```bash
-ROX_PRODUCT_BRANDING=RHACS_BRANDING make deploy-via-olm TEST_NAMESPACE=my-favorite-namespace
-```
-
-If you'd rather put in a custom image spec, you can use the install script directly:
-
-```bash
-hack/olm-operator-install.sh stackrox-operator quay.io/rhacs-eng/stackrox-operator 3.74.0-588-ge99fe7b316
+ROX_PRODUCT_BRANDING=RHACS_BRANDING make deploy-via-olm TEST_NAMESPACE=my-favorite-namespace VERSION=4.5.0-123-g12deadbeef
 ```
 
 ### Removal

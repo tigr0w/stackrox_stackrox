@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -12,13 +13,16 @@ import (
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/roxctl/common"
 	"github.com/stackrox/rox/roxctl/common/environment"
+	"github.com/stackrox/rox/roxctl/common/flags"
 )
 
-func fetchCAConfig(cliEnvironment environment.Environment, outputFile string) error {
-	ctx, cancel := context.WithTimeout(pkgCommon.Context(), contextTimeout)
+func fetchCAConfig(cliEnvironment environment.Environment, outputFile string,
+	timeout time.Duration, retryTimeout time.Duration,
+) error {
+	ctx, cancel := context.WithTimeout(pkgCommon.Context(), timeout)
 	defer cancel()
 
-	conn, err := cliEnvironment.GRPCConnection()
+	conn, err := cliEnvironment.GRPCConnection(common.WithRetryTimeout(retryTimeout))
 	if err != nil {
 		return err
 	}
@@ -76,10 +80,10 @@ func fetchCACommand(cliEnvironment environment.Environment) *cobra.Command {
 			} else if outputFile == "-" {
 				outputFile = ""
 			}
-			return fetchCAConfig(cliEnvironment, outputFile)
+			return fetchCAConfig(cliEnvironment, outputFile, flags.Timeout(cmd), flags.RetryTimeout(cmd))
 		},
 	}
-	c.PersistentFlags().StringVar(&outputFile, "output", "", "file to be used for storing the CA config")
+	c.PersistentFlags().StringVar(&outputFile, "output", "", "File to be used for storing the CA config")
 
 	return c
 }

@@ -10,13 +10,13 @@ endpoint:
 image:
   repository:
     main: [< required "" .ImageRemote >]
-    collector: [< required "" .CollectorFullImageRemote >]
+    collector: [< required "" .CollectorImageRemote >]
   registry:
     main: [< required "" .MainRegistry >]
     collector: [< required "" .CollectorRegistry >]
 
 config:
-  collectionMethod: [< default "EBPF" .CollectionMethod >]
+  collectionMethod: [< default "CORE_BPF" .CollectionMethod >]
   admissionControl:
     createService: [< default false .AdmissionController >]
     listenOnUpdates: [< default false .AdmissionControlListenOnUpdates >]
@@ -25,13 +25,13 @@ config:
     enforceOnUpdates: [< default false .AdmissionControlEnforceOnUpdates >]
     scanInline: [< default false .ScanInline >]
     disableBypass: [< default false .DisableBypass >]
-    timeout: [< default 20 .TimeoutSeconds >]
+    timeout: [< default 10 .TimeoutSeconds >]
   registryOverride:
   disableTaintTolerations: [< default false (not .TolerationsEnabled ) >]
   createUpgraderServiceAccount: [< default false .CreateUpgraderSA >]
   createSecrets: true
   offlineMode: [< default false .OfflineMode >]
-  slimCollector: [< default false .SlimCollector >]
+  slimCollector: false
 
 envVars: [< if empty .EnvVars >] []
   [< else >]

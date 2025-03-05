@@ -1,14 +1,17 @@
 import React, { ReactElement, useState } from 'react';
 import { useApolloClient } from '@apollo/client';
+import { Alert } from '@patternfly/react-core';
 
 import Button from 'Components/Button';
+import ComplianceUsageDisclaimer, {
+    COMPLIANCE_DISCLAIMER_KEY,
+} from 'Components/ComplianceUsageDisclaimer';
 import ExportButton from 'Components/ExportButton';
 import PageHeader from 'Components/PageHeader';
 import BackdropExporting from 'Components/PatternFly/BackdropExporting';
 import { resourceTypes } from 'constants/entityTypes';
 import useCaseTypes from 'constants/useCaseTypes';
-import { useTheme } from 'Containers/ThemeProvider';
-import useFeatureFlags from 'hooks/useFeatureFlags';
+import { useBooleanLocalStorage } from 'hooks/useLocalStorage';
 import usePermissions from 'hooks/usePermissions';
 import {
     ComplianceStandardMetadata,
@@ -16,18 +19,44 @@ import {
 } from 'services/ComplianceService';
 import { getAxiosErrorMessage } from 'utils/responseErrorUtils';
 
+import {
+    AGGREGATED_RESULTS_ACROSS_ENTITY,
+    AGGREGATED_RESULTS_STANDARDS_BY_ENTITY,
+} from 'queries/controls';
 import ScanButton from '../ScanButton';
 import StandardsByEntity from '../widgets/StandardsByEntity';
 import StandardsAcrossEntity from '../widgets/StandardsAcrossEntity';
-import ComplianceByStandards from '../widgets/ComplianceByStandards';
 
 import ManageStandardsError from './ManageStandardsError';
 import ManageStandardsModal from './ManageStandardsModal';
-import ComplianceDashboardTile from './ComplianceDashboardTile';
+import ComplianceDashboardTile, {
+    CLUSTERS_COUNT,
+    DEPLOYMENTS_COUNT,
+    NAMESPACES_COUNT,
+    NODES_COUNT,
+} from './ComplianceDashboardTile';
+import ComplianceScanProgress from './ComplianceScanProgress';
+import { useComplianceRunStatuses } from './useComplianceRunStatuses';
+
+const queriesToRefetchOnPollingComplete = [
+    CLUSTERS_COUNT,
+    NODES_COUNT,
+    NAMESPACES_COUNT,
+    DEPLOYMENTS_COUNT,
+    AGGREGATED_RESULTS_STANDARDS_BY_ENTITY(resourceTypes.CLUSTER),
+    AGGREGATED_RESULTS_ACROSS_ENTITY(resourceTypes.CLUSTER),
+    AGGREGATED_RESULTS_ACROSS_ENTITY(resourceTypes.NAMESPACE),
+    AGGREGATED_RESULTS_ACROSS_ENTITY(resourceTypes.NODE),
+];
 
 function ComplianceDashboardPage(): ReactElement {
+    const [isDisclaimerAccepted, setIsDisclaimerAccepted] = useBooleanLocalStorage(
+        COMPLIANCE_DISCLAIMER_KEY,
+        false
+    );
     const { hasReadWriteAccess } = usePermissions();
-    const { isFeatureFlagEnabled } = useFeatureFlags();
+    const hasWriteAccessForCompliance = hasReadWriteAccess('Compliance');
+
     const [isFetchingStandards, setIsFetchingStandards] = useState(false);
     const [errorMessageFetching, setErrorMessageFetching] = useState('');
     const [standards, setStandards] = useState<ComplianceStandardMetadata[]>([]);
@@ -37,17 +66,8 @@ function ComplianceDashboardPage(): ReactElement {
 
     const [isExporting, setIsExporting] = useState(false);
 
-    const { isDarkMode } = useTheme();
-    const darkModeClasses = `${
-        isDarkMode ? 'text-base-600 hover:bg-primary-200' : 'text-base-100 hover:bg-primary-800'
-    }`;
-
-    const hasWriteAccessForComplianceStandards = hasReadWriteAccess('Compliance'); // TODO confirm
-    const isDisableComplianceStandardsEnabled = isFeatureFlagEnabled(
-        'ROX_DISABLE_COMPLIANCE_STANDARDS'
-    );
-    const hasManageStandardsButton =
-        hasWriteAccessForComplianceStandards && isDisableComplianceStandardsEnabled;
+    const { runs, error, restartPolling, inProgressScanDetected, isCurrentScanIncomplete } =
+        useComplianceRunStatuses(queriesToRefetchOnPollingComplete);
 
     function clickManageStandardsButton() {
         setIsFetchingStandards(true);
@@ -95,49 +115,67 @@ function ComplianceDashboardPage(): ReactElement {
                         <ComplianceDashboardTile entityType="NAMESPACE" />
                         <ComplianceDashboardTile entityType="NODE" />
                         <ComplianceDashboardTile entityType="DEPLOYMENT" />
-                        <div className="ml-1 border-l-2 border-base-400 mr-3" />
-                        <div className="flex items-center">
+                        {hasWriteAccessForCompliance && (
+                            <ScanButton
+                                className={`flex items-center justify-center border-2 btn btn-base h-10 lg:min-w-32 xl:min-w-43`}
+                                text="Scan environment"
+                                textClass="hidden lg:block"
+                                textCondensed="Scan all"
+                                clusterId="*"
+                                standardId="*"
+                                onScanTriggered={restartPolling}
+                                scanInProgress={isCurrentScanIncomplete}
+                            />
+                        )}
+                        {hasWriteAccessForCompliance && (
                             <div className="flex items-center">
-                                <ScanButton
-                                    className={`flex items-center justify-center border-2 btn btn-base h-10 uppercase lg:min-w-32 xl:min-w-43 ${darkModeClasses}`}
-                                    text="Scan environment"
-                                    textClass="hidden lg:block"
-                                    textCondensed="Scan all"
-                                    clusterId="*"
-                                    standardId="*"
+                                <Button
+                                    text="Manage standards"
+                                    className="btn btn-base h-10 ml-2"
+                                    onClick={() => {
+                                        clickManageStandardsButton();
+                                    }}
+                                    disabled={isFetchingStandards}
+                                    isLoading={isFetchingStandards}
                                 />
                             </div>
-                            {hasManageStandardsButton && (
-                                <div className="flex items-center">
-                                    <Button
-                                        text="Manage standards"
-                                        className="btn btn-base h-10 ml-2"
-                                        onClick={() => {
-                                            clickManageStandardsButton();
-                                        }}
-                                        disabled={isFetchingStandards}
-                                        isLoading={isFetchingStandards}
-                                    />
-                                </div>
-                            )}
-                            <div className="flex items-center">
-                                <ExportButton
-                                    fileName="Compliance Dashboard Report"
-                                    textClass="hidden lg:block"
-                                    type="ALL"
-                                    page={useCaseTypes.COMPLIANCE}
-                                    pdfId="capture-dashboard"
-                                    isExporting={isExporting}
-                                    setIsExporting={setIsExporting}
-                                />
-                            </div>
-                        </div>
+                        )}
+                        <ExportButton
+                            fileName="Compliance Dashboard Report"
+                            textClass="hidden lg:block"
+                            type="ALL"
+                            page={useCaseTypes.COMPLIANCE}
+                            pdfId="capture-dashboard"
+                            isExporting={isExporting}
+                            setIsExporting={setIsExporting}
+                        />
                     </div>
                 </div>
             </PageHeader>
             <div className="flex-1 relative p-6 xxxl:p-8 bg-base-200" id="capture-dashboard">
+                {!isDisclaimerAccepted && (
+                    <ComplianceUsageDisclaimer
+                        onAccept={() => setIsDisclaimerAccepted(true)}
+                        className="pf-v5-u-mb-lg"
+                    />
+                )}
+                {(inProgressScanDetected || !!error) && (
+                    <div className="pf-v5-u-pb-lg">
+                        {error ? (
+                            <Alert
+                                variant="danger"
+                                title="There was an error fetching compliance scan status, data below may be out of date"
+                                component="p"
+                            >
+                                {getAxiosErrorMessage(error)}
+                            </Alert>
+                        ) : (
+                            <ComplianceScanProgress runs={runs} />
+                        )}
+                    </div>
+                )}
                 <div
-                    className="grid grid-gap-6 xxxl:grid-gap-8 md:grid-auto-fit xxl:grid-auto-fit-wide md:grid-dense"
+                    className="grid grid-gap-6 xxxl:grid-gap-8 md:grid-auto-fit xxl:grid-auto-fit-wide md:grid-dense pf-v5-u-pb-lg"
                     // style={{ '--min-tile-height': '160px' }}
                 >
                     <StandardsAcrossEntity
@@ -160,7 +198,6 @@ function ComplianceDashboardPage(): ReactElement {
                         bodyClassName="pr-4 py-1"
                         className="pdf-page"
                     />
-                    <ComplianceByStandards />
                 </div>
             </div>
             {isExporting && <BackdropExporting />}

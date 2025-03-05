@@ -7,14 +7,13 @@ import {
     Stack,
     StackItem,
     Text,
-    TextContent,
-    TextVariants,
+    Title,
     Toolbar,
     ToolbarContent,
     ToolbarItem,
 } from '@patternfly/react-core';
 
-import { TableComposable, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { getEdgesByNodeId, getNodeById } from '../utils/networkGraphUtils';
 import {
     CIDRBlockNodeModel,
@@ -22,26 +21,22 @@ import {
     CustomNodeModel,
     ExternalEntitiesNodeModel,
     ExternalGroupNodeModel,
+    isOfType,
 } from '../types/topology.type';
 
 import { CidrBlockIcon, ExternalEntitiesIcon } from '../common/NetworkGraphIcons';
 import EntityNameSearchInput from '../common/EntityNameSearchInput';
 
 type ExternalGroupSideBarProps = {
+    labelledById: string; // corresponds to aria-labelledby prop of TopologySideBar
     id: string;
     nodes: CustomNodeModel[];
     edges: CustomEdgeModel[];
     onNodeSelect: (id: string) => void;
 };
 
-const columnNames = {
-    entity: 'Entity',
-    address: 'Address',
-    activeTraffic: 'Active traffic',
-};
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ExternalGroupSideBar({
+    labelledById,
     id,
     nodes,
     edges,
@@ -52,10 +47,10 @@ function ExternalGroupSideBar({
 
     // derived data
     const externalGroupNode = getNodeById(nodes, id) as ExternalGroupNodeModel;
-    const externalNodes = nodes.filter(
-        (node) => node.data.type === 'CIDR_BLOCK' || node.data.type === 'EXTERNAL_ENTITIES'
-    ) as (ExternalEntitiesNodeModel | CIDRBlockNodeModel)[];
-
+    const externalNodes = [
+        ...nodes.filter(isOfType('CIDR_BLOCK')),
+        ...nodes.filter(isOfType('EXTERNAL_ENTITIES')),
+    ];
     const onNodeSelectHandler =
         (externalNode: ExternalEntitiesNodeModel | CIDRBlockNodeModel) => () => {
             onNodeSelect(externalNode.id);
@@ -73,27 +68,20 @@ function ExternalGroupSideBar({
     return (
         <Stack>
             <StackItem>
-                <Flex direction={{ default: 'row' }} className="pf-u-p-md pf-u-mb-0">
+                <Flex direction={{ default: 'row' }} className="pf-v5-u-p-md pf-v5-u-mb-0">
                     <FlexItem>
-                        <TextContent>
-                            <Text component={TextVariants.h2} className="pf-u-font-size-xl">
-                                {externalGroupNode?.label}
-                            </Text>
-                        </TextContent>
-                        <TextContent>
-                            <Text
-                                component={TextVariants.h3}
-                                className="pf-u-font-size-sm pf-u-color-200"
-                            >
-                                Connected entities outside your cluster
-                            </Text>
-                        </TextContent>
+                        <Title headingLevel="h2" id={labelledById}>
+                            {externalGroupNode?.label}
+                        </Title>
+                        <Text className="pf-v5-u-font-size-sm pf-v5-u-color-200">
+                            Connected entities outside your cluster
+                        </Text>
                     </FlexItem>
                 </Flex>
             </StackItem>
             <Divider component="hr" />
             <StackItem isFilled style={{ overflow: 'auto' }}>
-                <Stack className="pf-u-p-md">
+                <Stack className="pf-v5-u-p-md">
                     <StackItem>
                         <Flex>
                             <FlexItem flex={{ default: 'flex_1' }}>
@@ -104,27 +92,25 @@ function ExternalGroupSideBar({
                             </FlexItem>
                         </Flex>
                     </StackItem>
-                    <Divider component="hr" className="pf-u-py-md" />
-                    <StackItem className="pf-u-pb-md">
-                        <Toolbar className="pf-u-p-0">
-                            <ToolbarContent className="pf-u-px-0">
+                    <Divider component="hr" className="pf-v5-u-py-md" />
+                    <StackItem className="pf-v5-u-pb-md">
+                        <Toolbar className="pf-v5-u-p-0">
+                            <ToolbarContent className="pf-v5-u-px-0">
                                 <ToolbarItem>
-                                    <TextContent>
-                                        <Text component={TextVariants.h3}>
-                                            {filteredExternalNodes.length} results found
-                                        </Text>
-                                    </TextContent>
+                                    <Title headingLevel="h3">
+                                        {filteredExternalNodes.length} results found
+                                    </Title>
                                 </ToolbarItem>
                             </ToolbarContent>
                         </Toolbar>
                     </StackItem>
                     <StackItem>
-                        <TableComposable aria-label="External to cluster table" variant="compact">
+                        <Table aria-label="External to cluster table" variant="compact">
                             <Thead>
                                 <Tr>
-                                    <Th width={50}>{columnNames.entity}</Th>
-                                    <Th>{columnNames.address}</Th>
-                                    <Th>{columnNames.activeTraffic}</Th>
+                                    <Th width={50}>Entity</Th>
+                                    <Th>Address</Th>
+                                    <Th>Active traffic</Th>
                                 </Tr>
                             </Thead>
                             <Tbody>
@@ -142,8 +128,8 @@ function ExternalGroupSideBar({
                                             : '';
                                     const relevantEdges = getEdgesByNodeId(edges, externalNode.id);
                                     return (
-                                        <Tr>
-                                            <Td dataLabel={columnNames.entity}>
+                                        <Tr key={externalNode.id}>
+                                            <Td dataLabel="Entity">
                                                 <Flex>
                                                     <FlexItem>{entityIcon}</FlexItem>
                                                     <FlexItem>
@@ -159,15 +145,15 @@ function ExternalGroupSideBar({
                                                     </FlexItem>
                                                 </Flex>
                                             </Td>
-                                            <Td dataLabel={columnNames.address}>{address}</Td>
-                                            <Td dataLabel={columnNames.activeTraffic}>
+                                            <Td dataLabel="Address">{address}</Td>
+                                            <Td dataLabel="Active traffic">
                                                 {relevantEdges.length}
                                             </Td>
                                         </Tr>
                                     );
                                 })}
                             </Tbody>
-                        </TableComposable>
+                        </Table>
                     </StackItem>
                 </Stack>
             </StackItem>

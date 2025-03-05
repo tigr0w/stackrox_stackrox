@@ -81,7 +81,7 @@ get_unique_gs_destination() {
 }
 
 set_gs_path_vars() {
-    GS_URL="gs://roxci-artifacts"
+    GS_URL="gs://stackrox-ci-artifacts"
 
     if is_OPENSHIFT_CI; then
         local repo
@@ -133,7 +133,7 @@ make_artifacts_help() {
     
     local gs_workflow_url="$GS_URL/$WORKFLOW_SUBDIR"
     local gs_job_url="$gs_workflow_url/$JOB_SUBDIR"
-    local browser_url="https://console.cloud.google.com/storage/browser/roxci-artifacts"
+    local browser_url="https://console.cloud.google.com/storage/browser/stackrox-ci-artifacts"
     local browser_job_url="$browser_url/$WORKFLOW_SUBDIR/$JOB_SUBDIR"
 
     local help_file
@@ -147,7 +147,7 @@ make_artifacts_help() {
     cat > "$help_file" <<- EOH
         <html>
         <head>
-        <title><h4>Additional StackRox e2e artifacts</h4></title>
+        <title>Additional StackRox e2e artifacts</title>
         <style>
           body { color: #e8e8e8; background-color: #424242; font-family: "Roboto", "Helvetica", "Arial", sans-serif }
           a { color: #ff8caa }
@@ -173,13 +173,13 @@ make_artifacts_help() {
 
         <h2>Option 2: Browse using the Google cloud UI</h2>
 
-        <p>Make sure to use the URL where <code>authuser</code> corresponds to your @stackrox.com account.<br>
+        <p>Make sure to use the URL where <code>authuser</code> corresponds to your @redhat.com account.<br>
         You can check this by clicking on the user avatar in the top right corner of Google Cloud Console page
         after following the link.</p>
 
-        <a href="$browser_job_url?authuser=0">authuser=0</a><br>
-        <a href="$browser_job_url?authuser=1">authuser=1</a><br>
-        <a href="$browser_job_url?authuser=2">authuser=2</a><br>
+        <a target="_blank" href="$browser_job_url?authuser=0">authuser=0</a><br>
+        <a target="_blank" href="$browser_job_url?authuser=1">authuser=1</a><br>
+        <a target="_blank" href="$browser_job_url?authuser=2">authuser=2</a><br>
 
         <br><br>
 

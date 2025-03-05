@@ -3,16 +3,10 @@ package search
 import (
 	"context"
 
-	"github.com/stackrox/rox/central/serviceaccount/internal/index"
 	"github.com/stackrox/rox/central/serviceaccount/internal/store"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/search"
-)
-
-var (
-	log = logging.LoggerForModule()
 )
 
 // Searcher provides search functionality on existing service accounts.
@@ -26,9 +20,8 @@ type Searcher interface {
 }
 
 // New returns a new instance of Searcher for the given storage and index.
-func New(storage store.Store, indexer index.Indexer) Searcher {
+func New(storage store.Store) Searcher {
 	return &searcherImpl{
 		storage: storage,
-		indexer: indexer,
 	}
 }

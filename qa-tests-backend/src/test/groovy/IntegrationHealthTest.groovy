@@ -4,12 +4,9 @@ import spock.lang.Tag
 import spock.lang.Unroll
 
 class IntegrationHealthTest extends BaseSpecification {
-    def setupSpec() { }
-
-    def cleanupSpec() { }
-
     @Unroll
     @Tag("BAT")
+    @Tag("PZ")
     def "Verify vulnerability definitions information is available"() {
         when:
         "Vulnerability definition is requested"

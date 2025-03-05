@@ -1,5 +1,4 @@
 //go:build sql_integration
-// +build sql_integration
 
 package datastore
 
@@ -7,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	imageDataStore "github.com/stackrox/rox/central/image/datastore"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
@@ -35,7 +33,6 @@ func TestDeploymentDataStoreWithPostgres(t *testing.T) {
 type DeploymentPostgresDataStoreTestSuite struct {
 	suite.Suite
 
-	mockCtrl            *gomock.Controller
 	testDB              *pgtest.TestPostgres
 	ctx                 context.Context
 	imageDatastore      imageDataStore.DataStore
@@ -48,8 +45,7 @@ func (s *DeploymentPostgresDataStoreTestSuite) SetupSuite() {
 
 	s.testDB = pgtest.ForT(s.T())
 
-	imageDS, err := imageDataStore.GetTestPostgresDataStore(s.T(), s.testDB.DB)
-	s.Require().NoError(err)
+	imageDS := imageDataStore.GetTestPostgresDataStore(s.T(), s.testDB.DB)
 	s.imageDatastore = imageDS
 
 	deploymentDS, err := GetTestPostgresDataStore(s.T(), s.testDB.DB)

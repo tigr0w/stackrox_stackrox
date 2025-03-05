@@ -1,5 +1,5 @@
 import React, { ReactElement, useState } from 'react';
-import { Select, SelectVariant } from '@patternfly/react-core';
+import { Select } from '@patternfly/react-core/deprecated';
 
 export type FormSelectProps = {
     id: string;
@@ -23,9 +23,9 @@ const FormSelect = ({ id, value, onChange, children }: FormSelectProps): ReactEl
     return (
         <Select
             id={id}
-            variant={SelectVariant.single}
+            variant="single"
             selections={value}
-            onToggle={onToggle}
+            onToggle={(_event, toggleOpen) => onToggle(toggleOpen)}
             onSelect={onSelect}
             isOpen={isOpen}
             placeholderText="UNSET"

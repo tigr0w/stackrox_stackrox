@@ -7,22 +7,22 @@ import queryService from 'utils/queryService';
 import workflowStateContext from 'Containers/workflowStateContext';
 import Loader from 'Components/Loader';
 import NoResultsMessage from 'Components/NoResultsMessage';
-import ViewAllButton from 'Components/ViewAllButton';
 import Widget from 'Components/Widget';
-import Scatterplot from 'Components/visuals/Scatterplot';
-import HoverHintListItem from 'Components/visuals/HoverHintListItem';
 import TextSelect from 'Components/TextSelect';
 import entityTypes from 'constants/entityTypes';
-import entityLabels from 'messages/entity';
-import { policySeverityColorMap } from 'constants/visuals/colors';
+import { policySeverityColorMap } from 'constants/severityColors';
 import { severityLabels as policySeverityLabels } from 'messages/common';
 import { policySeverities } from 'types/policy.proto';
 import { checkForPermissionErrorMessage } from 'utils/permissionUtils';
 import { getSeverityByCvss } from 'utils/vulnerabilityUtils';
 import { entitySortFieldsMap, cveSortFields } from 'constants/sortFields';
 import { WIDGET_PAGINATION_START_OFFSET } from 'constants/workflowPages.constants';
-import { entityPriorityField } from 'Containers/VulnMgmt/VulnMgmt.constants';
-import useFeatureFlags from 'hooks/useFeatureFlags';
+import { entityPriorityField } from '../VulnMgmt.constants';
+
+import { entityNounOrdinaryCasePlural } from '../entitiesForVulnerabilityManagement';
+import Scatterplot from './Scatterplot';
+
+import ViewAllButton from './ViewAllButton';
 
 // Beware, policy instead of vulnerability severities because of getSeverityByCvss function!
 
@@ -35,13 +35,6 @@ const ENTITY_COUNT = 25;
 const VULN_COUNT = 50;
 
 // Data Queries
-const VULN_FRAGMENT = gql`
-    fragment vulnFields on EmbeddedVulnerability {
-        cve
-        cvss
-        severity
-    }
-`;
 const IMAGE_VULN_FRAGMENT = gql`
     fragment vulnFields on ImageVulnerability {
         id
@@ -57,35 +50,6 @@ const NODE_VULN_FRAGMENT = gql`
         cvss
         severity
     }
-`;
-
-const OLD_DEPLOYMENT_QUERY = gql`
-    query topRiskyDeployments(
-        $query: String
-        $vulnQuery: String
-        $entityPagination: Pagination
-        $vulnPagination: Pagination
-    ) {
-        results: deployments(query: $query, pagination: $entityPagination) {
-            id
-            name
-            clusterName
-            namespaceName: namespace
-            priority
-            plottedVulns(query: $vulnQuery) {
-                basicVulnCounter {
-                    all {
-                        total
-                        fixable
-                    }
-                }
-                vulns(pagination: $vulnPagination) {
-                    ...vulnFields
-                }
-            }
-        }
-    }
-    ${VULN_FRAGMENT}
 `;
 
 const DEPLOYMENT_QUERY = gql`
@@ -117,34 +81,6 @@ const DEPLOYMENT_QUERY = gql`
     ${IMAGE_VULN_FRAGMENT}
 `;
 
-const OLD_NODE_QUERY = gql`
-    query topRiskyNodes(
-        $query: String
-        $vulnQuery: String
-        $entityPagination: Pagination
-        $vulnPagination: Pagination
-    ) {
-        results: nodes(query: $query, pagination: $entityPagination) {
-            id
-            name
-            clusterName
-            priority
-            plottedVulns(query: $vulnQuery) {
-                basicVulnCounter {
-                    all {
-                        total
-                        fixable
-                    }
-                }
-                vulns(pagination: $vulnPagination) {
-                    ...vulnFields
-                }
-            }
-        }
-    }
-    ${VULN_FRAGMENT}
-`;
-
 const NODE_QUERY = gql`
     query topRiskyNodes(
         $query: String
@@ -171,36 +107,6 @@ const NODE_QUERY = gql`
         }
     }
     ${NODE_VULN_FRAGMENT}
-`;
-
-const OLD_NAMESPACE_QUERY = gql`
-    query topRiskyNamespaces(
-        $query: String
-        $vulnQuery: String
-        $entityPagination: Pagination
-        $vulnPagination: Pagination
-    ) {
-        results: namespaces(query: $query, pagination: $entityPagination) {
-            metadata {
-                clusterName
-                name
-                id
-                priority
-            }
-            plottedVulns(query: $vulnQuery) {
-                basicVulnCounter {
-                    all {
-                        total
-                        fixable
-                    }
-                }
-                vulns(pagination: $vulnPagination) {
-                    ...vulnFields
-                }
-            }
-        }
-    }
-    ${VULN_FRAGMENT}
 `;
 
 const NAMESPACE_QUERY = gql`
@@ -231,35 +137,6 @@ const NAMESPACE_QUERY = gql`
         }
     }
     ${IMAGE_VULN_FRAGMENT}
-`;
-
-const OLD_IMAGE_QUERY = gql`
-    query topRiskyImages(
-        $query: String
-        $vulnQuery: String
-        $entityPagination: Pagination
-        $vulnPagination: Pagination
-    ) {
-        results: images(query: $query, pagination: $entityPagination) {
-            id
-            name {
-                fullName
-            }
-            priority
-            plottedVulns(query: $vulnQuery) {
-                basicVulnCounter {
-                    all {
-                        total
-                        fixable
-                    }
-                }
-                vulns(pagination: $vulnPagination) {
-                    ...vulnFields
-                }
-            }
-        }
-    }
-    ${VULN_FRAGMENT}
 `;
 
 const IMAGE_QUERY = gql`
@@ -298,15 +175,12 @@ const TopRiskyEntitiesByVulnerabilities = ({
     cveFilter,
     small,
 }) => {
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-    const showVmUpdates = isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE');
-
     const workflowState = useContext(workflowStateContext);
 
     // Entity Type selection
     const [selectedEntityType, setEntityType] = useState(defaultSelection);
     const entityOptions = riskEntityTypes.map((entityType) => ({
-        label: `Top risky ${pluralize(entityLabels[entityType])} by CVE count & CVSS score`,
+        label: `Top risky ${entityNounOrdinaryCasePlural[entityType]} by CVE count and CVSS score`,
         value: entityType,
     }));
     function onChange(datum) {
@@ -333,13 +207,6 @@ const TopRiskyEntitiesByVulnerabilities = ({
     );
     const viewAll = <ViewAllButton url={viewAllUrl} />;
 
-    const oldQueryMap = {
-        [entityTypes.DEPLOYMENT]: OLD_DEPLOYMENT_QUERY,
-        [entityTypes.NAMESPACE]: OLD_NAMESPACE_QUERY,
-        [entityTypes.IMAGE]: OLD_IMAGE_QUERY,
-        [entityTypes.NODE]: OLD_NODE_QUERY,
-    };
-
     const queryMap = {
         [entityTypes.DEPLOYMENT]: DEPLOYMENT_QUERY,
         [entityTypes.NAMESPACE]: NAMESPACE_QUERY,
@@ -347,9 +214,7 @@ const TopRiskyEntitiesByVulnerabilities = ({
         [entityTypes.NODE]: NODE_QUERY,
     };
 
-    const mapToUse = showVmUpdates ? queryMap : oldQueryMap;
-
-    const query = mapToUse[selectedEntityType];
+    const query = queryMap[selectedEntityType];
 
     function getAverageSeverity(vulns) {
         if (vulns.length === 0) {
@@ -367,48 +232,6 @@ const TopRiskyEntitiesByVulnerabilities = ({
         return avgScore.toFixed(1);
     }
 
-    function getHint(datum, filter) {
-        let subtitle = '';
-        if (selectedEntityType === entityTypes.DEPLOYMENT) {
-            subtitle = `${datum.clusterName} / ${datum.namespaceName}`;
-        } else if (selectedEntityType === entityTypes.NAMESPACE) {
-            subtitle = `${datum.metadata && datum.metadata.clusterName}`;
-        }
-        const riskPriority =
-            selectedEntityType === entityTypes.NAMESPACE
-                ? (datum.metadata && datum.metadata.priority) || 0
-                : datum.priority;
-        const severityKey = getSeverityByCvss(datum.avgSeverity);
-        const severityText = policySeverityLabels[severityKey];
-
-        let cveCountText =
-            filter !== 'Fixable' ? `${datum.plottedVulns.basicVulnCounter.all.total} total / ` : '';
-        cveCountText += `${datum.plottedVulns.basicVulnCounter.all.fixable} fixable`;
-
-        return {
-            title:
-                (datum.name && datum.name.fullName) ||
-                datum.name ||
-                (datum.metadata && datum.metadata.name),
-            body: (
-                <ul className="flex-1 border-base-300 overflow-hidden">
-                    <HoverHintListItem key="severity" label="Severity" value={severityText} />
-                    <HoverHintListItem
-                        key="riskPriority"
-                        label="Risk Priority"
-                        value={riskPriority}
-                    />
-                    <HoverHintListItem
-                        key="weightedCvss"
-                        label="Weighted CVSS"
-                        value={datum.avgSeverity}
-                    />
-                    <HoverHintListItem key="cves" label="CVEs" value={cveCountText} />
-                </ul>
-            ),
-            subtitle,
-        };
-    }
     function processData(data) {
         if (!data || !data.results) {
             return [];
@@ -426,7 +249,6 @@ const TopRiskyEntitiesByVulnerabilities = ({
                     x: vulnCount,
                     y: +avgSeverity,
                     color,
-                    hint: getHint({ ...result, avgSeverity }, cveFilter),
                     url,
                 };
             })

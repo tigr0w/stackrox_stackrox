@@ -1,3 +1,8 @@
+/**
+ * @typedef {import("cypress/types/net-stubbing").RouteMatcherOptions} RouteMatcherOptions
+ * @typedef {import("cypress/types/net-stubbing").RouteHandler} RouteHandler
+ * @typedef {import("cypress/types/net-stubbing").WaitOptions} WaitOptions
+ */
 import { interceptRequests, waitForResponses } from './request';
 
 // Single source of truth for keys in staticResponseMapForAuthenticatedRoutes object.
@@ -7,6 +12,7 @@ export const loginAuthProvidersAlias = 'login/authproviders';
 export const myPermissionsAlias = 'mypermissions';
 export const configPublicAlias = 'config/public';
 export const authStatusAlias = 'auth/status';
+export const centralCapabilitiesAlias = 'central-capabilities';
 
 // Requests to render pages via MainPage and Body components.
 const routeMatcherMapForAuthenticatedRoutes = {
@@ -33,7 +39,11 @@ const routeMatcherMapForAuthenticatedRoutes = {
     [authStatusAlias]: {
         method: 'GET',
         url: '/v1/auth/status',
-    }, // sagas/authSagas
+    }, // sagas/authSagas,
+    [centralCapabilitiesAlias]: {
+        method: 'GET',
+        url: '/v1/central-capabilities',
+    }, // reducers/centralCapabilities,
     /*
      * Intentionally omit credentialexpiry requests for central and scanner,
      * because they are in parallel with (and possibly even delayed by) page-specific requests.
@@ -53,18 +63,19 @@ const routeMatcherMapForAuthenticatedRoutes = {
  * staticResponseMap: { alias: { fixture }, … }
  *
  * @param {string} pageUrl
- * @param {Record<string, { method: string, url: string }>} [routeMatcherMap]
- * @param {Record<string, { body: unknown } | { fixture: string }>} [staticResponseMap]
+ * @param {Record<string, RouteMatcherOptions>} [routeMatcherMap]
+ * @param {Record<string, RouteHandler>} [staticResponseMap]
+ * @param {WaitOptions} [waitOptions]
  * @returns {{ request: Record<string, unknown>, response: Record<string, unknown>}[]}
  */
-export function visit(pageUrl, routeMatcherMap, staticResponseMap) {
+export function visit(pageUrl, routeMatcherMap, staticResponseMap, waitOptions) {
     interceptRequests(routeMatcherMapForAuthenticatedRoutes);
     interceptRequests(routeMatcherMap, staticResponseMap);
 
     cy.visit(pageUrl);
 
     waitForResponses(routeMatcherMapForAuthenticatedRoutes);
-    return waitForResponses(routeMatcherMap);
+    return waitForResponses(routeMatcherMap, waitOptions);
 }
 
 /**
@@ -107,8 +118,8 @@ export function visitWithStaticResponseForAuthStatus(
  *
  * @param {string} pageUrl
  * @param {{ body: { resourceToAccess: Record<string, string> } } | { fixture: string }} staticResponseForPermissions
- * @param {Record<string, { method: string, url: string }>} [routeMatcherMap]
- * @param {Record<string, { body: unknown } | { fixture: string }>} [staticResponseMap]
+ * @param {Record<string, RouteMatcherOptions>} [routeMatcherMap]
+ * @param {Record<string, RouteHandler>} [staticResponseMap]
  */
 export function visitWithStaticResponseForPermissions(
     pageUrl,
@@ -129,4 +140,40 @@ export function visitWithStaticResponseForPermissions(
 
     waitForResponses(routeMatcherMapForAuthenticatedRoutes);
     waitForResponses(routeMatcherMap);
+}
+
+/**
+ * Visit page to test conditional rendering for central capabilities specified as response or fixture.
+ *
+ * { body: { ... } }
+ * { fixture: 'fixtures/wherever/whatever.json' }
+ *
+ * @param {string} pageUrl
+ * @param {{ body: { [key: string]: 'CapabilityAvailable' | 'CapabilityDisabled' } }} staticResponseForCapabilities
+ * @param {Record<string, { method: string, url: string }>} [routeMatcherMap]
+ * @param {Record<string, { body: unknown } | { fixture: string }>} [staticResponseMap]
+ */
+export function visitWithStaticResponseForCapabilities(
+    pageUrl,
+    staticResponseForCapabilities,
+    routeMatcherMap,
+    staticResponseMap
+) {
+    const staticResponseMapForAuthenticatedRoutes = {
+        [centralCapabilitiesAlias]: staticResponseForCapabilities,
+    };
+    interceptRequests(
+        routeMatcherMapForAuthenticatedRoutes,
+        staticResponseMapForAuthenticatedRoutes
+    );
+    interceptRequests(routeMatcherMap, staticResponseMap);
+
+    cy.visit(pageUrl);
+
+    waitForResponses(routeMatcherMapForAuthenticatedRoutes);
+    waitForResponses(routeMatcherMap);
+}
+
+export function assertCannotFindThePage() {
+    cy.get('h1:contains("Cannot find the page")');
 }

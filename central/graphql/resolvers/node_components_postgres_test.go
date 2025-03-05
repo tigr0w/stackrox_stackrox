@@ -6,17 +6,18 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/graph-gophers/graphql-go"
 	"github.com/stackrox/rox/central/graphql/resolvers/loaders"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/pkg/fixtures/fixtureconsts"
 	"github.com/stackrox/rox/pkg/grpc/authz/allow"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	"github.com/stackrox/rox/pkg/search/scoped"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 func TestGraphQLNodeComponentEndpoints(t *testing.T) {
@@ -48,7 +49,7 @@ func (s *GraphQLNodeComponentTestSuite) SetupSuite() {
 	s.resolver = resolver
 
 	// Add test data to DataStores
-	testClusters, testNodes := testClustersWithNodes()
+	testClusters, testNodes := testClustersWithNodes(false)
 	for _, cluster := range testClusters {
 		err := s.resolver.ClusterDataStore.UpdateCluster(s.ctx, cluster)
 		s.NoError(err)
@@ -248,7 +249,7 @@ func (s *GraphQLNodeComponentTestSuite) TestNodeComponentLastScanned() {
 	node := getNodeResolver(ctx, s.T(), s.resolver, fixtureconsts.Node2)
 	lastScanned, err := comp.LastScanned(ctx)
 	s.NoError(err)
-	expected, err := timestamp(node.data.GetScan().GetScanTime())
+	expected, err := protocompat.ConvertTimestampToGraphqlTimeOrError(node.data.GetScan().GetScanTime())
 	s.NoError(err)
 	s.Equal(expected, lastScanned)
 
@@ -261,7 +262,7 @@ func (s *GraphQLNodeComponentTestSuite) TestNodeComponentLastScanned() {
 	node = getNodeResolver(ctx, s.T(), s.resolver, fixtureconsts.Node1)
 	lastScanned, err = comp.LastScanned(ctx)
 	s.NoError(err)
-	expected, err = timestamp(node.data.GetScan().GetScanTime())
+	expected, err = protocompat.ConvertTimestampToGraphqlTimeOrError(node.data.GetScan().GetScanTime())
 	s.NoError(err)
 	s.Equal(expected, lastScanned)
 }

@@ -3,16 +3,15 @@ package datastore
 import (
 	"context"
 	"testing"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/stackrox/rox/central/cve/common"
-	"github.com/stackrox/rox/central/cve/image/datastore/index"
 	"github.com/stackrox/rox/central/cve/image/datastore/search"
 	"github.com/stackrox/rox/central/cve/image/datastore/store"
 	pgStore "github.com/stackrox/rox/central/cve/image/datastore/store/postgres"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/dackbox/concurrency"
+	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/postgres"
 	searchPkg "github.com/stackrox/rox/pkg/search"
 )
@@ -30,31 +29,33 @@ type DataStore interface {
 	Count(ctx context.Context, q *v1.Query) (int, error)
 	GetBatch(ctx context.Context, id []string) ([]*storage.ImageCVE, error)
 
-	Suppress(ctx context.Context, start *types.Timestamp, duration *types.Duration, cves ...string) error
+	Suppress(ctx context.Context, start *time.Time, duration *time.Duration, cves ...string) error
 	Unsuppress(ctx context.Context, cves ...string) error
+
+	// Deprecated: ApplyException and RevertException are used for database backward compatibility purpose only.
+	// Those functions can be removed after a few releases.
+	ApplyException(ctx context.Context, start *time.Time, expiry *time.Time, cves ...string) error
+	RevertException(ctx context.Context, cves ...string) error
+
 	EnrichImageWithSuppressedCVEs(image *storage.Image)
 }
 
 // New returns a new instance of a DataStore.
-func New(storage store.Store, indexer index.Indexer, searcher search.Searcher, kf concurrency.KeyFence) (DataStore, error) {
+func New(storage store.Store, searcher search.Searcher, kf concurrency.KeyFence) DataStore {
 	ds := &datastoreImpl{
 		storage:  storage,
-		indexer:  indexer,
 		searcher: searcher,
 
 		cveSuppressionCache: make(common.CVESuppressionCache),
 		keyFence:            kf,
 	}
-	if err := ds.buildSuppressedCache(); err != nil {
-		return nil, err
-	}
-	return ds, nil
+	ds.buildSuppressedCache()
+	return ds
 }
 
 // GetTestPostgresDataStore provides a datastore connected to postgres for testing purposes.
-func GetTestPostgresDataStore(_ *testing.T, pool postgres.DB) (DataStore, error) {
+func GetTestPostgresDataStore(_ *testing.T, pool postgres.DB) DataStore {
 	dbstore := pgStore.New(pool)
-	indexer := pgStore.NewIndexer(pool)
-	searcher := search.New(dbstore, indexer)
-	return New(dbstore, indexer, searcher, concurrency.NewKeyFence())
+	searcher := search.New(dbstore)
+	return New(dbstore, searcher, concurrency.NewKeyFence())
 }

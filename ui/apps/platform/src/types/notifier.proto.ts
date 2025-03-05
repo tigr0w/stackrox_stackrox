@@ -43,6 +43,7 @@ export type AWSSecurityHub = {
 export type AWSSecurityHubCredentials = {
     accessKeyId: string; // scrub:always
     secretAccessKey: string; // scrub:always
+    stsEnabled: boolean;
 };
 
 // cscc
@@ -55,6 +56,7 @@ export type CSCCNotifierIntegration = {
 export type CSCC = {
     serviceAccount: string; // scrub:always
     sourceId: string;
+    wifEnabled: boolean;
 };
 
 // email
@@ -110,6 +112,7 @@ export type Jira = {
     issueType: string;
     priorityMappings: JiraPriorityMapping[];
     defaultFieldsJson: string;
+    disablePriority: boolean;
 };
 
 export type JiraPriorityMapping = {
@@ -167,7 +170,10 @@ export type SyslogNotifierIntegration = {
 // Eventually this will support TCP, UDP, and local endpoints
 export type Syslog = SyslogTCP;
 
+export type SyslogCEFOptions = 'CEF' | 'LEGACY' | null;
+
 export type SyslogBase = {
+    messageFormat?: SyslogCEFOptions;
     localFacility?: SyslogLocalFacility;
     extraFields: KeyValuePair[];
 };

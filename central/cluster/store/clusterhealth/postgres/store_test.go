@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ClusterHealthStatusesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE cluster_health_statuses CASCADE")
 	s.T().Log("cluster_health_statuses", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ClusterHealthStatusesStoreSuite) TestStore() {
 	foundClusterHealthStatus, exists, err = store.Get(ctx, clusterHealthStatus.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(clusterHealthStatus, foundClusterHealthStatus)
+	protoassert.Equal(s.T(), clusterHealthStatus, foundClusterHealthStatus)
 
-	clusterHealthStatusCount, err := store.Count(ctx)
+	clusterHealthStatusCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, clusterHealthStatusCount)
-	clusterHealthStatusCount, err = store.Count(withNoAccessCtx)
+	clusterHealthStatusCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(clusterHealthStatusCount)
 
@@ -75,11 +78,6 @@ func (s *ClusterHealthStatusesStoreSuite) TestStore() {
 	s.True(clusterHealthStatusExists)
 	s.NoError(store.Upsert(ctx, clusterHealthStatus))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, clusterHealthStatus), sac.ErrResourceAccessDenied)
-
-	foundClusterHealthStatus, exists, err = store.Get(ctx, clusterHealthStatus.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(clusterHealthStatus, foundClusterHealthStatus)
 
 	s.NoError(store.Delete(ctx, clusterHealthStatus.GetId()))
 	foundClusterHealthStatus, exists, err = store.Get(ctx, clusterHealthStatus.GetId())
@@ -99,13 +97,13 @@ func (s *ClusterHealthStatusesStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, clusterHealthStatuss))
 
-	clusterHealthStatusCount, err = store.Count(ctx)
+	clusterHealthStatusCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, clusterHealthStatusCount)
 
 	s.NoError(store.DeleteMany(ctx, clusterHealthStatusIDs))
 
-	clusterHealthStatusCount, err = store.Count(ctx)
+	clusterHealthStatusCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, clusterHealthStatusCount)
 }

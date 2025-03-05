@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ComplianceConfigsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE compliance_configs CASCADE")
 	s.T().Log("compliance_configs", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ComplianceConfigsStoreSuite) TestStore() {
 	foundComplianceConfig, exists, err = store.Get(ctx, complianceConfig.GetStandardId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(complianceConfig, foundComplianceConfig)
+	protoassert.Equal(s.T(), complianceConfig, foundComplianceConfig)
 
-	complianceConfigCount, err := store.Count(ctx)
+	complianceConfigCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, complianceConfigCount)
-	complianceConfigCount, err = store.Count(withNoAccessCtx)
+	complianceConfigCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(complianceConfigCount)
 
@@ -75,11 +78,6 @@ func (s *ComplianceConfigsStoreSuite) TestStore() {
 	s.True(complianceConfigExists)
 	s.NoError(store.Upsert(ctx, complianceConfig))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, complianceConfig), sac.ErrResourceAccessDenied)
-
-	foundComplianceConfig, exists, err = store.Get(ctx, complianceConfig.GetStandardId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(complianceConfig, foundComplianceConfig)
 
 	s.NoError(store.Delete(ctx, complianceConfig.GetStandardId()))
 	foundComplianceConfig, exists, err = store.Get(ctx, complianceConfig.GetStandardId())
@@ -99,13 +97,13 @@ func (s *ComplianceConfigsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, complianceConfigs))
 
-	complianceConfigCount, err = store.Count(ctx)
+	complianceConfigCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, complianceConfigCount)
 
 	s.NoError(store.DeleteMany(ctx, complianceConfigIDs))
 
-	complianceConfigCount, err = store.Count(ctx)
+	complianceConfigCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, complianceConfigCount)
 }

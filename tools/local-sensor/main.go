@@ -22,12 +22,16 @@ import (
 	"github.com/stackrox/rox/generated/internalapi/central"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/clientconn"
+	"github.com/stackrox/rox/pkg/continuousprofiling"
 	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/utils"
 	"github.com/stackrox/rox/sensor/common/centralclient"
 	commonSensor "github.com/stackrox/rox/sensor/common/sensor"
 	centralDebug "github.com/stackrox/rox/sensor/debugger/central"
+	"github.com/stackrox/rox/sensor/debugger/certs"
+	"github.com/stackrox/rox/sensor/debugger/collector"
 	"github.com/stackrox/rox/sensor/debugger/k8s"
 	"github.com/stackrox/rox/sensor/debugger/message"
 	"github.com/stackrox/rox/sensor/kubernetes/client"
@@ -82,7 +86,6 @@ type localSensorConfig struct {
 	ReplayK8sEnabled   bool
 	ReplayK8sTraceFile string
 	Verbose            bool
-	ResyncPeriod       time.Duration
 	CreateMode         k8s.CreateMode
 	Delay              time.Duration
 	PoliciesFile       string
@@ -92,6 +95,7 @@ type localSensorConfig struct {
 	NoMemProfile       bool
 	PprofServer        bool
 	CentralEndpoint    string
+	FakeCollector      bool
 }
 
 const (
@@ -117,7 +121,7 @@ func writeOutputInBinaryFormat(messages []*central.MsgFromSensor, _, _ time.Time
 	}()
 	utils.CrashOnError(err)
 	for _, m := range messages {
-		d, err := m.Marshal()
+		d, err := m.MarshalVT()
 		utils.CrashOnError(err)
 		buf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(buf, uint32(len(d)))
@@ -151,7 +155,6 @@ func mustGetCommandLineArgs() localSensorConfig {
 		RecordK8sFile:      "k8s-trace.jsonl",
 		ReplayK8sEnabled:   false,
 		ReplayK8sTraceFile: "k8s-trace.jsonl",
-		ResyncPeriod:       1 * time.Minute,
 		Delay:              5 * time.Second,
 		CreateMode:         k8s.Delay,
 		PoliciesFile:       "",
@@ -161,6 +164,7 @@ func mustGetCommandLineArgs() localSensorConfig {
 		NoMemProfile:       false,
 		PprofServer:        false,
 		CentralEndpoint:    "",
+		FakeCollector:      false,
 	}
 	flag.BoolVar(&sensorConfig.NoCPUProfile, "no-cpu-prof", sensorConfig.NoCPUProfile, "disables producing CPU profile for performance analysis")
 	flag.BoolVar(&sensorConfig.NoMemProfile, "no-mem-prof", sensorConfig.NoMemProfile, "disables producing memory profile for performance analysis")
@@ -173,13 +177,13 @@ func mustGetCommandLineArgs() localSensorConfig {
 	flag.StringVar(&sensorConfig.RecordK8sFile, "record-out", sensorConfig.RecordK8sFile, "a file where recorded trace would be stored")
 	flag.BoolVar(&sensorConfig.ReplayK8sEnabled, "replay", sensorConfig.ReplayK8sEnabled, "whether to reply recorded a trace with k8s events")
 	flag.StringVar(&sensorConfig.ReplayK8sTraceFile, "replay-in", sensorConfig.ReplayK8sTraceFile, "a file where recorded trace would be read from")
-	flag.DurationVar(&sensorConfig.ResyncPeriod, "resync", sensorConfig.ResyncPeriod, "resync period")
 	flag.DurationVar(&sensorConfig.Delay, "delay", sensorConfig.Delay, "create events with a given delay")
 	flag.StringVar(&sensorConfig.PoliciesFile, "with-policies", sensorConfig.PoliciesFile, " a file containing a list of policies")
 	flag.StringVar(&sensorConfig.FakeWorkloadFile, "with-fakeworkload", sensorConfig.FakeWorkloadFile, " a file containing a FakeWorkload definition")
 	flag.BoolVar(&sensorConfig.WithMetrics, "with-metrics", sensorConfig.WithMetrics, "enables the metric server")
 	flag.BoolVar(&sensorConfig.PprofServer, "with-pprof-server", sensorConfig.PprofServer, "enables the pprof server on port :6060")
 	flag.StringVar(&sensorConfig.CentralEndpoint, "connect-central", sensorConfig.CentralEndpoint, "connects to a Central instance rather than a fake Central")
+	flag.BoolVar(&sensorConfig.FakeCollector, "with-fake-collector", sensorConfig.FakeCollector, "enables sensor to allow connections from a fake collector")
 	flag.Parse()
 
 	sensorConfig.CentralOutput = path.Clean(sensorConfig.CentralOutput)
@@ -246,26 +250,33 @@ func registerHostKillSignals(startTime time.Time, fakeCentral *centralDebug.Fake
 //
 // If a KUBECONFIG file is provided, then local-sensor will use that file to connect to a remote cluster.
 func main() {
+	if err := continuousprofiling.SetupClient(continuousprofiling.DefaultConfig(),
+		continuousprofiling.WithDefaultAppName("sensor")); err != nil {
+		log.Printf("unable to start continuous profiling: %v", err)
+	}
 	localConfig := mustGetCommandLineArgs()
 	if localConfig.WithMetrics {
 		// Start the prometheus metrics server
-		metrics.NewDefaultHTTPServer(metrics.SensorSubsystem).RunForever()
+		metrics.NewServer(metrics.SensorSubsystem, metrics.NewTLSConfigurerFromEnv()).RunForever()
 		metrics.GatherThrottleMetricsForever(metrics.SensorSubsystem.String())
 	}
-	var fakeClient client.Interface
-	fakeClient, err := k8s.MakeOutOfClusterClient()
+	var k8sClient client.Interface
 	// when replying a trace, there is no need to connect to K8s cluster
 	if localConfig.ReplayK8sEnabled {
-		fakeClient = k8s.MakeFakeClient()
+		k8sClient = k8s.MakeFakeClient()
 	}
 	var workloadManager *fake.WorkloadManager
 	// if we are using a fake workload we don't want to connect to a real K8s cluster
 	if localConfig.FakeWorkloadFile != "" {
 		workloadManager = fake.NewWorkloadManager(fake.ConfigDefaults().
 			WithWorkloadFile(localConfig.FakeWorkloadFile))
-		fakeClient = workloadManager.Client()
+		k8sClient = workloadManager.Client()
 	}
-	utils.CrashOnError(err)
+	if k8sClient == nil {
+		var err error
+		k8sClient, err = k8s.MakeOutOfClusterClient()
+		utils.CrashOnError(err)
+	}
 	if !localConfig.NoCPUProfile {
 		f, err := os.Create(fmt.Sprintf("local-sensor-cpu-%s.prof", time.Now().UTC().Format(time.RFC3339)))
 		if err != nil {
@@ -292,30 +303,39 @@ func main() {
 	isFakeCentral := localConfig.CentralEndpoint == ""
 
 	var connection centralclient.CentralConnectionFactory
+	var certLoader centralclient.CertLoader
 	var spyCentral *centralDebug.FakeService
 	if isFakeCentral {
-		connection, spyCentral = setupCentralWithFakeConnection(localConfig)
+		connection, certLoader, spyCentral = setupCentralWithFakeConnection(localConfig)
 		defer spyCentral.Stop()
 	} else {
-		connection = setupCentralWithRealConnection(localConfig)
+		connection, certLoader = setupCentralWithRealConnection(k8sClient, localConfig)
 	}
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
+	defer cancelFunc()
 
 	sensorConfig := sensor.ConfigWithDefaults().
-		WithK8sClient(fakeClient).
+		WithK8sClient(k8sClient).
 		WithCentralConnectionFactory(connection).
+		WithCertLoader(certLoader).
 		WithLocalSensor(true).
-		WithResyncPeriod(localConfig.ResyncPeriod).
 		WithWorkloadManager(workloadManager)
 
-	if localConfig.RecordK8sEnabled {
-		traceRec := &k8s.TraceWriter{
-			Destination: path.Clean(localConfig.RecordK8sFile),
+	if localConfig.FakeCollector {
+		acceptAnyFn := func(ctx context.Context, _ string) (context.Context, error) {
+			return ctx, nil
 		}
-		if err := traceRec.Init(); err != nil {
+		sensorConfig.WithSignalServiceAuthFuncOverride(acceptAnyFn).
+			WithNetworkFlowServiceAuthFuncOverride(acceptAnyFn)
+	}
+
+	if localConfig.RecordK8sEnabled {
+		traceRec, err := k8s.NewTraceWriter(path.Clean(localConfig.RecordK8sFile))
+		if err != nil {
 			log.Fatalln(err)
 		}
+		defer utils.IgnoreError(traceRec.Close)
 		sensorConfig.WithTraceWriter(traceRec)
 	}
 
@@ -330,18 +350,18 @@ func main() {
 		fm := k8s.FakeEventsManager{
 			Delay:   localConfig.Delay,
 			Mode:    localConfig.CreateMode,
-			Client:  fakeClient,
+			Client:  k8sClient,
 			Reader:  trReader,
 			Verbose: localConfig.Verbose,
 		}
-		min, errCh := fm.CreateEvents(ctx)
+		min, doneSignal := fm.CreateEvents(ctx)
 		select {
-		case err := <-errCh:
-			if err != nil {
+		case <-doneSignal.Done():
+			if err := doneSignal.Err(); err != nil {
 				cancelFunc()
 				log.Fatalln(err)
 			}
-			// If the errCh is closed but err == nil we know we are done creating resources,
+			// If the errSignal is triggered but err == nil we know we are done creating resources,
 			// but we did not reach the minimum resources to start sensor
 			log.Fatalln(errors.New("the minimum resources to start sensor were not created"))
 		case <-min.WaitC():
@@ -349,9 +369,14 @@ func main() {
 		}
 		// in case there are errors after we received the minimum resources signal
 		go func() {
-			for e := range errCh {
-				cancelFunc()
-				log.Fatalln(e)
+			select {
+			case <-doneSignal.Done():
+				if err := doneSignal.Err(); err != nil {
+					cancelFunc()
+					log.Fatalln(err)
+				}
+			case <-ctx.Done():
+				break
 			}
 		}()
 	}
@@ -366,6 +391,13 @@ func main() {
 
 	if spyCentral != nil {
 		spyCentral.ConnectionStarted.Wait()
+	}
+
+	if localConfig.FakeCollector {
+		fakeCollector := collector.NewFakeCollector(collector.WithDefaultConfig())
+		if err := fakeCollector.Start(); err != nil {
+			log.Fatalln(err)
+		}
 	}
 
 	log.Printf("Running scenario for %f minutes\n", localConfig.Duration.Minutes())
@@ -386,29 +418,28 @@ func main() {
 	}
 }
 
-func setupCentralWithRealConnection(localConfig localSensorConfig) centralclient.CentralConnectionFactory {
-	// These files depend on running `tools/local-sensor/scripts/fetch-certs.sh`.
-	utils.CrashOnError(os.Setenv("ROX_MTLS_CERT_FILE", "tmp/sensor-cert.pem"))
-	utils.CrashOnError(os.Setenv("ROX_MTLS_KEY_FILE", "tmp/sensor-key.pem"))
-	utils.CrashOnError(os.Setenv("ROX_MTLS_CA_FILE", "tmp/ca.pem"))
-
-	utils.CrashOnError(os.Setenv("ROX_HELM_CONFIG_FILE_OVERRIDE", "tmp/helm-config.yaml"))
-	utils.CrashOnError(os.Setenv("ROX_HELM_CLUSTER_NAME_FILE_OVERRIDE", "tmp/helm-name.yaml"))
-
+func setupCentralWithRealConnection(cli client.Interface, localConfig localSensorConfig) (centralclient.CentralConnectionFactory, centralclient.CertLoader) {
+	certFetcher := certs.NewCertificateFetcher(cli, certs.WithOutputDir("tmp/"))
+	if err := certFetcher.FetchCertificatesAndSetEnvironment(); err != nil {
+		utils.CrashOnError(errors.Wrap(err, "failed to retrieve sensor's certificates"))
+	}
 	utils.CrashOnError(os.Setenv("ROX_CERTIFICATE_CACHE_DIR", "tmp/.local-sensor-cache"))
 
 	utils.CrashOnError(os.Setenv("ROX_CENTRAL_ENDPOINT", localConfig.CentralEndpoint))
 
 	clientconn.SetUserAgent(clientconn.Sensor)
-	centralConnFactory, err := centralclient.NewCentralConnectionFactory(env.CentralEndpoint.Setting())
-	if err != nil {
-		utils.CrashOnError(errors.Wrapf(err, "sensor failed to start while initializing gRPC client to endpoint %s", env.CentralEndpoint.Setting()))
-	}
 
-	return centralConnFactory
+	centralClient, err := centralclient.NewClient(env.CentralEndpoint.Setting())
+	if err != nil {
+		utils.CrashOnError(errors.Wrapf(err, "sensor failed to start while initializing HTTP client to endpoint %s", env.CentralEndpoint.Setting()))
+	}
+	centralConnFactory := centralclient.NewCentralConnectionFactory(centralClient)
+	centralCertLoader := centralclient.RemoteCertLoader(centralClient)
+
+	return centralConnFactory, centralCertLoader
 }
 
-func setupCentralWithFakeConnection(localConfig localSensorConfig) (centralclient.CentralConnectionFactory, *centralDebug.FakeService) {
+func setupCentralWithFakeConnection(localConfig localSensorConfig) (centralclient.CentralConnectionFactory, centralclient.CertLoader, *centralDebug.FakeService) {
 	utils.CrashOnError(os.Setenv("ROX_MTLS_CERT_FILE", "tools/local-sensor/certs/cert.pem"))
 	utils.CrashOnError(os.Setenv("ROX_MTLS_KEY_FILE", "tools/local-sensor/certs/key.pem"))
 	utils.CrashOnError(os.Setenv("ROX_MTLS_CA_FILE", "tools/local-sensor/certs/caCert.pem"))
@@ -423,11 +454,19 @@ func setupCentralWithFakeConnection(localConfig localSensorConfig) (centralclien
 		}
 	}
 
-	fakeCentral := centralDebug.MakeFakeCentralWithInitialMessages(
+	initialMessages := []*central.MsgToSensor{
 		message.SensorHello("00000000-0000-4000-A000-000000000000"),
 		message.ClusterConfig(),
 		message.PolicySync(policies),
-		message.BaselineSync([]*storage.ProcessBaseline{}))
+		message.BaselineSync([]*storage.ProcessBaseline{}),
+		message.NetworkBaselineSync([]*storage.NetworkBaseline{}),
+	}
+
+	if features.SensorReconciliationOnReconnect.Enabled() {
+		initialMessages = append(initialMessages, message.DeduperState(nil, 1, 1))
+	}
+
+	fakeCentral := centralDebug.MakeFakeCentralWithInitialMessages(initialMessages...)
 
 	if localConfig.Verbose {
 		fakeCentral.OnMessage(func(msg *central.MsgFromSensor) {
@@ -439,7 +478,7 @@ func setupCentralWithFakeConnection(localConfig localSensorConfig) (centralclien
 	fakeCentral.OnShutdown(shutdownFakeServer)
 	fakeConnectionFactory := centralDebug.MakeFakeConnectionFactory(conn)
 
-	return fakeConnectionFactory, spyCentral
+	return fakeConnectionFactory, centralclient.EmptyCertLoader(), spyCentral
 }
 
 type sensorMessageJSONOutput struct {

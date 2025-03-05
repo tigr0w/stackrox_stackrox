@@ -1,11 +1,11 @@
 import withAuth from '../../helpers/basicAuth';
-import { hasOrchestratorFlavor } from '../../helpers/features';
 import searchSelectors from '../../selectors/search';
 
 import {
     assertComplianceEntityPage,
     interactAndWaitForComplianceEntities,
     interactAndWaitForComplianceEntityInSidePanel,
+    triggerScan,
     visitComplianceEntities,
     visitComplianceStandard,
 } from './Compliance.helpers';
@@ -14,18 +14,15 @@ import { selectors } from './Compliance.selectors';
 describe('Compliance entities list', () => {
     withAuth();
 
-    before(function beforeHook() {
-        if (hasOrchestratorFlavor('openshift')) {
-            this.skip();
-        }
-    });
-
     it('should filter namespaces table with passing controls', () => {
+        triggerScan(); // in case complianceDashboard.test.js is skipped
         visitComplianceEntities('namespaces');
 
         interactAndWaitForComplianceEntities(() => {
-            cy.get(searchSelectors.input).type('Compliance State:').type('{enter}');
-            cy.get(searchSelectors.input).type('Pass').type('{enter}');
+            cy.get(searchSelectors.input).type('Compliance State:');
+            cy.get(searchSelectors.input).type('{enter}');
+            cy.get(searchSelectors.input).type('Pass');
+            cy.get(searchSelectors.input).type('{enter}');
         }, 'namespaces');
         cy.get('.rt-tbody .rt-tr').should('not.exist');
         cy.get('[data-testid="panel-header"]').should('contain', '0 namespaces');
@@ -35,8 +32,10 @@ describe('Compliance entities list', () => {
         visitComplianceEntities('namespaces');
 
         interactAndWaitForComplianceEntities(() => {
-            cy.get(searchSelectors.input).type('Compliance State:').type('{enter}');
-            cy.get(searchSelectors.input).type('Fail').type('{enter}');
+            cy.get(searchSelectors.input).type('Compliance State:');
+            cy.get(searchSelectors.input).type('{enter}');
+            cy.get(searchSelectors.input).type('Fail');
+            cy.get(searchSelectors.input).type('{enter}');
         }, 'namespaces');
         cy.get('.rt-tbody .rt-tr');
         cy.get('[data-testid="panel-header"]').should('contain', 'namespace');
@@ -52,7 +51,6 @@ describe('Compliance entities list', () => {
                 cy.get(selectors.list.table.firstRow).click();
                 cy.get('[data-testid="side-panel"]').should('exist');
                 cy.get('[data-testid="side-panel-header"]').contains(name);
-                cy.get(selectors.widget.relatedEntities).should('not.exist');
                 cy.get('[data-testid="side-panel"] [aria-label="Close"]').click();
                 cy.get('[data-testid="side-panel"]').should('not.exist');
                 cy.get('[data-testid="panel-header"]').should('contain', 'cluster');
@@ -75,7 +73,7 @@ describe('Compliance entities list', () => {
     });
 
     it('should be sorted by version in standards list', () => {
-        visitComplianceStandard('CIS Docker v1.2.0');
+        visitComplianceStandard('CIS Kubernetes v1.5');
 
         cy.get(selectors.list.table.firstRowName)
             .invoke('text')

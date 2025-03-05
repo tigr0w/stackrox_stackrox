@@ -1,11 +1,11 @@
 import withAuth from '../../helpers/basicAuth';
-import { hasFeatureFlag } from '../../helpers/features';
 import {
     generateNameWithDate,
     getHelperElementByLabel,
     getInputByLabel,
 } from '../../helpers/formHelpers';
 import sampleCert from '../../helpers/sampleCert';
+import fakeGCPServiceAccount from '../../helpers/fakeGCPServiceAccount';
 
 import {
     clickCreateNewIntegrationInTable,
@@ -60,7 +60,22 @@ describe('Notifier Integrations', () => {
             cy.get(selectors.buttons.test).should('be.disabled');
             cy.get(selectors.buttons.save).should('be.disabled');
 
-            // Step 2, check fields for invalid formats
+            // Step 2, check conditional fields
+
+            // Step 2.1, enable container IAM role, this should remove the AWS credentials fields
+            getInputByLabel('Use container IAM role').click();
+            cy.get(
+                `.pf-v5-c-form__group:has('.pf-v5-c-form__control:contains("Access key ID")') input`
+            ).should('not.exist');
+            cy.get(
+                `.pf-v5-c-form__group:has('.pf-v5-c-form__control:contains("Secret access key")') input`
+            ).should('not.exist');
+            // Step 2.2, disable container IAM role, this should render the AWS credentials fields again
+            getInputByLabel('Use container IAM role').click();
+            getInputByLabel('Access key ID').should('be.visible');
+            getInputByLabel('Secret access key').should('be.visible');
+
+            // Step 3, check fields for invalid formats
             getInputByLabel('Integration name').clear().type(integrationName);
             getInputByLabel('AWS region').select('US East (N. Virginia) us-east-1');
             getInputByLabel('Access key ID').click().type('AKIA5VNQSYCDODH7VKMK');
@@ -75,7 +90,7 @@ describe('Notifier Integrations', () => {
             cy.get(selectors.buttons.test).should('be.disabled');
             cy.get(selectors.buttons.save).should('be.disabled');
 
-            // Step 3, check valid form and save
+            // Step 4, check valid form and save
             getInputByLabel('AWS account number').clear().type('939357552771').blur();
 
             testIntegrationInFormWithStoredCredentials(
@@ -123,7 +138,7 @@ describe('Notifier Integrations', () => {
 
             // Step 2, check fields for invalid formats
             getInputByLabel('Email server').type('example.');
-            getInputByLabel('Sender').type('scooby@doo', {
+            getInputByLabel('Sender').type('scooby@doo.', {
                 parseSpecialCharSequences: false,
             });
             getInputByLabel('Default recipient')
@@ -238,19 +253,28 @@ describe('Notifier Integrations', () => {
             // Step 1, check empty fields
             getInputByLabel('Integration name').type(' ');
             getInputByLabel('Cloud SCC Source ID').type(' ');
-            getInputByLabel('Service Account Key (JSON)').type(' ').blur();
+            getInputByLabel('Service account key (JSON)').type(' ').blur();
 
-            getHelperElementByLabel('Integration name').contains('Required');
+            getHelperElementByLabel('Integration name').contains('An integration name is required');
             getHelperElementByLabel('Cloud SCC Source ID').contains('A source ID is required');
-            getHelperElementByLabel('Service Account Key (JSON)').contains(
-                'A service account is required'
+            getHelperElementByLabel('Service account key (JSON)').contains(
+                'Valid JSON is required for service account key'
             );
             cy.get(selectors.buttons.test).should('be.disabled');
             cy.get(selectors.buttons.save).should('be.disabled');
 
-            // Step 2, check fields for invalid formats
+            // Step 2, check conditional fields
+
+            // Step 2.1, enable workload identity, this should remove the service account field
+            getInputByLabel('Use workload identity').click();
+            getInputByLabel('Service account key (JSON)').should('be.disabled');
+            // Step 2.2, disable workload identity, this should render the service account field again
+            getInputByLabel('Use workload identity').click();
+            getInputByLabel('Service account key (JSON)').should('be.enabled');
+
+            // Step 3, check fields for invalid formats
             getInputByLabel('Cloud SCC Source ID').type('organization-123');
-            getInputByLabel('Service Account Key (JSON)')
+            getInputByLabel('Service account key (JSON)')
                 .type('{ "type": "service_account", "project_id": "123456"', {
                     parseSpecialCharSequences: false,
                 })
@@ -259,20 +283,18 @@ describe('Notifier Integrations', () => {
             getHelperElementByLabel('Cloud SCC Source ID').contains(
                 'SCC source ID must match the format: organizations/[0-9]+/sources/[0-9]+'
             );
-            getHelperElementByLabel('Service Account Key (JSON)').contains(
-                'Service account must be valid JSON'
+            getHelperElementByLabel('Service account key (JSON)').contains(
+                'Valid JSON is required for service account key'
             );
             cy.get(selectors.buttons.test).should('be.disabled');
             cy.get(selectors.buttons.save).should('be.disabled');
 
-            // Step 3, check valid from and save
+            // Step 4, check valid from and save
             getInputByLabel('Integration name').clear().type(integrationName);
             getInputByLabel('Cloud SCC Source ID').clear().type('organizations/123/sources/456');
-            getInputByLabel('Service Account Key (JSON)')
+            getInputByLabel('Service account key (JSON)')
                 .clear()
-                .type('{ "type": "service_account", "project_id": "123456" }', {
-                    parseSpecialCharSequences: false,
-                })
+                .type(JSON.stringify(fakeGCPServiceAccount), { parseSpecialCharSequences: false })
                 .blur();
 
             testIntegrationInFormWithStoredCredentials(
@@ -517,24 +539,16 @@ describe('Notifier Integrations', () => {
             getInputByLabel('Annotation key for Slack webhook').click().blur();
 
             getHelperElementByLabel('Integration name').contains('Name is required');
-            getHelperElementByLabel('Default Slack webhook').contains('Slack webhook is required');
-            cy.get(selectors.buttons.test).should('be.disabled');
-            cy.get(selectors.buttons.save).should('be.disabled');
-
-            // Step 2, check fields for invalid formats
-            getInputByLabel('Integration name').clear().type(integrationName);
-            getInputByLabel('Default Slack webhook')
-                .clear()
-                .type('https://hooks.slack.com/services/')
-                .blur();
-
             getHelperElementByLabel('Default Slack webhook').contains(
-                'Must be a valid Slack webhook URL, like https://hooks.slack.com/services/EXAMPLE'
+                'Webhook is required, like https://hooks.slack.com/services/EXAMPLE'
             );
             cy.get(selectors.buttons.test).should('be.disabled');
             cy.get(selectors.buttons.save).should('be.disabled');
 
+            // Step 2, no invalid formats to check
+
             // Step 3, check valid form and save
+            getInputByLabel('Integration name').clear().type(integrationName);
             getInputByLabel('Annotation key for Slack webhook').clear().type('slack');
             getInputByLabel('Default Slack webhook')
                 .clear()
@@ -569,6 +583,14 @@ describe('Notifier Integrations', () => {
             getInputByLabel('Receiver host').click().blur();
             getInputByLabel('Receiver port').click().clear().blur();
 
+            // check format toggle
+            cy.get(
+                '.pf-v5-c-form__group-label .pf-v5-c-form__label-text:contains("Message Format")'
+            );
+            cy.get(
+                '#messageFormat .pf-v5-c-toggle-group__item .pf-v5-c-toggle-group__button.pf-m-selected:contains("CEF")'
+            );
+
             getHelperElementByLabel('Integration name').contains('Integration name is required');
             getHelperElementByLabel('Logging facility').contains('Logging facility is required');
             getHelperElementByLabel('Receiver host').contains('Receiver host is required');
@@ -590,11 +612,15 @@ describe('Notifier Integrations', () => {
 
             // Step 3, check valid form and save
             getInputByLabel('Receiver port').clear().type('1').blur();
-            if (hasFeatureFlag('ROX_SYSLOG_EXTRA_FIELDS')) {
-                cy.get('button:contains("Add new extra field")').click();
-                getInputByLabel('Key').type('vehicle');
-                getInputByLabel('Value').type('vanagon').blur();
-            }
+            cy.get('button:contains("Add new extra field")').click();
+            getInputByLabel('Key').type('vehicle');
+            getInputByLabel('Value').type('vanagon').blur();
+            cy.get(
+                '#messageFormat .pf-v5-c-toggle-group__item .pf-v5-c-toggle-group__button:contains("CEF (legacy field order)")'
+            ).click();
+            cy.get(
+                '#messageFormat .pf-v5-c-toggle-group__item .pf-v5-c-toggle-group__button:contains("CEF (legacy field order)")'
+            ).should('have.class', 'pf-m-selected');
 
             testIntegrationInFormWithoutStoredCredentials(
                 integrationSource,

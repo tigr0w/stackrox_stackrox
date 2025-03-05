@@ -3,12 +3,11 @@ package datastore
 import (
 	"github.com/pkg/errors"
 	rolePkg "github.com/stackrox/rox/central/role"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/permissions"
 	permissionsUtils "github.com/stackrox/rox/pkg/auth/permissions/utils"
 	"github.com/stackrox/rox/pkg/defaults/accesscontrol"
-	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/utils"
 )
 
@@ -20,10 +19,7 @@ type permSetAttributes struct {
 }
 
 func (attributes *permSetAttributes) getID() string {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		return attributes.postgresID
-	}
-	return rolePkg.EnsureValidPermissionSetID(attributes.idSuffix)
+	return attributes.postgresID
 }
 
 var defaultPermissionSets = map[string]permSetAttributes{
@@ -91,20 +87,11 @@ var defaultPermissionSets = map[string]permSetAttributes{
 			permissions.Modify(resources.VulnerabilityManagementRequests),
 		},
 	},
-	// TODO ROX-13888 when we migrate to WorkflowAdministration we can remove VulnerabilityReports and Role resources
 	accesscontrol.VulnReporter: {
 		idSuffix:    "vulnreporter",
 		postgresID:  accesscontrol.DefaultPermissionSetIDs[accesscontrol.VulnReporter],
 		description: "For users: use it to create and manage vulnerability reporting configurations for scheduled vulnerability reports",
 		resourceWithAccess: func() []permissions.ResourceWithAccess {
-			if !env.PostgresDatastoreEnabled.BooleanSetting() {
-				return []permissions.ResourceWithAccess{
-					permissions.View(resources.Access),                 // required for scopes
-					permissions.View(resources.Integration),            // required for vuln report configurations
-					permissions.View(resources.VulnerabilityReports),   // required for vuln report configurations prior to collections
-					permissions.Modify(resources.VulnerabilityReports), // required for vuln report configurations prior to collections
-				}
-			}
 			return []permissions.ResourceWithAccess{
 				permissions.View(resources.WorkflowAdministration),   // required for vuln report configurations
 				permissions.Modify(resources.WorkflowAdministration), // required for vuln report configurations
@@ -121,7 +108,6 @@ var defaultPermissionSets = map[string]permSetAttributes{
 			permissions.View(resources.Deployment),
 			permissions.View(resources.Image),
 			permissions.View(resources.WatchedImage),
-			permissions.View(resources.VulnerabilityReports),
 			permissions.View(resources.WorkflowAdministration),
 			permissions.Modify(resources.VulnerabilityManagementRequests),
 		},
@@ -140,8 +126,16 @@ var defaultPermissionSets = map[string]permSetAttributes{
 			permissions.Modify(resources.WatchedImage),
 			permissions.Modify(resources.VulnerabilityManagementRequests),
 			permissions.Modify(resources.VulnerabilityManagementApprovals),
-			permissions.Modify(resources.VulnerabilityReports),
 			permissions.Modify(resources.WorkflowAdministration),
+		},
+	},
+	accesscontrol.ConfigController: {
+		idSuffix:    "configcontroller",
+		postgresID:  accesscontrol.DefaultPermissionSetIDs[accesscontrol.ConfigController],
+		description: "For automation: Used by config-controller and grants access to config objects managed by the controller",
+		resourceWithAccess: []permissions.ResourceWithAccess{
+			permissions.Modify(resources.WorkflowAdministration),
+			permissions.View(resources.Integration),
 		},
 	},
 }

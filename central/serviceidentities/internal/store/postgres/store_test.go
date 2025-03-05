@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ServiceIdentitiesStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE service_identities CASCADE")
 	s.T().Log("service_identities", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ServiceIdentitiesStoreSuite) TestStore() {
 	foundServiceIdentity, exists, err = store.Get(ctx, serviceIdentity.GetSerialStr())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(serviceIdentity, foundServiceIdentity)
+	protoassert.Equal(s.T(), serviceIdentity, foundServiceIdentity)
 
-	serviceIdentityCount, err := store.Count(ctx)
+	serviceIdentityCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, serviceIdentityCount)
-	serviceIdentityCount, err = store.Count(withNoAccessCtx)
+	serviceIdentityCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(serviceIdentityCount)
 
@@ -75,11 +78,6 @@ func (s *ServiceIdentitiesStoreSuite) TestStore() {
 	s.True(serviceIdentityExists)
 	s.NoError(store.Upsert(ctx, serviceIdentity))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, serviceIdentity), sac.ErrResourceAccessDenied)
-
-	foundServiceIdentity, exists, err = store.Get(ctx, serviceIdentity.GetSerialStr())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(serviceIdentity, foundServiceIdentity)
 
 	s.NoError(store.Delete(ctx, serviceIdentity.GetSerialStr()))
 	foundServiceIdentity, exists, err = store.Get(ctx, serviceIdentity.GetSerialStr())
@@ -100,15 +98,15 @@ func (s *ServiceIdentitiesStoreSuite) TestStore() {
 	s.NoError(store.UpsertMany(ctx, serviceIdentitys))
 	allServiceIdentity, err := store.GetAll(ctx)
 	s.NoError(err)
-	s.ElementsMatch(serviceIdentitys, allServiceIdentity)
+	protoassert.ElementsMatch(s.T(), serviceIdentitys, allServiceIdentity)
 
-	serviceIdentityCount, err = store.Count(ctx)
+	serviceIdentityCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, serviceIdentityCount)
 
 	s.NoError(store.DeleteMany(ctx, serviceIdentityIDs))
 
-	serviceIdentityCount, err = store.Count(ctx)
+	serviceIdentityCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, serviceIdentityCount)
 }

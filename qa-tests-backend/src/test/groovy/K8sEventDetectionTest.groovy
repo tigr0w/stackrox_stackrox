@@ -11,7 +11,6 @@ import services.PolicyService
 import util.Env
 
 import spock.lang.IgnoreIf
-import spock.lang.Retry
 import spock.lang.Tag
 import spock.lang.Unroll
 
@@ -21,7 +20,7 @@ class K8sEventDetectionTest extends BaseSpecification {
     static private registerDeployment(String name, boolean privileged) {
         DEPLOYMENTS.add(
             new Deployment().setName(name)
-                .setImage("quay.io/rhacs-eng/qa-multi-arch:nginx-1-14-alpine").addLabel("app", name).
+                .setImage(TEST_IMAGE).addLabel("app", name).
                 setPrivilegedFlag(privileged)
         )
         return name
@@ -87,7 +86,7 @@ class K8sEventDetectionTest extends BaseSpecification {
     def checkViolationsAreAsExpected(String policyName, List<String> execedIntoDeploymentNames,
                                      List<String> violatingDeploymentNames, Map<String, String> podNames,
                                      int expectedK8sViolationsCount) {
-        for (def violatingDeploymentName: violatingDeploymentNames) {
+        violatingDeploymentNames.each { String violatingDeploymentName ->
             def violatingDeployment = DEPLOYMENTS.find { it.name == violatingDeploymentName }
             assert violatingDeployment
             def violations = Services.getViolationsByDeploymentID(
@@ -130,7 +129,6 @@ class K8sEventDetectionTest extends BaseSpecification {
         return true
     }
 
-    @Retry(count = 0)
     @Unroll
     @Tag("BAT")
     @Tag("RUNTIME")

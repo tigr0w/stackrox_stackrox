@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"go/scanner"
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -16,17 +13,15 @@ import (
 	_ "embed"
 
 	"github.com/Masterminds/sprig/v3"
-	"github.com/golang/protobuf/proto"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	_ "github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/mathutil"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/protoutils"
 	"github.com/stackrox/rox/pkg/readable"
 	"github.com/stackrox/rox/pkg/stringutils"
 	"github.com/stackrox/rox/pkg/utils"
-	"golang.org/x/tools/imports"
+	"github.com/stackrox/rox/tools/generate-helpers/common"
 )
 
 //go:embed schema.go.tpl
@@ -44,18 +39,6 @@ var storeFile string
 //go:embed store_test.go.tpl
 var storeTestFile string
 
-//go:embed index.go.tpl
-var indexFile string
-
-//go:embed permission_checker.go.tpl
-var permissionCheckerFile string
-
-//go:embed migration.go.tpl
-var migrationFile string
-
-//go:embed migration_test.go.tpl
-var migrationTestFile string
-
 //go:embed migration_tool.go.tpl
 var migrationToolFile string
 
@@ -68,10 +51,6 @@ var (
 	singletonTestTemplate     = newTemplate(singletonTestFile)
 	storeTemplate             = newTemplate(storeFile)
 	storeTestTemplate         = newTemplate(storeTestFile)
-	indexTemplate             = newTemplate(indexFile)
-	permissionCheckerTemplate = newTemplate(permissionCheckerFile)
-	migrationTemplate         = newTemplate(migrationFile)
-	migrationTestTemplate     = newTemplate(migrationTestFile)
 	migrationToolTemplate     = newTemplate(migrationToolFile)
 	migrationToolTestTemplate = newTemplate(migrationToolTestFile)
 )
@@ -104,20 +83,11 @@ type properties struct {
 	// Indicates the directory in which the generated schema file must go.
 	SchemaDirectory string
 
-	// Indicates that we want to generate a GetAll function. Defaults to false because this can be dangerous on high cardinality stores
+	// Indicates that we want to generate a GetAll function. Defaults to false because this can be dangerous on high cardinality stores.
 	GetAll bool
 
-	// Indicates that we should just generate the singleton store
+	// Indicates that we should just generate the singleton store.
 	SingletonStore bool
-
-	// Migration root
-	MigrateRoot string
-
-	// Where the data are migrated from in the format of "database:bucket", eg, \"rocksdb\", \"dackbox\" or \"boltdb\"")
-	MigrateFrom string
-
-	// The unique sequence number to migrate all tables to Postgres
-	MigrateSeq int
 
 	// Indicates the scope of search. Set this field to limit search to only some categories in case of overlapping
 	// search fields.
@@ -126,56 +96,17 @@ type properties struct {
 	// Indicates whether stores should use Postgres copyFrom operation or not.
 	NoCopyFrom bool
 
-	// Generate conversion functions with schema
+	// Generate conversion functions with schema.
 	ConversionFuncs bool
 
-	// Indicates that there is a foreign key cycle relationship. Should be defined as <Embedded FK Field>:<Referenced Field>
+	// Indicates that there is a foreign key cycle relationship. Should be defined as <Embedded FK Field>:<Referenced Field>.
 	Cycle string
 
-	// Indicates the batch size for migrating records.
-	MigrationBatchSize int
-
-	// The feature flag that specifies if the schema should be registered
+	// The feature flag that specifies if the schema should be registered.
 	FeatureFlag string
-}
 
-func renderFile(templateMap map[string]interface{}, temp func(s string) *template.Template, templateFileName string) error {
-	buf := bytes.NewBuffer(nil)
-	if err := temp(templateFileName).Execute(buf, templateMap); err != nil {
-		return err
-	}
-	file := buf.Bytes()
-
-	importProcessingStart := time.Now()
-	formatted, err := imports.Process(templateFileName, file, nil)
-	importProcessingDuration := time.Since(importProcessingStart)
-
-	if err != nil {
-		target := scanner.ErrorList{}
-		if !errors.As(err, &target) {
-			fmt.Println(string(file))
-			return err
-		}
-		e := target[0]
-		fileLines := strings.Split(string(file), "\n")
-		fmt.Printf("There is an error in following snippet: %s\n", e.Msg)
-		fmt.Println(strings.Join(fileLines[mathutil.MaxInt(0, e.Pos.Line-2):mathutil.MinInt(len(fileLines), e.Pos.Line+1)], "\n"))
-		return err
-	}
-	if err := os.WriteFile(templateFileName, formatted, 0644); err != nil {
-		return err
-	}
-	if importProcessingDuration > time.Second {
-		absTemplatePath, err := filepath.Abs(templateFileName)
-		if err != nil {
-			absTemplatePath = templateFileName
-		}
-		log.Panicf("Import processing for file %q took more than 1 second (%s). This typically indicates that an import was "+
-			"not added to the Go template, which forced import processing to search through all types and magically "+
-			"add the import. Please add the import to the template; you can compare the imports in the generated file "+
-			"with the ones in the template, and add the missing one(s)", absTemplatePath, importProcessingDuration)
-	}
-	return nil
+	// Indicates the store should be mirrored in memory.
+	CachedStore bool
 }
 
 type parsedReference struct {
@@ -204,38 +135,19 @@ func main() {
 	c.Flags().BoolVar(&props.JoinTable, "read-only-store", false, "if set to true, creates read-only store")
 	c.Flags().BoolVar(&props.NoCopyFrom, "no-copy-from", false, "if true, indicates that the store should not use Postgres copyFrom operation")
 	c.Flags().BoolVar(&props.SchemaOnly, "schema-only", false, "if true, generates only the schema and not store and index")
-	c.Flags().BoolVar(&props.GetAll, "get-all-func", false, "if true, generates a GetAll function")
+	c.Flags().BoolVar(&props.GetAll, "get-all-func", false, "if true, generates a GetAll function (can be dangerous on high cardinality stores, use with care)")
 	c.Flags().StringVar(&props.SchemaDirectory, "schema-directory", "", "the directory in which to generate the schema")
 	c.Flags().BoolVar(&props.SingletonStore, "singleton", false, "indicates that we should just generate the singleton store")
 	c.Flags().StringSliceVar(&props.SearchScope, "search-scope", []string{}, "if set, the search is scoped to specified search categories. comma seperated of search categories")
+	c.Flags().BoolVar(&props.CachedStore, "cached-store", false, "if true, ensure the store is mirrored in a memory cache (can be dangerous on high cardinality stores, use with care)")
 	utils.Must(c.MarkFlagRequired("schema-directory"))
-
-	/**
-	 * Disable migration codes generations.
-	 * We will remove generator codes later in case we need to make massive code changes in migrations.
-	 * TODO(ROX-13549): Remove migration code generation
-	 * c.Flags().StringVar(&props.MigrateRoot, "migration-root", "", "Root for migrations")
-	 * c.Flags().StringVar(&props.MigrateFrom, "migrate-from", "", "where the data are migrated from, including \"rocksdb\", \"dackbox\" and \"boltdb\"")
-	 * c.Flags().IntVar(&props.MigrateSeq, "migration-seq", 0, "the unique sequence number to migrate to Postgres")
-	 * c.Flags().IntVar(&props.MigrationBatchSize, "migration-batch", 10000, "the batch size for data migration")
-	 */
 
 	c.Flags().StringVar(&props.Cycle, "cycle", "", "indicates that there is a cyclical foreign key reference, should be the path to the embedded foreign key")
 	c.Flags().BoolVar(&props.ConversionFuncs, "conversion-funcs", false, "indicates that we should generate conversion functions between protobuf types to/from Gorm model")
 	c.RunE = func(*cobra.Command, []string) error {
-		if (props.MigrateSeq == 0) != (props.MigrateFrom == "") {
-			log.Fatal("please use both \"--migrate-from\" and \"--migration-seq\" to create data migration")
-		}
-		if props.MigrateSeq != 0 && props.MigrateRoot == "" {
-			log.Fatalf("please specify --migration-root")
-		}
-		if props.MigrateSeq != 0 && !migrateFromRegex.MatchString(props.MigrateFrom) {
-			log.Fatalf("unknown format for --migrate-from: %s, expect in the format of %s", props.MigrateFrom, migrateFromRegex.String())
-		}
-
 		typ := stringutils.OrDefault(props.RegisteredType, props.Type)
 		fmt.Println(readable.Time(time.Now()), "Generating for", typ)
-		mt := proto.MessageType(typ)
+		mt := protoutils.MessageType(typ)
 		if mt == nil {
 			log.Fatalf("could not find message for type: %s", typ)
 		}
@@ -322,9 +234,10 @@ func main() {
 			"SearchScope":    searchScope,
 			"RegisterSchema": !props.ConversionFuncs,
 			"FeatureFlag":    props.FeatureFlag,
+			"CachedStore":    props.CachedStore,
 		}
 
-		if err := renderFile(templateMap, schemaTemplate, getSchemaFileName(props.SchemaDirectory, schema.Table)); err != nil {
+		if err := common.RenderFile(templateMap, schemaTemplate, getSchemaFileName(props.SchemaDirectory, schema.Table)); err != nil {
 			return err
 		}
 
@@ -335,56 +248,19 @@ func main() {
 		}
 		if !props.SchemaOnly {
 			if props.SingletonStore {
-				if err := renderFile(templateMap, singletonTemplate, "store.go"); err != nil {
+				if err := common.RenderFile(templateMap, singletonTemplate, "store.go"); err != nil {
 					return err
 				}
-				if err := renderFile(templateMap, singletonTestTemplate, "store_test.go"); err != nil {
+				if err := common.RenderFile(templateMap, singletonTestTemplate, "store_test.go"); err != nil {
 					return err
 				}
 			} else {
-				if err := renderFile(templateMap, storeTemplate, "store.go"); err != nil {
+				if err := common.RenderFile(templateMap, storeTemplate, "store.go"); err != nil {
 					return err
 				}
-				if err := renderFile(templateMap, storeTestTemplate, "store_test.go"); err != nil {
+				if err := common.RenderFile(templateMap, storeTestTemplate, "store_test.go"); err != nil {
 					return err
 				}
-
-				if props.SearchCategory != "" {
-					if err := renderFile(templateMap, indexTemplate, "index.go"); err != nil {
-						return err
-					}
-				}
-				if permissionCheckerEnabled {
-					if err := renderFile(templateMap, permissionCheckerTemplate, "permission_checker.go"); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-		if props.MigrateSeq != 0 {
-			postgresPluginTemplate := storeTemplate
-			if props.SingletonStore {
-				postgresPluginTemplate = singletonTemplate
-			}
-			migrationDir := fmt.Sprintf("n_%02d_to_n_%02d_postgres_%s", props.MigrateSeq, props.MigrateSeq+1, props.Table)
-			root := filepath.Join(props.MigrateRoot, migrationDir)
-			templateMap["Migration"] = MigrationOptions{
-				MigrateFromDB:   props.MigrateFrom,
-				MigrateSequence: props.MigrateSeq,
-				Dir:             migrationDir,
-				SingletonStore:  props.SingletonStore,
-				BatchSize:       props.MigrationBatchSize,
-			}
-
-			if err := renderFile(templateMap, migrationTemplate, filepath.Join(root, "migration.go")); err != nil {
-				return err
-			}
-			if err := renderFile(templateMap, migrationTestTemplate, filepath.Join(root, "migration_test.go")); err != nil {
-				return err
-			}
-			if err := renderFile(templateMap, postgresPluginTemplate, filepath.Join(root, "postgres/postgres_plugin.go")); err != nil {
-				return err
 			}
 		}
 
@@ -401,10 +277,10 @@ func generateConverstionFuncs(s *walker.Schema, dir string) error {
 		"Schema": s,
 	}
 
-	if err := renderFile(templateMap, migrationToolTemplate, getConversionToolFileName(dir, s.Table)); err != nil {
+	if err := common.RenderFile(templateMap, migrationToolTemplate, getConversionToolFileName(dir, s.Table)); err != nil {
 		return err
 	}
-	if err := renderFile(templateMap, migrationToolTestTemplate, getConversionTestFileName(dir, s.Table)); err != nil {
+	if err := common.RenderFile(templateMap, migrationToolTestTemplate, getConversionTestFileName(dir, s.Table)); err != nil {
 		return err
 	}
 	return nil

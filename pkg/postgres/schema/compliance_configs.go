@@ -8,6 +8,7 @@ import (
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/walker"
+	"github.com/stackrox/rox/pkg/sac/resources"
 )
 
 var (
@@ -24,17 +25,19 @@ var (
 			return schema
 		}
 		schema = walker.Walk(reflect.TypeOf((*storage.ComplianceConfig)(nil)), "compliance_configs")
+		schema.ScopingResource = resources.Compliance
 		RegisterTable(schema, CreateTableComplianceConfigsStmt)
 		return schema
 	}()
 )
 
 const (
+	// ComplianceConfigsTableName specifies the name of the table in postgres.
 	ComplianceConfigsTableName = "compliance_configs"
 )
 
 // ComplianceConfigs holds the Gorm model for Postgres table `compliance_configs`.
 type ComplianceConfigs struct {
-	StandardId string `gorm:"column:standardid;type:varchar;primaryKey"`
+	StandardID string `gorm:"column:standardid;type:varchar;primaryKey"`
 	Serialized []byte `gorm:"column:serialized;type:bytea"`
 }

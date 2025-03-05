@@ -1,22 +1,18 @@
 name: Cache UI Dependencies
 description: Cache UI Dependencies
 inputs:
-  lockFile: 
-    description: Where the monorepo lock is written
+  lockFile:
+    description: Where the package lock is written
     required: true
-    default: "ui/monorepo.lock"
+    default: "ui/apps/platform/package-lock.json"
 runs:
   using: composite
   steps:
     - name: Cache UI Dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
-          /github/home/.cache/yarn
+          /github/home/.npm
           /github/home/.cache/Cypress
           /usr/local/share/.cache
-        key: npm-v2-${{ hashFiles(inputs.lockFile) }}-${{ github.job }}
-        restore-keys: |
-          npm-v2-${{ hashFiles(inputs.lockFile) }}-${{ github.job }}
-          npm-v2-${{ hashFiles(inputs.lockFile) }}-
-          npm-v2-
+        key: npm-v2-${{ hashFiles(inputs.lockFile) }}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/migrations"
 	"github.com/stackrox/rox/pkg/postgres"
 	"github.com/stackrox/rox/pkg/postgres/pgconfig"
@@ -37,10 +36,6 @@ func TestRestore(t *testing.T) {
 }
 
 func (s *PostgresRestoreSuite) SetupTest() {
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		s.T().Skip("Skip postgres store tests")
-		s.T().SkipNow()
-	}
 
 	ctx := sac.WithAllAccess(context.Background())
 
@@ -94,28 +89,6 @@ func (s *PostgresRestoreSuite) TestUtilities() {
 	// Successfully create active DB from restore DB
 	err = CreateDB(s.sourceMap, s.config, restoreDB, activeDB)
 	s.Nil(err)
-	// Have to terminate connections from the source DB before we can create
-	// the copy.  Make sure connection was terminated.
-	err = restorePool.Ping(s.ctx)
-	s.NotNil(err)
-
-	// Rename database to a database that exists
-	err = RenameDB(s.pool, restoreDB, activeDB)
-	s.NotNil(err)
-
-	// Get a connection to the active DB
-	activePool, err := GetClonePool(s.config, activeDB)
-	s.Nil(err)
-	s.NotNil(activePool)
-
-	// Rename activeDB to a new one
-	err = RenameDB(s.pool, activeDB, tempDB)
-	s.Nil(err)
-	exists, err := CheckIfDBExists(s.config, tempDB)
-	s.Nil(err)
-	s.True(exists)
-	// Make sure connection to active database was terminated
-	s.NotNil(activePool.Ping(s.ctx))
 
 	// Reacquire a connection to the restore database
 	restorePool, err = GetClonePool(s.config, restoreDB)

@@ -4,7 +4,6 @@ import { useHistory, useLocation, useParams } from 'react-router-dom';
 import {
     Alert,
     AlertActionCloseButton,
-    AlertVariant,
     Bullseye,
     Button,
     PageSection,
@@ -40,15 +39,12 @@ import AccessControlBreadcrumbs from '../AccessControlBreadcrumbs';
 import AccessControlHeaderActionBar from '../AccessControlHeaderActionBar';
 import AccessControlHeading from '../AccessControlHeading';
 import usePermissions from '../../../hooks/usePermissions';
-import AccessControlNoPermission from '../AccessControlNoPermission';
-import useFeatureFlags from '../../../hooks/useFeatureFlags';
 import { isUserResource } from '../traits';
 
 const entityType = 'ROLE';
 
 function Roles(): ReactElement {
-    const { hasReadAccess, hasReadWriteAccess } = usePermissions();
-    const hasReadAccessForPage = hasReadAccess('Access');
+    const { hasReadWriteAccess } = usePermissions();
     const hasWriteAccessForPage = hasReadWriteAccess('Access');
     const history = useHistory();
     const { search } = useLocation();
@@ -70,12 +66,7 @@ function Roles(): ReactElement {
     const [accessScopes, setAccessScopes] = useState<AccessScope[]>([]);
     const [alertAccessScopes, setAlertAccessScopes] = useState<ReactElement | null>(null);
 
-    const { isFeatureFlagEnabled } = useFeatureFlags();
-
     function getDefaultAccessScopeID() {
-        if (isFeatureFlagEnabled('ROX_POSTGRES_DATASTORE')) {
-            return defaultAccessScopeIds.UnrestrictedPostgres;
-        }
         return defaultAccessScopeIds.Unrestricted;
     }
 
@@ -97,7 +88,7 @@ function Roles(): ReactElement {
             })
             .catch((error) => {
                 setAlertRoles(
-                    <Alert title="Fetch roles failed" variant={AlertVariant.danger} isInline>
+                    <Alert title="Fetch roles failed" component="p" variant="danger" isInline>
                         {error.message}
                     </Alert>
                 );
@@ -134,7 +125,8 @@ function Roles(): ReactElement {
                 setAlertGroups(
                     <Alert
                         title="Fetch auth providers or groups failed"
-                        variant={AlertVariant.warning}
+                        component="p"
+                        variant="warning"
                         isInline
                         actionClose={actionClose}
                     >
@@ -157,7 +149,8 @@ function Roles(): ReactElement {
                 setAlertPermissionSets(
                     <Alert
                         title="Fetch permission sets failed"
-                        variant={AlertVariant.warning}
+                        component="p"
+                        variant="warning"
                         isInline
                         actionClose={actionClose}
                     >
@@ -180,7 +173,8 @@ function Roles(): ReactElement {
                 setAlertAccessScopes(
                     <Alert
                         title="Fetch access scopes failed"
-                        variant={AlertVariant.warning}
+                        component="p"
+                        variant="warning"
                         isInline
                         actionClose={actionClose}
                     >
@@ -192,15 +186,6 @@ function Roles(): ReactElement {
                 setCounterFetching((counterPrev) => counterPrev - 1);
             });
     }, []);
-
-    // Return "no access" page immediately if user doesn't have enough permissions.
-    if (!hasReadAccessForPage) {
-        return (
-            <>
-                <AccessControlNoPermission subPage="roles" entityType={entityType} />
-            </>
-        );
-    }
 
     function handleCreate() {
         history.push(getEntityPath(entityType, undefined, { action: 'create' }));
@@ -285,7 +270,7 @@ function Roles(): ReactElement {
                 {alertGroups}
                 {counterFetching !== 0 ? (
                     <Bullseye>
-                        <Spinner isSVG />
+                        <Spinner />
                     </Bullseye>
                 ) : isList ? (
                     <RolesList

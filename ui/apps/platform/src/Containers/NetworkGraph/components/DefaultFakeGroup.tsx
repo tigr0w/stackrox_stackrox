@@ -1,11 +1,10 @@
 /* eslint-disable no-void */
 /* eslint-disable no-cond-assign */
-/* eslint-disable @typescript-eslint/restrict-plus-operands */
 /* eslint-disable no-return-assign */
 import * as React from 'react';
 import { observer } from 'mobx-react';
 import { css } from '@patternfly/react-styles';
-import styles from '@patternfly/react-styles/css/components/Topology/topology-components';
+import styles from '@patternfly/react-topology/dist/js/css/topology-components';
 import {
     Layer,
     LabelPosition,
@@ -47,7 +46,6 @@ const DefaultFakeGroup = ({
     labelIcon,
     labelIconPadding,
 }) => {
-    // eslint-disable-next-line @typescript-eslint/naming-convention, no-underscore-dangle
     let _a: number | undefined;
     const [hovered, hoverRef] = useHover();
     const [labelHover, labelHoverRef] = useHover();

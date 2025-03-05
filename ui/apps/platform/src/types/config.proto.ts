@@ -42,11 +42,23 @@ export type DecommissionedClusterRetentionConfig = {
     createdAt: string; // ISO 8601 date string
 };
 
+export type ReportRetentionConfig = {
+    historyRetentionDurationDays: number; // uint32
+    downloadableReportGlobalRetentionBytes: number; // uint32
+    downloadableReportRetentionDays: number; // uint32
+};
+
+export type AdministrationEventsConfig = {
+    retentionDurationDays: number; // uint32
+};
+
 export type PrivateConfig = {
     alertConfig: AlertRetentionConfig;
     imageRetentionDurationDays: number; // int32
     expiredVulnReqRetentionDurationDays: number; // int32
     decommissionedClusterRetention: DecommissionedClusterRetentionConfig;
+    reportRetentionConfig: ReportRetentionConfig;
+    administrationEventsConfig: AdministrationEventsConfig;
 };
 
 export type SystemConfig = {

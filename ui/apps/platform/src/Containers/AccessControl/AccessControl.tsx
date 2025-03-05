@@ -1,6 +1,5 @@
 import React, { ReactElement } from 'react';
 import { Redirect, Route, Switch } from 'react-router-dom';
-import { Alert, List, ListItem } from '@patternfly/react-core';
 
 import { accessControlBasePath, accessControlPath } from 'routePaths';
 
@@ -17,68 +16,12 @@ const paramId = ':entityId?';
 function AccessControl(): ReactElement {
     return (
         <>
-            <Alert
-                isInline
-                variant="warning"
-                title={
-                    <>
-                        <p>The following permission resources have been replaced:</p>
-                        <List>
-                            <ListItem>
-                                <b>Access</b> replaces{' '}
-                                <b>AuthProvider, Group, Licenses, Role, and User</b>
-                            </ListItem>
-                            <ListItem>
-                                <b>Administration</b> replaces{' '}
-                                <b>
-                                    AllComments, Config, DebugLogs, NetworkGraphConfig, ProbeUpload,
-                                    ScannerBundle, ScannerDefinitions, SensorUpgradeConfig, and
-                                    ServiceIdentity
-                                </b>
-                            </ListItem>
-                            <ListItem>
-                                <b>Compliance</b> replaces <b>ComplianceRuns</b>
-                            </ListItem>
-                            <ListItem>
-                                <b>DeploymentExtension</b> replaces{' '}
-                                <b>Indicator, NetworkBaseline, ProcessWhitelist, and Risk</b>
-                            </ListItem>
-                            <ListItem>
-                                <b>Integration</b> replaces{' '}
-                                <b>
-                                    APIToken, BackupPlugins, ImageIntegration, Notifier, and
-                                    SignatureIntegration
-                                </b>
-                            </ListItem>
-                            <ListItem>
-                                <b>Image</b> now also covers <b>ImageComponent</b>
-                            </ListItem>
-                            <ListItem>
-                                <b>Cluster</b> now also covers <b>ClusterCVE</b>
-                            </ListItem>
-                        </List>
-
-                        <p>
-                            The following permission resources will be replaced in the upcoming
-                            versions:
-                        </p>
-                        <List>
-                            <ListItem>
-                                <b>WorkflowAdministration</b> will replace{' '}
-                                <b>Policy, VulnerabilityReports</b>
-                            </ListItem>
-                        </List>
-                        <p>
-                            For additional information on deprecation and required actions, please
-                            consult the release notes.
-                        </p>
-                    </>
-                }
-            />
             <Switch>
-                <Route exact path={accessControlBasePath}>
-                    <Redirect to={getEntityPath('AUTH_PROVIDER')} />
-                </Route>
+                <Route
+                    exact
+                    path={accessControlBasePath}
+                    render={() => <Redirect to={getEntityPath('AUTH_PROVIDER')} />}
+                />
                 <Route path={accessControlPath}>
                     <Switch>
                         <Route path={getEntityPath('AUTH_PROVIDER', paramId)}>

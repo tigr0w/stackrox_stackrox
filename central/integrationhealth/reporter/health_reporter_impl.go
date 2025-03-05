@@ -2,17 +2,18 @@ package reporter
 
 import (
 	"context"
+	"time"
 
-	"github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/integrationhealth/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/integrationhealth"
 	"github.com/stackrox/rox/pkg/logging"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sync"
 )
 
@@ -35,7 +36,7 @@ type DatastoreBasedIntegrationHealthReporter struct {
 	healthRemoval chan string
 
 	stopSig              concurrency.Signal
-	latestDBTimestampMap map[string]*types.Timestamp
+	latestDBTimestampMap map[string]*time.Time
 	integrationDS        datastore.DataStore
 }
 
@@ -45,7 +46,7 @@ func New(datastore datastore.DataStore) *DatastoreBasedIntegrationHealthReporter
 		healthUpdates:        make(chan *storage.IntegrationHealth, 5),
 		healthRemoval:        make(chan string, 5),
 		stopSig:              concurrency.NewSignal(),
-		latestDBTimestampMap: make(map[string]*types.Timestamp),
+		latestDBTimestampMap: make(map[string]*time.Time),
 		integrationDS:        datastore,
 	}
 	go d.processIntegrationHealthUpdates()
@@ -65,7 +66,7 @@ func (d *DatastoreBasedIntegrationHealthReporter) Register(id, name string, typ 
 		return nil
 	}
 
-	now := types.TimestampNow()
+	now := protocompat.TimestampNow()
 	// Integration health does not exist yet, initialize it.
 	d.UpdateIntegrationHealthAsync(&storage.IntegrationHealth{
 		Id:            id,
@@ -121,13 +122,14 @@ func (d *DatastoreBasedIntegrationHealthReporter) processIntegrationHealthUpdate
 	for {
 		select {
 		case health := <-d.healthUpdates:
+			healthLastTime := protocompat.ConvertTimestampToTimeOrNil(health.LastTimestamp)
 			if health.Status == storage.IntegrationHealth_UNINITIALIZED {
-				d.latestDBTimestampMap[health.Id] = health.LastTimestamp
+				d.latestDBTimestampMap[health.Id] = healthLastTime
 				if err := d.integrationDS.UpsertIntegrationHealth(integrationWriteCtx, health); err != nil {
 					log.Errorf("Error updating health for integration %s (%s): %v", health.Name, health.Id, err)
 				}
-			} else if health.LastTimestamp.Compare(d.latestDBTimestampMap[health.Id]) > 0 {
-				d.latestDBTimestampMap[health.Id] = health.LastTimestamp
+			} else if protocompat.CompareTimestampToTime(health.LastTimestamp, d.latestDBTimestampMap[health.Id]) > 0 {
+				d.latestDBTimestampMap[health.Id] = healthLastTime
 				_, exists, err := d.integrationDS.GetIntegrationHealth(integrationWriteCtx, health.Id)
 				if err != nil {
 					log.Errorf("Error reading health for integration %s (%s): %v", health.Name, health.Id, err)

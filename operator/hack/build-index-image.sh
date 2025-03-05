@@ -5,7 +5,6 @@ set -eou pipefail
 
 # Global script variables
 OPM_VERSION="1.21.0"
-YQ_VERSION="4.24.2"
 
 function usage() {
   echo "
@@ -23,6 +22,7 @@ OPTION:
   --clean-output-dir   Delete '{base-dir}/build/index' directory.
   --use-http           Use plain HTTP for container image registries.
   --skip-build         Skip the actual \"docker build\" command.
+  --skip-tls-verify    Skip TLS certificate verification for container image registries while pulling bundles.
 " >&2
 }
 
@@ -42,6 +42,7 @@ RUN_BUILD=1
 # Helpful for local development and testing
 CLEAN_OUTPUT_DIR=""
 USE_HTTP=""
+SKIP_TLS_VERIFY=""
 
 function read_arguments() {
     while [[ -n "${1:-}" ]]; do
@@ -60,6 +61,8 @@ function read_arguments() {
                 CLEAN_OUTPUT_DIR="true";;
             "--use-http")
                 USE_HTTP="--use-http";;
+            "--skip-tls-verify")
+                SKIP_TLS_VERIFY="--skip-tls-verify";;
             "--skip-build")
                 RUN_BUILD=0;;
             *)
@@ -94,20 +97,20 @@ function fetch_opm() {
   "${SCRIPT_DIR}/get-github-release.sh" --to "${OPM}" --from "https://github.com/operator-framework/operator-registry/releases/download/v${OPM_VERSION}/${os_name}-${arch}-opm"
 }
 
-YQ="yq"
 function fetch_yq() {
   local -r os_name=$(uname | tr '[:upper:]' '[:lower:]') || true
   local -r arch=$(go env GOARCH) || true
+  local -r yq_version=$(cd "${SCRIPT_DIR}/../tools/" && go list -m github.com/mikefarah/yq/v4 | awk '{print substr($2,2)}')
 
-  YQ="${BASE_DIR}/bin/yq-${YQ_VERSION}"
-  "${SCRIPT_DIR}/get-github-release.sh" --to "${YQ}" --from "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_${os_name}_${arch}"
+  YQ="${BASE_DIR}/bin/yq-${yq_version}"
+  "${SCRIPT_DIR}/get-github-release.sh" --to "${YQ}" --from "https://github.com/mikefarah/yq/releases/download/v${yq_version}/yq_${os_name}_${arch}"
 }
 
 # Script body
 read_arguments "$@"
 validate_arguments
 fetch_opm
-fetch_yq
+if [[ -z ${YQ:-} ]]; then fetch_yq; fi
 
 if [[ "${CLEAN_OUTPUT_DIR}" = "true" ]]; then
   rm -rf "${BASE_DIR}/build/index"
@@ -128,7 +131,7 @@ mkdir -p "${BUILD_INDEX_DIR}"
 
 # With "--binary-image", we are setting the exact base image version. By default, "latest" would be used.
 "${OPM}" generate dockerfile --binary-image "quay.io/operator-framework/opm:v${OPM_VERSION}" "${BUILD_INDEX_DIR}"
-"${OPM}" render "${BASE_INDEX_TAG}" --output=yaml ${USE_HTTP} > "${BUILD_INDEX_DIR}/index.yaml"
+"${OPM}" render "${BASE_INDEX_TAG}" --output=yaml ${USE_HTTP} ${SKIP_TLS_VERIFY} > "${BUILD_INDEX_DIR}/index.yaml"
 
 BUNDLE_VERSION="${BUNDLE_TAG##*:v}"
 YQ_FILTER_CHANNEL_DOCUMENT='.schema=="olm.channel" and .name=="latest"'
@@ -142,7 +145,7 @@ EOF
 )
 
 "${YQ}" --inplace --prettyPrint "with(select(${YQ_FILTER_CHANNEL_DOCUMENT}); .entries += ${YQ_NEW_BUNDLE_ENTRY})" "${BUILD_INDEX_DIR}/index.yaml"
-"${OPM}" render "${BUNDLE_TAG}" --output=yaml ${USE_HTTP} >> "${BUILD_INDEX_DIR}/index.yaml"
+"${OPM}" render "${BUNDLE_TAG}" --output=yaml ${USE_HTTP} ${SKIP_TLS_VERIFY} >> "${BUILD_INDEX_DIR}/index.yaml"
 "${OPM}" validate "${BUILD_INDEX_DIR}"
 
 if (( RUN_BUILD )); then

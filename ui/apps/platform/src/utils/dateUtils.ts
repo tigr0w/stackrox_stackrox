@@ -1,7 +1,7 @@
-import { distanceInWordsStrict, format, addDays } from 'date-fns';
+import { distanceInWordsStrict, format } from 'date-fns';
 
 import dateTimeFormat, { dateFormat, timeFormat } from 'constants/dateTimeFormat';
-import { IntervalType } from 'types/report.proto';
+import { IntervalType } from 'services/ReportsService.types';
 
 type DateLike = string | number | Date;
 
@@ -30,6 +30,15 @@ export function getDate(timestamp: DateLike) {
  */
 export function getTime(timestamp: DateLike) {
     return format(timestamp, timeFormat);
+}
+
+/**
+ * Returns a formatted time with hours and minutes but without seconds.
+ * @param {DateLike} timestamp - The timestamp for the date
+ * @returns {string} - returns a formatted string for the time
+ */
+export function getTimeHoursMinutes(timestamp: DateLike) {
+    return format(timestamp, 'h:mm A');
 }
 
 export function getLatestDatedItemByKey<T>(key: string | null, list: T[] = []): T | null {
@@ -90,15 +99,16 @@ export const getDistanceStrict: typeof distanceInWordsStrict = (
  * Also the order of the arguments is reversed in date-fns@2
  * formatDistanceStrict(parseISO(dataDatetime), currentDatetime, { roundingMethod: 'floor', addSuffix: true });
  */
-export const getDistanceStrictAsPhrase = (dataDatetime: DateLike, currentDatetime: DateLike) =>
+export const getDistanceStrictAsPhrase = (
+    dataDatetime: DateLike,
+    currentDatetime: DateLike,
+    unit?: 's' | 'm' | 'h' | 'd' | 'M' | 'Y'
+) =>
     distanceInWordsStrict(currentDatetime, dataDatetime, {
         addSuffix: true,
         partialMethod: 'floor',
+        unit,
     });
-
-export const addDaysToDate = (date: DateLike, amount: number) => {
-    return format(addDays(date, amount + 1), 'YYYY-MM-DD[T]HH:mm:ss.SSSSSSSSS[Z]');
-};
 
 const weekDays = [
     { key: 1, dayName: 'Monday' },
@@ -127,6 +137,28 @@ export function getDayList(dayListType: IntervalType, days) {
     }, []);
 
     return dayNameArray;
+}
+
+/**
+ * Returns day of month with its ordinal suffix.
+ * @param {number} num - The number to get the ordinal suffix for. Confirmed to work with 1 through 31.
+ * @returns {string} - The number with its ordinal suffix (e.g., "1st", "2nd", "3rd", "4th", etc.)
+ */
+export function getDayOfMonthWithOrdinal(num: number): string {
+    if (num === 11 || num === 12 || num === 13) {
+        return `${num}th`;
+    }
+
+    switch (num % 10) {
+        case 1:
+            return `${num}st`;
+        case 2:
+            return `${num}nd`;
+        case 3:
+            return `${num}rd`;
+        default:
+            return `${num}th`;
+    }
 }
 
 export default {

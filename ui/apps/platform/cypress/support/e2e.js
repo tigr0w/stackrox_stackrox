@@ -29,6 +29,7 @@ Cypress.on('scrolled', ($el) => {
 Cypress.on(
     'uncaught:exception',
     (err) =>
+        !err.message.includes('ResizeObserver loop completed') &&
         !err.message.includes('ResizeObserver loop limit exceeded') &&
         // Addendum (2022-11-28): ignore error about multiple versions of Mobx
         // The patternfly topology extension uses a 5.x version of Mobx, and the redoc library needs a 6.x version
@@ -40,3 +41,15 @@ Cypress.on(
         !err.message.includes("Uncaught SyntaxError: Unexpected token '<'") &&
         !err.message.includes("Uncaught SyntaxError: Unexpected token '<'")
 );
+
+// Output timestamps for test suite start and end
+before(() => {
+    cy.task('beforeSuite', Cypress.spec);
+});
+
+// Output timestamp at the point of test failure
+Cypress.on('fail', (err) => {
+    // eslint-disable-next-line no-param-reassign
+    err.name = `${err.name} - ${new Date().toISOString()}`;
+    throw err;
+});

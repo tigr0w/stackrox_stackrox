@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocation, useRouteMatch } from 'react-router-dom';
 import pluralize from 'pluralize';
 
 import {
@@ -14,6 +15,7 @@ import { SERVICE_ACCOUNTS_QUERY } from 'queries/serviceAccount';
 import { sortValueByLength } from 'sorters/sorters';
 import queryService from 'utils/queryService';
 import URLService from 'utils/URLService';
+import { getConfigMgmtPathForEntitiesAndId } from '../entities';
 import List from './List';
 
 export const defaultServiceAccountSort = [
@@ -34,6 +36,14 @@ const buildTableColumns = (match, location, entityContext) => {
             Header: `Service Accounts`,
             headerClassName: `w-1/10 ${defaultHeaderClassName}`,
             className: `w-1/10 ${defaultColumnClassName}`,
+            Cell: ({ original, pdf }) => {
+                const url = getConfigMgmtPathForEntitiesAndId('SERVICE_ACCOUNT', original.id);
+                return (
+                    <TableCellLink pdf={pdf} url={url}>
+                        {original.name}
+                    </TableCellLink>
+                );
+            },
             accessor: 'name',
             id: serviceAccountSortFields.SERVCE_ACCOUNT,
             sortField: serviceAccountSortFields.SERVCE_ACCOUNT,
@@ -158,8 +168,6 @@ const buildTableColumns = (match, location, entityContext) => {
 const createTableRows = (data) => data.results;
 
 const ServiceAccounts = ({
-    match,
-    location,
     className,
     selectedRowId,
     onRowClick,
@@ -168,6 +176,8 @@ const ServiceAccounts = ({
     totalResults,
     entityContext,
 }) => {
+    const location = useLocation();
+    const match = useRouteMatch();
     const autoFocusSearchInput = !selectedRowId;
     const tableColumns = buildTableColumns(match, location, entityContext);
     const queryText = queryService.objectToWhereClause(query);

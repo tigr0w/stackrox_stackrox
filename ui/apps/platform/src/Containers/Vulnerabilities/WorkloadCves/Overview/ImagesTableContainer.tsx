@@ -1,84 +1,114 @@
 import React from 'react';
 import { useQuery } from '@apollo/client';
-import { Bullseye, Spinner, Divider } from '@patternfly/react-core';
+import { Divider, ToolbarItem } from '@patternfly/react-core';
 
 import useURLSort from 'hooks/useURLSort';
 import useURLPagination from 'hooks/useURLPagination';
-import useURLSearch from 'hooks/useURLSearch';
-import { getHasSearchApplied } from 'utils/searchUtils';
-import ImagesTable, { imageListQuery } from '../Tables/ImagesTable';
-import TableErrorComponent from '../components/TableErrorComponent';
-import { EntityCounts } from '../components/EntityTypeToggleGroup';
-import { getCveStatusScopedQueryString, parseQuerySearchFilter } from '../searchUtils';
-import { defaultImageSortFields, imagesDefaultSort } from '../sortUtils';
-import { DefaultFilters, VulnerabilitySeverityLabel, CveStatusTab } from '../types';
-import TableEntityToolbar from '../components/TableEntityToolbar';
+
+import { getTableUIState } from 'utils/getTableUIState';
+import { getPaginationParams } from 'utils/searchUtils';
+import { SearchFilter } from 'types/search';
+import { useManagedColumns } from 'hooks/useManagedColumns';
+import ColumnManagementButton from 'Components/ColumnManagementButton';
+import ImageOverviewTable, {
+    Image,
+    ImageOverviewTableProps,
+    defaultColumns,
+    imageListQuery,
+    tableId,
+} from '../Tables/ImageOverviewTable';
+import { VulnerabilitySeverityLabel } from '../../types';
+import TableEntityToolbar, { TableEntityToolbarProps } from '../../components/TableEntityToolbar';
+
+export { imageListQuery } from '../Tables/ImageOverviewTable';
 
 type ImagesTableContainerProps = {
-    defaultFilters: DefaultFilters;
-    countsData: EntityCounts;
-    cveStatusTab?: CveStatusTab; // TODO Make this required once Observed/Deferred/FP states are re-implemented
+    searchFilter: SearchFilter;
+    onFilterChange: (searchFilter: SearchFilter) => void;
+    filterToolbar: TableEntityToolbarProps['filterToolbar'];
+    entityToggleGroup: TableEntityToolbarProps['entityToggleGroup'];
+    rowCount: number;
     pagination: ReturnType<typeof useURLPagination>;
+    sort: ReturnType<typeof useURLSort>;
+    workloadCvesScopedQueryString: string;
+    isFiltered: boolean;
+    hasWriteAccessForWatchedImage: boolean;
+    onWatchImage: ImageOverviewTableProps['onWatchImage'];
+    onUnwatchImage: ImageOverviewTableProps['onUnwatchImage'];
+    showCveDetailFields: boolean;
 };
 
 function ImagesTableContainer({
-    defaultFilters,
-    countsData,
-    cveStatusTab,
+    searchFilter,
+    onFilterChange,
+    filterToolbar,
+    entityToggleGroup,
+    rowCount,
     pagination,
+    sort,
+    workloadCvesScopedQueryString,
+    isFiltered,
+    hasWriteAccessForWatchedImage,
+    onWatchImage,
+    onUnwatchImage,
+    showCveDetailFields,
 }: ImagesTableContainerProps) {
-    const { searchFilter } = useURLSearch();
-    const querySearchFilter = parseQuerySearchFilter(searchFilter);
-    const isFiltered = getHasSearchApplied(querySearchFilter);
-    const { page, perPage, setPage } = pagination;
-    const sort = useURLSort({
-        sortFields: defaultImageSortFields,
-        defaultSortOption: imagesDefaultSort,
-        onSort: () => setPage(1),
-    });
-    const { sortOption, getSortParams, setSortOption } = sort;
+    const { page, perPage } = pagination;
+    const { sortOption, getSortParams } = sort;
 
-    const { error, loading, data, previousData } = useQuery(imageListQuery, {
+    const { error, loading, data } = useQuery<{
+        images: Image[];
+    }>(imageListQuery, {
         variables: {
-            query: getCveStatusScopedQueryString(querySearchFilter, cveStatusTab),
-            pagination: {
-                offset: (page - 1) * perPage,
-                limit: perPage,
-                sortOption,
-            },
+            query: workloadCvesScopedQueryString,
+            pagination: getPaginationParams({ page, perPage, sortOption }),
         },
     });
 
-    const tableData = data ?? previousData;
+    const tableState = getTableUIState({
+        isLoading: loading,
+        error,
+        data: data?.images,
+        searchFilter,
+    });
+
+    const managedColumns = useManagedColumns(tableId, defaultColumns);
+
     return (
         <>
             <TableEntityToolbar
-                defaultFilters={defaultFilters}
-                countsData={countsData}
-                setSortOption={setSortOption}
+                filterToolbar={filterToolbar}
+                entityToggleGroup={entityToggleGroup}
                 pagination={pagination}
-                tableRowCount={countsData.imageCount}
+                tableRowCount={rowCount}
                 isFiltered={isFiltered}
-            />
+            >
+                <ToolbarItem align={{ default: 'alignRight' }}>
+                    <ColumnManagementButton managedColumnState={managedColumns} />
+                </ToolbarItem>
+            </TableEntityToolbar>
             <Divider component="div" />
-            {loading && !tableData && (
-                <Bullseye>
-                    <Spinner isSVG />
-                </Bullseye>
-            )}
-            {error && (
-                <TableErrorComponent error={error} message="Adjust your filters and try again" />
-            )}
-            {!error && tableData && (
-                <div className="workload-cves-table-container">
-                    <ImagesTable
-                        images={tableData.images}
-                        getSortParams={getSortParams}
-                        isFiltered={isFiltered}
-                        filteredSeverities={searchFilter.Severity as VulnerabilitySeverityLabel[]}
-                    />
-                </div>
-            )}
+            <div
+                className="workload-cves-table-container"
+                aria-live="polite"
+                aria-busy={loading ? 'true' : 'false'}
+            >
+                <ImageOverviewTable
+                    tableState={tableState}
+                    getSortParams={getSortParams}
+                    isFiltered={isFiltered}
+                    filteredSeverities={searchFilter.SEVERITY as VulnerabilitySeverityLabel[]}
+                    hasWriteAccessForWatchedImage={hasWriteAccessForWatchedImage}
+                    onWatchImage={onWatchImage}
+                    onUnwatchImage={onUnwatchImage}
+                    showCveDetailFields={showCveDetailFields}
+                    onClearFilters={() => {
+                        onFilterChange({});
+                        pagination.setPage(1);
+                    }}
+                    columnVisibilityState={managedColumns.columns}
+                />
+            </div>
         </>
     );
 }

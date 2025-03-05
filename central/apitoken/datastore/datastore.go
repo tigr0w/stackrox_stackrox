@@ -2,12 +2,13 @@ package datastore
 
 import (
 	"context"
+	"testing"
 
 	"github.com/stackrox/rox/central/apitoken/datastore/internal/store"
+	pgStore "github.com/stackrox/rox/central/apitoken/datastore/internal/store/postgres"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres"
-	"github.com/stackrox/rox/pkg/rocksdb"
 	"github.com/stackrox/rox/pkg/search"
 )
 
@@ -16,6 +17,7 @@ type DataStore interface {
 	GetTokenOrNil(ctx context.Context, id string) (token *storage.TokenMetadata, err error)
 	GetTokens(ctx context.Context, req *v1.GetAPITokensRequest) ([]*storage.TokenMetadata, error)
 
+	Count(ctx context.Context, q *v1.Query) (int, error)
 	Search(ctx context.Context, q *v1.Query) ([]search.Result, error)
 	SearchRawTokens(ctx context.Context, q *v1.Query) ([]*storage.TokenMetadata, error)
 
@@ -36,7 +38,7 @@ func NewPostgres(pool postgres.DB) DataStore {
 	return newPostgres(pool)
 }
 
-// NewRocks returns a ready-to-use DataStore instance plugged to rocksdb.
-func NewRocks(rocksDBInstance *rocksdb.RocksDB) DataStore {
-	return newRocks(rocksDBInstance)
+// NewTestPostgres provides a datastore connected to postgres for testing purposes.
+func NewTestPostgres(_ testing.TB, pool postgres.DB) DataStore {
+	return New(pgStore.New(pool))
 }

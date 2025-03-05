@@ -12,13 +12,14 @@ import (
 	"github.com/stackrox/rox/pkg/declarativeconfig/transform"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/roxctl/common/environment"
+	"github.com/stackrox/rox/roxctl/common/flags"
 	"github.com/stackrox/rox/roxctl/declarativeconfig/k8sobject"
 )
 
 const k8sObjectFlagTemplate = `%s from which to read the declarative configuration from.
 In case this is not set, the declarative configuration will be read from the YAML file provided via the --file flag.`
 
-// Command provides the lint command for declartive configuration.
+// Command provides the lint command for declarative configuration.
 func Command(cliEnvironment environment.Environment) *cobra.Command {
 	lintCmd := &lintCmd{env: cliEnvironment}
 
@@ -34,16 +35,18 @@ func Command(cliEnvironment environment.Environment) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&lintCmd.file, "file", "f", "", "file containing the declarative configuration in YAML format")
+	cmd.Flags().StringVarP(&lintCmd.file, "file", "f", "", "File containing the declarative configuration in YAML format")
 
-	cmd.Flags().String(k8sobject.ConfigMapFlag, "", fmt.Sprintf(k8sObjectFlagTemplate, "config map"))
-	cmd.Flags().String(k8sobject.SecretFlag, "", fmt.Sprintf(k8sObjectFlagTemplate, "secret"))
-	cmd.Flags().String(k8sobject.NamespaceFlag, "", `namespace of the config map from which to read the declarative configuration from.
+	cmd.Flags().String(k8sobject.ConfigMapFlag, "", fmt.Sprintf(k8sObjectFlagTemplate, "ConfigMap"))
+	cmd.Flags().String(k8sobject.SecretFlag, "", fmt.Sprintf(k8sObjectFlagTemplate, "Secret"))
+	cmd.Flags().String(k8sobject.NamespaceFlag, "", `Namespace of the ConfigMap from which to read the declarative configuration from.
 In case this is not set, the namespace set within the current kube config context will be used`)
 
 	cmd.MarkFlagsMutuallyExclusive("file", k8sobject.ConfigMapFlag)
 	cmd.MarkFlagsMutuallyExclusive("file", k8sobject.SecretFlag)
 	cmd.MarkFlagsMutuallyExclusive(k8sobject.ConfigMapFlag, k8sobject.SecretFlag)
+
+	flags.HideInheritedFlags(cmd)
 
 	return cmd
 }

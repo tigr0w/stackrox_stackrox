@@ -2,13 +2,13 @@ package resolvers
 
 import (
 	"context"
+	"time"
 
-	protoTypes "github.com/gogo/protobuf/types"
 	"github.com/graph-gophers/graphql-go"
-	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/node/mappings"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	"github.com/stackrox/rox/pkg/search"
 	utils "github.com/stackrox/rox/pkg/utils"
@@ -33,7 +33,6 @@ func init() {
 			"riskScore: Float!",
 		}),
 		schema.AddExtraResolver("EmbeddedNodeScanComponent", `unusedVarSink(query: String): Int`),
-		schema.AddExtraResolver("EmbeddedNodeScanComponent", "plottedVulns(query: String): PlottedVulnerabilities!"),
 	)
 }
 
@@ -67,13 +66,8 @@ func (resolver *nodeScanResolver) ComponentCount(ctx context.Context, args RawQu
 type EmbeddedNodeScanComponentResolver struct {
 	os          string
 	root        *Resolver
-	lastScanned *protoTypes.Timestamp
+	lastScanned *time.Time
 	data        *storage.EmbeddedNodeScanComponent
-}
-
-// PlottedVulns returns the data required by top risky component scatter-plot on vuln mgmt dashboard
-func (encr *EmbeddedNodeScanComponentResolver) PlottedVulns(_ context.Context, _ RawQuery) (*PlottedVulnerabilitiesResolver, error) {
-	return nil, errors.New("not implemented")
 }
 
 // UnusedVarSink represents a query sink
@@ -108,11 +102,14 @@ func (encr *EmbeddedNodeScanComponentResolver) RiskScore(_ context.Context) floa
 
 // LastScanned is the last time the component was scanned in an node.
 func (encr *EmbeddedNodeScanComponentResolver) LastScanned(_ context.Context) (*graphql.Time, error) {
-	return timestamp(encr.lastScanned)
+	if encr.lastScanned == nil {
+		return nil, nil
+	}
+	return &graphql.Time{Time: *encr.lastScanned}, nil
 }
 
 // TopVuln returns the first vulnerability with the top CVSS score.
-func (encr *EmbeddedNodeScanComponentResolver) TopVuln(_ context.Context) (VulnerabilityResolver, error) {
+func (encr *EmbeddedNodeScanComponentResolver) TopVuln(_ context.Context) (*EmbeddedVulnerabilityResolver, error) {
 	var maxCvss *storage.EmbeddedVulnerability
 	for _, vuln := range encr.data.GetVulns() {
 		if maxCvss == nil || vuln.GetCvss() > maxCvss.GetCvss() {
@@ -126,7 +123,7 @@ func (encr *EmbeddedNodeScanComponentResolver) TopVuln(_ context.Context) (Vulne
 }
 
 // Vulns resolves the vulnerabilities contained in the node component.
-func (encr *EmbeddedNodeScanComponentResolver) Vulns(_ context.Context, args PaginatedQuery) ([]VulnerabilityResolver, error) {
+func (encr *EmbeddedNodeScanComponentResolver) Vulns(_ context.Context, args PaginatedQuery) ([]*EmbeddedVulnerabilityResolver, error) {
 	query, err := args.AsV1QueryOrEmpty()
 	if err != nil {
 		return nil, err
@@ -151,16 +148,11 @@ func (encr *EmbeddedNodeScanComponentResolver) Vulns(_ context.Context, args Pag
 		})
 	}
 
-	resolvers, err := paginate(query.GetPagination(), vulns, nil)
+	vulns, err = paginate(query.GetPagination(), vulns, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	ret := make([]VulnerabilityResolver, 0, len(resolvers))
-	for _, resolver := range resolvers {
-		ret = append(ret, resolver)
-	}
-	return ret, err
+	return vulns, nil
 }
 
 // VulnCount resolves the number of vulnerabilities contained in the node component.
@@ -199,9 +191,10 @@ func mapNodesToComponentResolvers(root *Resolver, nodes []*storage.Node, query *
 					data: component,
 				}
 			}
-			latestTime := idToComponent[thisComponentID].lastScanned
-			if latestTime == nil || node.GetScan().GetScanTime().Compare(latestTime) > 0 {
-				idToComponent[thisComponentID].lastScanned = node.GetScan().GetScanTime()
+			latestTime := protocompat.ConvertTimeToTimestampOrNil(idToComponent[thisComponentID].lastScanned)
+			if latestTime == nil || protocompat.CompareTimestamps(node.GetScan().GetScanTime(), latestTime) > 0 {
+				nodeScanTime := protocompat.ConvertTimestampToTimeOrNil(node.GetScan().GetScanTime())
+				idToComponent[thisComponentID].lastScanned = nodeScanTime
 			}
 		}
 	}

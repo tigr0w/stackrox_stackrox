@@ -28,8 +28,9 @@ test_ui_e2e() {
     remove_existing_stackrox_resources
     setup_default_TLS_certs
 
-    deploy_stackrox
+    # deploy the optional components before stackrox
     deploy_optional_e2e_components
+    deploy_stackrox
 
     run_ui_e2e_tests
 }
@@ -57,7 +58,7 @@ run_ui_e2e_tests() {
 
     make -C ui test-e2e || touch FAIL
 
-    store_test_results "ui/test-results/reports" "reports"
+    store_test_results "ui/test-results/reports/cypress/integration/." "cy-reps"
 
     if is_OPENSHIFT_CI; then
         cp -a ui/test-results/artifacts/* "${ARTIFACT_DIR}/" || true

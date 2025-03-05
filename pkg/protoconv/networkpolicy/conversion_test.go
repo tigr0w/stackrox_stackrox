@@ -248,7 +248,7 @@ func TestToRoxNetworkPolicyRoundTrip(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			protoNetworkPolicy := KubernetesNetworkPolicyWrap{NetworkPolicy: np}.ToRoxNetworkPolicy()
 			k8sPolicy := RoxNetworkPolicyWrap{NetworkPolicy: protoNetworkPolicy}.ToKubernetesNetworkPolicy()
-			assert.Equal(t, np, k8sPolicy)
+			assert.Equal(t, np.String(), k8sPolicy.String())
 		})
 	}
 }

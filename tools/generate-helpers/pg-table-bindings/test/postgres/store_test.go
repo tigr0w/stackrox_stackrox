@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *TestSingleKeyStructsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE test_single_key_structs CASCADE")
 	s.T().Log("test_single_key_structs", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *TestSingleKeyStructsStoreSuite) TestStore() {
 	foundTestSingleKeyStruct, exists, err = store.Get(ctx, testSingleKeyStruct.GetKey())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(testSingleKeyStruct, foundTestSingleKeyStruct)
+	protoassert.Equal(s.T(), testSingleKeyStruct, foundTestSingleKeyStruct)
 
-	testSingleKeyStructCount, err := store.Count(ctx)
+	testSingleKeyStructCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, testSingleKeyStructCount)
-	testSingleKeyStructCount, err = store.Count(withNoAccessCtx)
+	testSingleKeyStructCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(testSingleKeyStructCount)
 
@@ -75,11 +78,6 @@ func (s *TestSingleKeyStructsStoreSuite) TestStore() {
 	s.True(testSingleKeyStructExists)
 	s.NoError(store.Upsert(ctx, testSingleKeyStruct))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, testSingleKeyStruct), sac.ErrResourceAccessDenied)
-
-	foundTestSingleKeyStruct, exists, err = store.Get(ctx, testSingleKeyStruct.GetKey())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(testSingleKeyStruct, foundTestSingleKeyStruct)
 
 	s.NoError(store.Delete(ctx, testSingleKeyStruct.GetKey()))
 	foundTestSingleKeyStruct, exists, err = store.Get(ctx, testSingleKeyStruct.GetKey())
@@ -100,15 +98,15 @@ func (s *TestSingleKeyStructsStoreSuite) TestStore() {
 	s.NoError(store.UpsertMany(ctx, testSingleKeyStructs))
 	allTestSingleKeyStruct, err := store.GetAll(ctx)
 	s.NoError(err)
-	s.ElementsMatch(testSingleKeyStructs, allTestSingleKeyStruct)
+	protoassert.ElementsMatch(s.T(), testSingleKeyStructs, allTestSingleKeyStruct)
 
-	testSingleKeyStructCount, err = store.Count(ctx)
+	testSingleKeyStructCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, testSingleKeyStructCount)
 
 	s.NoError(store.DeleteMany(ctx, testSingleKeyStructIDs))
 
-	testSingleKeyStructCount, err = store.Count(ctx)
+	testSingleKeyStructCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, testSingleKeyStructCount)
 }

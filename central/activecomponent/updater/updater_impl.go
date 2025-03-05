@@ -10,11 +10,11 @@ import (
 	deploymentStore "github.com/stackrox/rox/central/deployment/datastore"
 	imageStore "github.com/stackrox/rox/central/image/datastore"
 	processIndicatorStore "github.com/stackrox/rox/central/processindicator/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/simplecache"
@@ -53,7 +53,7 @@ func clearExecutables(image *storage.Image) {
 // PopulateExecutableCache extracts executables from image scan and stores them in the executable cache.
 // Image executables are cleared on successful return.
 func (u *updaterImpl) PopulateExecutableCache(_ context.Context, image *storage.Image) error {
-	if !env.ActiveVulnMgmt.BooleanSetting() {
+	if !features.ActiveVulnMgmt.Enabled() {
 		return nil
 	}
 	imageID := image.GetId()
@@ -101,7 +101,7 @@ func (u *updaterImpl) getExecToComponentsMap(imageScan *storage.ImageScan) map[s
 
 // Update detects active components with most recent process run.
 func (u *updaterImpl) Update() {
-	if !env.ActiveVulnMgmt.BooleanSetting() {
+	if !features.ActiveVulnMgmt.Enabled() {
 		return
 	}
 	ctx := sac.WithAllAccess(context.Background())

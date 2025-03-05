@@ -3,7 +3,6 @@ import {
     Breadcrumb,
     BreadcrumbItem,
     Button,
-    ButtonVariant,
     Divider,
     Flex,
     FlexItem,
@@ -19,7 +18,9 @@ import BreadcrumbItemLink from 'Components/BreadcrumbItemLink';
 import { Traits } from 'types/traits.proto';
 import { TraitsOriginLabel } from 'Containers/AccessControl/TraitsOriginLabel';
 import { isUserResource } from 'Containers/AccessControl/traits';
-import { getEditDisabledMessage, getIntegrationLabel } from './utils/integrationUtils';
+import TechPreviewLabel from 'Components/PatternFly/TechPreviewLabel';
+import { getIntegrationLabel } from './utils/integrationsList';
+import { getEditDisabledMessage, getIsMachineAccessConfig } from './utils/integrationUtils';
 import usePageState from './hooks/usePageState';
 import useIntegrationPermissions from './hooks/useIntegrationPermissions';
 
@@ -37,6 +38,8 @@ function IntegrationPage({ title, name, traits, children }: IntegrationPageProps
         params: { source, type, id },
     } = usePageState();
     const typeLabel = getIntegrationLabel(source, type);
+    // There is currently nothing relevant in Tech Preview.
+    const isTechPreview = false;
 
     const integrationsListPath = `${integrationsPath}/${source}/${type}`;
     const integrationEditPath = `${integrationsPath}/${source}/${type}/edit/${id as string}`;
@@ -50,7 +53,7 @@ function IntegrationPage({ title, name, traits, children }: IntegrationPageProps
     return (
         <>
             <PageTitle title={title} />
-            <PageSection variant="light" className="pf-u-py-md">
+            <PageSection variant="light" className="pf-v5-u-py-md">
                 <Breadcrumb>
                     <BreadcrumbItemLink to={integrationsPath}>Integrations</BreadcrumbItemLink>
                     <BreadcrumbItemLink to={integrationsListPath}>{typeLabel}</BreadcrumbItemLink>
@@ -59,17 +62,24 @@ function IntegrationPage({ title, name, traits, children }: IntegrationPageProps
             </PageSection>
             <Divider component="div" />
             <PageSection variant="light">
-                <Flex>
-                    <FlexItem>
-                        <Title headingLevel="h1">{name}</Title>
-                    </FlexItem>
+                <Flex alignItems={{ default: 'alignItemsCenter' }}>
+                    {(name || getIsMachineAccessConfig(source, type)) && (
+                        <FlexItem>
+                            <Title headingLevel="h1">{name || 'Manage configuration'}</Title>
+                        </FlexItem>
+                    )}
+                    {isTechPreview && (
+                        <FlexItem>
+                            <TechPreviewLabel />
+                        </FlexItem>
+                    )}
                     {hasTraitsLabel && <TraitsOriginLabel traits={traits} />}
                     {hasEditButton && (
                         <FlexItem align={{ default: 'alignRight' }}>
                             {editDisabledMessage ? (
                                 <Tooltip content={editDisabledMessage}>
                                     <Button
-                                        variant={ButtonVariant.secondary}
+                                        variant="secondary"
                                         component={LinkShim}
                                         href={integrationEditPath}
                                         isAriaDisabled={!!editDisabledMessage}
@@ -79,7 +89,7 @@ function IntegrationPage({ title, name, traits, children }: IntegrationPageProps
                                 </Tooltip>
                             ) : (
                                 <Button
-                                    variant={ButtonVariant.secondary}
+                                    variant="secondary"
                                     component={LinkShim}
                                     href={integrationEditPath}
                                 >

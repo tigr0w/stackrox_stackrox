@@ -76,13 +76,14 @@ function CollectionAttacher({
                     variant="danger"
                     isInline
                     title="There was an error loading more collections"
+                    component="p"
                 >
                     {getAxiosErrorMessage(fetchMoreError)}
                 </Alert>
             )}
             {hasMore && (
                 <Button
-                    className="pf-u-align-self-flex-start"
+                    className="pf-v5-u-align-self-flex-start"
                     variant="secondary"
                     onClick={() => fetchMore(searchValue)}
                     isLoading={isFetchingMore}

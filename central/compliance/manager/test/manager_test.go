@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	clusterDatastoreMocks "github.com/stackrox/rox/central/cluster/datastore/mocks"
 	"github.com/stackrox/rox/central/compliance"
 	complianceDataMocks "github.com/stackrox/rox/central/compliance/data/mocks"
@@ -16,11 +15,12 @@ import (
 	deploymentDatastoreMocks "github.com/stackrox/rox/central/deployment/datastore/mocks"
 	nodeDatastoreMocks "github.com/stackrox/rox/central/node/datastore/mocks"
 	podDatastoreMocks "github.com/stackrox/rox/central/pod/datastore/mocks"
-	"github.com/stackrox/rox/central/role/resources"
 	scrapeMocks "github.com/stackrox/rox/central/scrape/factory/mocks"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
 )
 
 type managerTestSuite struct {
@@ -78,7 +78,7 @@ func (s *managerTestSuite) TestExpandSelection_AllOne_GetClustersError() {
 
 func (s *managerTestSuite) TestExpandSelection_OneAll_OK() {
 	var err error
-	s.standardRegistry, err = standards.NewRegistry(nil, nil,
+	s.standardRegistry, err = standards.NewRegistry(nil,
 		metadata.Standard{ID: "standard1"},
 		metadata.Standard{ID: "standard2"},
 	)
@@ -98,7 +98,7 @@ func (s *managerTestSuite) TestExpandSelection_AllAll_OK() {
 		{Id: "cluster2"},
 	}, nil)
 	var err error
-	s.standardRegistry, err = standards.NewRegistry(nil, nil,
+	s.standardRegistry, err = standards.NewRegistry(nil,
 		metadata.Standard{ID: "standard1"},
 		metadata.Standard{ID: "standard2"},
 	)
@@ -133,7 +133,7 @@ func (s *managerTestSuite) SetupTest() {
 			sac.ResourceScopeKeys(resources.Compliance)))
 	s.mockCtrl = gomock.NewController(s.T())
 	var err error
-	s.standardRegistry, err = standards.NewRegistry(nil, nil)
+	s.standardRegistry, err = standards.NewRegistry(nil)
 	s.Require().NoError(err)
 	s.mockClusterStore = clusterDatastoreMocks.NewMockDataStore(s.mockCtrl)
 	s.mockNodeStore = nodeDatastoreMocks.NewMockDataStore(s.mockCtrl)

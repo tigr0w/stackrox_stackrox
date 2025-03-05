@@ -3,19 +3,19 @@ package datastore
 import (
 	"context"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 	groupFilter "github.com/stackrox/rox/central/group/datastore/filter"
 	"github.com/stackrox/rox/central/group/datastore/internal/store"
 	"github.com/stackrox/rox/central/role/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/auth/authproviders"
 	"github.com/stackrox/rox/pkg/declarativeconfig"
 	"github.com/stackrox/rox/pkg/errox"
 	"github.com/stackrox/rox/pkg/postgres/pgutils"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
 )
@@ -115,7 +115,7 @@ func (ds *dataStoreImpl) Walk(ctx context.Context, authProviderID string, attrib
 			return nil
 		})
 	}
-	if err := pgutils.RetryIfPostgres(walkFn); err != nil {
+	if err := pgutils.RetryIfPostgres(ctx, walkFn); err != nil {
 		return nil, err
 	}
 	return groups, nil
@@ -248,7 +248,7 @@ func (ds *dataStoreImpl) RemoveAllWithEmptyProperties(ctx context.Context) error
 		id := group.GetProps().GetId()
 		if id == "" {
 			removeGroupErrs = multierror.Append(removeGroupErrs, errox.InvalidArgs.Newf("group %s has no ID"+
-				" set and cannot be deleted", proto.MarshalTextString(group)))
+				" set and cannot be deleted", protocompat.MarshalTextString(group)))
 			continue
 		}
 		if err := ds.storage.Delete(ctx, id); err != nil {

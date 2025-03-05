@@ -1,5 +1,4 @@
 import React, { useContext } from 'react';
-import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
 import { gql } from '@apollo/client';
 
@@ -10,33 +9,26 @@ import CollapsibleSection from 'Components/CollapsibleSection';
 import PolicySeverityIconText from 'Components/PatternFly/IconText/PolicySeverityIconText';
 import Widget from 'Components/Widget';
 import Metadata from 'Components/Metadata';
-import Button from 'Components/Button';
 import RelatedEntityListCount from 'Components/RelatedEntityListCount';
 import entityTypes from 'constants/entityTypes';
 import { entityComponentPropTypes, entityComponentDefaultProps } from 'constants/entityPageProps';
 import useCases from 'constants/useCaseTypes';
 import searchContext from 'Containers/searchContext';
 import { formatLifecycleStages } from 'Containers/Policies/policies.utils';
+import useIsRouteEnabled from 'hooks/useIsRouteEnabled';
 import getSubListFromEntity from 'utils/getSubListFromEntity';
 import isGQLLoading from 'utils/gqlLoading';
 import queryService from 'utils/queryService';
+import { policiesBasePath } from 'routePaths';
+
 import { getConfigMgmtCountQuery } from '../../ConfigMgmt.utils';
 import EntityList from '../../List/EntityList';
 import PolicyFindings from './PolicyFindings';
 
-const PolicyEditButton = ({ id }) => {
-    return (
-        <Link className="no-underline text-base-600 mx-4" to={`/main/policies/${id}`}>
-            <Button className="btn btn-base" text="Edit Policy" />
-        </Link>
-    );
-};
-
-PolicyEditButton.propTypes = {
-    id: PropTypes.string.isRequired,
-};
-
 const Policy = ({ id, entityListType, entityId1, query, entityContext, pagination }) => {
+    const isRouteEnabled = useIsRouteEnabled();
+    const isRouteEnabledForPolicy = isRouteEnabled('policy-management');
+
     const searchParam = useContext(searchContext);
     const variables = {
         id,
@@ -178,11 +170,20 @@ const Policy = ({ id, entityListType, entityId1, query, entityContext, paginatio
                     return [...acc, datum];
                 }, []);
 
+                const headerComponents = isRouteEnabledForPolicy ? (
+                    <Link
+                        className="no-underline text-base-600 mx-4 btn btn-base"
+                        to={`${policiesBasePath}/${id}`}
+                    >
+                        View policy
+                    </Link>
+                ) : null;
+
                 return (
                     <div className="w-full" id="capture-dashboard-stretch">
                         <CollapsibleSection
                             title="Policy Summary"
-                            headerComponents={<PolicyEditButton id={id} />}
+                            headerComponents={headerComponents}
                         >
                             <div className="grid grid-gap-6 grid-columns-4 mx-4 grid-dense mb-4 pdf-page">
                                 <Metadata

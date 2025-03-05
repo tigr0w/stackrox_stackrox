@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *NotifiersStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE notifiers CASCADE")
 	s.T().Log("notifiers", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *NotifiersStoreSuite) TestStore() {
 	foundNotifier, exists, err = store.Get(ctx, notifier.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(notifier, foundNotifier)
+	protoassert.Equal(s.T(), notifier, foundNotifier)
 
-	notifierCount, err := store.Count(ctx)
+	notifierCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, notifierCount)
-	notifierCount, err = store.Count(withNoAccessCtx)
+	notifierCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(notifierCount)
 
@@ -75,11 +78,6 @@ func (s *NotifiersStoreSuite) TestStore() {
 	s.True(notifierExists)
 	s.NoError(store.Upsert(ctx, notifier))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, notifier), sac.ErrResourceAccessDenied)
-
-	foundNotifier, exists, err = store.Get(ctx, notifier.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(notifier, foundNotifier)
 
 	s.NoError(store.Delete(ctx, notifier.GetId()))
 	foundNotifier, exists, err = store.Get(ctx, notifier.GetId())
@@ -100,15 +98,15 @@ func (s *NotifiersStoreSuite) TestStore() {
 	s.NoError(store.UpsertMany(ctx, notifiers))
 	allNotifier, err := store.GetAll(ctx)
 	s.NoError(err)
-	s.ElementsMatch(notifiers, allNotifier)
+	protoassert.ElementsMatch(s.T(), notifiers, allNotifier)
 
-	notifierCount, err = store.Count(ctx)
+	notifierCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, notifierCount)
 
 	s.NoError(store.DeleteMany(ctx, notifierIDs))
 
-	notifierCount, err = store.Count(ctx)
+	notifierCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, notifierCount)
 }

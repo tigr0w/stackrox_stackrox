@@ -4,14 +4,13 @@ runs:
   using: composite
   steps:
     - name: Cache Gradle Dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
           ~/.m2/repository
-        key: gradle-v2-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}-${{ github.job }}
+        key: gradle-v2-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
         restore-keys: |
-          gradle-v2-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}-${{ github.job }}
-          gradle-v2-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}-
+          gradle-v2-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           gradle-v2-

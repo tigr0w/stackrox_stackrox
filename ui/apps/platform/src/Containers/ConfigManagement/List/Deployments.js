@@ -1,4 +1,5 @@
 import React, { useContext } from 'react';
+import { useLocation, useRouteMatch } from 'react-router-dom';
 import pluralize from 'pluralize';
 
 import PolicyStatusIconText from 'Components/PatternFly/IconText/PolicyStatusIconText';
@@ -16,6 +17,7 @@ import { CLIENT_SIDE_SEARCH_OPTIONS as SEARCH_OPTIONS } from 'constants/searchOp
 import { DEPLOYMENTS_QUERY } from 'queries/deployment';
 import queryService from 'utils/queryService';
 import URLService from 'utils/URLService';
+import { getConfigMgmtPathForEntitiesAndId } from '../entities';
 import List from './List';
 import filterByPolicyStatus from './utilities/filterByPolicyStatus';
 
@@ -38,6 +40,14 @@ const buildTableColumns = (match, location, entityContext) => {
             Header: `Deployment`,
             headerClassName: `w-1/8 ${defaultHeaderClassName}`,
             className: `w-1/8 ${defaultColumnClassName}`,
+            Cell: ({ original, pdf }) => {
+                const url = getConfigMgmtPathForEntitiesAndId('DEPLOYMENT', original.id);
+                return (
+                    <TableCellLink pdf={pdf} url={url}>
+                        {original.name}
+                    </TableCellLink>
+                );
+            },
             accessor: 'name',
             id: deploymentSortFields.DEPLOYMENT,
             sortField: deploymentSortFields.DEPLOYMENT,
@@ -173,8 +183,6 @@ const buildTableColumns = (match, location, entityContext) => {
 const createTableRows = (data) => data.results;
 
 const Deployments = ({
-    match,
-    location,
     className,
     selectedRowId,
     onRowClick,
@@ -183,6 +191,8 @@ const Deployments = ({
     totalResults,
     entityContext,
 }) => {
+    const location = useLocation();
+    const match = useRouteMatch();
     const searchParam = useContext(searchContext);
 
     const autoFocusSearchInput = !selectedRowId;

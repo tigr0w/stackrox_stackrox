@@ -4,28 +4,23 @@ import (
 	"context"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/central/processindicator"
-	"github.com/stackrox/rox/central/processindicator/index"
 	"github.com/stackrox/rox/central/processindicator/pruner"
 	"github.com/stackrox/rox/central/processindicator/search"
 	"github.com/stackrox/rox/central/processindicator/store"
 	plopStore "github.com/stackrox/rox/central/processlisteningonport/store/postgres"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/batcher"
 	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/debug"
-	"github.com/stackrox/rox/pkg/env"
 	ops "github.com/stackrox/rox/pkg/metrics"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 )
 
 const (
-	maxBatchSize = 5000
+	deleteBatchSize = 5000
 )
 
 var (
@@ -38,7 +33,6 @@ type datastoreImpl struct {
 	// logically belongs to the datastore implementation of PLOP, but this way
 	// it would be an import cycle, so call the Store directly.
 	plopStorage plopStore.Store
-	indexer     index.Indexer
 	searcher    search.Searcher
 
 	prunerFactory         pruner.Factory
@@ -102,22 +96,7 @@ func (ds *datastoreImpl) AddProcessIndicators(ctx context.Context, indicators ..
 		return sac.ErrResourceAccessDenied
 	}
 
-	err := ds.storage.UpsertMany(ctx, indicators)
-	if err != nil {
-		return err
-	}
-	if err := ds.indexer.AddProcessIndicators(indicators); err != nil {
-		return err
-	}
-
-	keys := make([]string, 0, len(indicators))
-	for _, indicator := range indicators {
-		keys = append(keys, indicator.GetId())
-	}
-	if err := ds.storage.AckKeysIndexed(ctx, keys...); err != nil {
-		return errors.Wrap(err, "error acknowledging added process indexing")
-	}
-	return nil
+	return ds.storage.UpsertMany(ctx, indicators)
 }
 
 func (ds *datastoreImpl) WalkAll(ctx context.Context, fn func(pi *storage.ProcessIndicator) error) error {
@@ -140,10 +119,6 @@ func (ds *datastoreImpl) RemoveProcessIndicators(ctx context.Context, ids []stri
 	return ds.removeIndicators(ctx, ids)
 }
 
-func (ds *datastoreImpl) removeMatchingIndicators(ctx context.Context, results []pkgSearch.Result) error {
-	return ds.removeIndicators(ctx, pkgSearch.ResultsToIDs(results))
-}
-
 func (ds *datastoreImpl) removeIndicators(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -152,47 +127,61 @@ func (ds *datastoreImpl) removeIndicators(ctx context.Context, ids []string) err
 		return err
 	}
 
-	if err := ds.indexer.DeleteProcessIndicators(ids); err != nil {
-		return err
-	}
-	if err := ds.storage.AckKeysIndexed(ctx, ids...); err != nil {
-		return errors.Wrap(err, "error acknowledging indicator removal")
-	}
-
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		// Clean up correlated ProcessListeningOnPort objects. Probably could be
-		// done using a proper FK and CASCADE, but it's usually a thing you would
-		// not like to do automatically. search.ProcessID is not a PID, but UUID of
-		// the record in the table
-
-		// Batch the deletes as scaled pruning can result in many process indicators being deleted.
-		localBatchSize := maxBatchSize
-		numRecordsToDelete := len(ids)
-		for {
-			if len(ids) == 0 {
-				break
-			}
-
-			if len(ids) < localBatchSize {
-				localBatchSize = len(ids)
-			}
-
-			identifierBatch := ids[:localBatchSize]
-			deleteQuery := pkgSearch.NewQueryBuilder().
-				AddStrings(pkgSearch.ProcessID, identifierBatch...).
-				ProtoQuery()
-
-			if err := ds.plopStorage.DeleteByQuery(ctx, deleteQuery); err != nil {
-				err = errors.Wrapf(err, "unable to delete the records.  Successfully deleted %d out of %d", numRecordsToDelete-len(ids), numRecordsToDelete)
-				return err
-			}
-
-			// Move the slice forward to start the next batch
-			ids = ids[localBatchSize:]
-		}
-	}
-
 	return nil
+}
+
+func (ds *datastoreImpl) PruneProcessIndicators(ctx context.Context, ids []string) (int, error) {
+	if ok, err := deploymentExtensionSAC.WriteAllowed(ctx); err != nil {
+		return 0, err
+	} else if !ok {
+		return 0, sac.ErrResourceAccessDenied
+	}
+
+	return ds.pruneIndicators(ctx, ids), nil
+}
+
+func (ds *datastoreImpl) pruneIndicators(ctx context.Context, ids []string) int {
+	// Previously this used removeIndicators and would call "DeleteMany".  The issue
+	// with that is "DeleteMany" wraps the entire delete into a transaction making it an
+	// all or nothing proposition.  For pruning, if a batch fails it shouldn't fail them all.
+	// A pruning batch that fails to delete would get deleted the next iteration of pruning.
+	// So for pruning, a delete by query will be used and the IDs will be batched.  Failed
+	// batches will be logged and we will move on to the next batch.
+	if len(ids) == 0 {
+		return 0
+	}
+
+	// Batch the deletes
+	initialSize := len(ids)
+	localBatchSize := deleteBatchSize
+	var successfullyPruned int
+	for {
+		if len(ids) == 0 {
+			break
+		}
+
+		if len(ids) < localBatchSize {
+			localBatchSize = len(ids)
+		}
+
+		identifierBatch := ids[:localBatchSize]
+
+		q := pkgSearch.NewQueryBuilder().AddDocIDs(identifierBatch...).ProtoQuery()
+
+		deletedIDs, err := ds.storage.DeleteByQuery(ctx, q)
+		if err != nil {
+			log.Warnf("error pruning a batch of indicators: %v", err)
+		} else {
+			successfullyPruned = successfullyPruned + len(deletedIDs)
+			log.Debugf("successfully pruned a batch of %d process indicators", len(deletedIDs))
+		}
+
+		// Move the slice forward to start the next batch
+		ids = ids[localBatchSize:]
+	}
+
+	log.Infof("successfully pruned %d out of %d indicators", successfullyPruned, initialSize)
+	return successfullyPruned
 }
 
 func (ds *datastoreImpl) RemoveProcessIndicatorsByPod(ctx context.Context, id string) error {
@@ -202,14 +191,8 @@ func (ds *datastoreImpl) RemoveProcessIndicatorsByPod(ctx context.Context, id st
 		return sac.ErrResourceAccessDenied
 	}
 	q := pkgSearch.NewQueryBuilder().AddExactMatches(pkgSearch.PodUID, id).ProtoQuery()
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		return ds.storage.DeleteByQuery(ctx, q)
-	}
-	results, err := ds.Search(ctx, q)
-	if err != nil {
-		return err
-	}
-	return ds.removeMatchingIndicators(ctx, results)
+	_, storeErr := ds.storage.DeleteByQuery(ctx, q)
+	return storeErr
 }
 
 func (ds *datastoreImpl) prunePeriodically(ctx context.Context) {
@@ -273,14 +256,12 @@ func (ds *datastoreImpl) prune(ctx context.Context) {
 		}
 		incrementProcessPruningCacheMissesMetric()
 		idsToRemove := pruner.Prune(args)
+		var successfullyPruned int
 		if len(idsToRemove) > 0 {
-			if err := ds.removeIndicators(ctx, idsToRemove); err != nil {
-				log.Errorf("Error while pruning processes: %s", err)
-			} else {
-				incrementPrunedProcessesMetric(len(idsToRemove))
-			}
+			successfullyPruned = ds.pruneIndicators(ctx, idsToRemove)
+			incrementPrunedProcessesMetric(successfullyPruned)
 		}
-		ds.prunedArgsLengthCache[processInfo] = numArgsReceived - len(idsToRemove)
+		ds.prunedArgsLengthCache[processInfo] = numArgsReceived - successfullyPruned
 	}
 
 	// Clean up the prunedArgsLengthCache by processes that are no longer in the DB.
@@ -297,98 +278,4 @@ func (ds *datastoreImpl) Stop() {
 
 func (ds *datastoreImpl) Wait(cancelWhen concurrency.Waitable) bool {
 	return concurrency.WaitInContext(ds.stopper.Client().Stopped(), cancelWhen)
-}
-
-func (ds *datastoreImpl) fullReindex(ctx context.Context) error {
-	log.Info("[STARTUP] Reindexing all processes")
-
-	indicators := make([]*storage.ProcessIndicator, 0, maxBatchSize)
-	var count int
-	err := ds.storage.Walk(ctx, func(pi *storage.ProcessIndicator) error {
-		indicators = append(indicators, pi)
-		if len(indicators) == maxBatchSize {
-			if err := ds.indexer.AddProcessIndicators(indicators); err != nil {
-				return err
-			}
-			count += maxBatchSize
-			indicators = indicators[:0]
-			log.Infof("[STARTUP] Successfully indexed %d processes", count)
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if err := ds.indexer.AddProcessIndicators(indicators); err != nil {
-		return err
-	}
-	count += len(indicators)
-	log.Infof("[STARTUP] Successfully indexed all %d processes", count)
-
-	// Clear the keys because we just re-indexed everything
-	keys, err := ds.storage.GetKeysToIndex(ctx)
-	if err != nil {
-		return err
-	}
-	if err := ds.storage.AckKeysIndexed(ctx, keys...); err != nil {
-		return err
-	}
-
-	// Write out that initial indexing is complete
-	if err := ds.indexer.MarkInitialIndexingComplete(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (ds *datastoreImpl) buildIndex(ctx context.Context) error {
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		return nil
-	}
-	defer debug.FreeOSMemory()
-
-	needsFullIndexing, err := ds.indexer.NeedsInitialIndexing()
-	if err != nil {
-		return err
-	}
-	if needsFullIndexing {
-		return ds.fullReindex(ctx)
-	}
-	log.Info("[STARTUP] Determining if process db/indexer reconciliation is needed")
-	processesToIndex, err := ds.storage.GetKeysToIndex(ctx)
-	if err != nil {
-		return errors.Wrap(err, "error retrieving keys to index")
-	}
-
-	log.Infof("[STARTUP] Found %d Processes to index", len(processesToIndex))
-
-	processBatcher := batcher.New(len(processesToIndex), maxBatchSize)
-	for start, end, valid := processBatcher.Next(); valid; start, end, valid = processBatcher.Next() {
-		processes, missingIndices, err := ds.storage.GetMany(ctx, processesToIndex[start:end])
-		if err != nil {
-			return err
-		}
-		if err := ds.indexer.AddProcessIndicators(processes); err != nil {
-			return err
-		}
-		if len(missingIndices) > 0 {
-			idsToRemove := make([]string, 0, len(missingIndices))
-			for _, missingIdx := range missingIndices {
-				idsToRemove = append(idsToRemove, processesToIndex[start:end][missingIdx])
-			}
-			if err := ds.indexer.DeleteProcessIndicators(idsToRemove); err != nil {
-				return err
-			}
-		}
-
-		// Ack keys so that even if central restarts, we don't need to reindex them again
-		if err := ds.storage.AckKeysIndexed(ctx, processesToIndex[start:end]...); err != nil {
-			return err
-		}
-		log.Infof("[STARTUP] Successfully indexed %d/%d processes", end, len(processesToIndex))
-	}
-
-	log.Info("[STARTUP] Successfully indexed all out of sync processes")
-	return nil
 }

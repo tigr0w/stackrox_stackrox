@@ -2,14 +2,10 @@ package datastore
 
 import (
 	"github.com/pkg/errors"
-	"github.com/stackrox/rox/central/alert/datastore/internal/index"
 	"github.com/stackrox/rox/central/alert/datastore/internal/search"
-	"github.com/stackrox/rox/central/alert/datastore/internal/store"
 	pgStore "github.com/stackrox/rox/central/alert/datastore/internal/store/postgres"
-	"github.com/stackrox/rox/central/alert/datastore/internal/store/rocksdb"
 	"github.com/stackrox/rox/central/globaldb"
-	"github.com/stackrox/rox/central/globalindex"
-	"github.com/stackrox/rox/pkg/env"
+	platformmatcher "github.com/stackrox/rox/central/platform/matcher"
 	"github.com/stackrox/rox/pkg/sync"
 	"github.com/stackrox/rox/pkg/utils"
 )
@@ -20,19 +16,10 @@ var (
 )
 
 func initialize() {
-	var storage store.Store
-	var indexer index.Indexer
-
-	if env.PostgresDatastoreEnabled.BooleanSetting() {
-		storage = pgStore.New(globaldb.GetPostgres())
-		indexer = pgStore.NewIndexer(globaldb.GetPostgres())
-	} else {
-		storage = rocksdb.New(globaldb.GetRocksDB())
-		indexer = index.New(globalindex.GetAlertIndex())
-	}
-	searcher := search.New(storage, indexer)
+	storage := pgStore.New(globaldb.GetPostgres())
+	searcher := search.New(storage)
 	var err error
-	soleInstance, err = New(storage, indexer, searcher)
+	soleInstance, err = New(storage, searcher, platformmatcher.Singleton())
 	utils.CrashOnError(errors.Wrap(err, "unable to load datastore for alerts"))
 }
 

@@ -4,17 +4,17 @@ import (
 	"context"
 	"time"
 
-	timestamp "github.com/gogo/protobuf/types"
-	"github.com/stackrox/rox/compliance/collection/compliance"
-	"github.com/stackrox/rox/compliance/collection/intervals"
+	"github.com/stackrox/rox/compliance/node"
+	"github.com/stackrox/rox/compliance/utils"
 	"github.com/stackrox/rox/generated/internalapi/sensor"
 	"github.com/stackrox/rox/generated/storage"
+	"github.com/stackrox/rox/pkg/protocompat"
 )
 
 // LoadGeneratingNodeScanner is a scanner that generates fake scans with high frequecy of the node-inventory messages.
 // Its main purpose is to generate load for load-testing of Sensor
 type LoadGeneratingNodeScanner struct {
-	nodeProvider       compliance.NodeNameProvider
+	nodeProvider       node.NodeNameProvider
 	generationInterval time.Duration
 	initialScanDelay   time.Duration
 }
@@ -28,8 +28,8 @@ func (n *LoadGeneratingNodeScanner) IsActive() bool {
 func (n *LoadGeneratingNodeScanner) Connect(_ string) {}
 
 // GetIntervals returns an object with delay-intervals between scans
-func (n *LoadGeneratingNodeScanner) GetIntervals() *intervals.NodeScanIntervals {
-	return intervals.NewNodeScanInterval(n.generationInterval, 0.0, n.initialScanDelay)
+func (n *LoadGeneratingNodeScanner) GetIntervals() *utils.NodeScanIntervals {
+	return utils.NewNodeScanInterval(n.generationInterval, 0.0, n.initialScanDelay)
 }
 
 // ScanNode generates a MsgFromCompliance with node scan
@@ -40,7 +40,7 @@ func (n *LoadGeneratingNodeScanner) ScanNode(_ context.Context) (*sensor.MsgFrom
 			NodeInventory: &storage.NodeInventory{
 				NodeId:   "",
 				NodeName: n.nodeProvider.GetNodeName(),
-				ScanTime: timestamp.TimestampNow(),
+				ScanTime: protocompat.TimestampNow(),
 				Components: &storage.NodeInventory_Components{
 					Namespace:       "rhcos:4.11",
 					RhelContentSets: []string{"rhel-8-for-x86_64-appstream-rpms", "rhel-8-for-x86_64-baseos-rpms"},
@@ -59,6 +59,6 @@ func (n *LoadGeneratingNodeScanner) ScanNode(_ context.Context) (*sensor.MsgFrom
 				Notes: nil,
 			}},
 	}
-	log.Infof("Generating Node Inventory")
+	log.Info("Generating Node Inventory")
 	return msg, nil
 }

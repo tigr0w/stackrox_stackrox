@@ -9,18 +9,16 @@ import (
 	"github.com/stackrox/rox/central/metrics"
 	"github.com/stackrox/rox/central/node/datastore/search"
 	"github.com/stackrox/rox/central/node/datastore/store"
-	"github.com/stackrox/rox/central/node/index"
 	"github.com/stackrox/rox/central/ranking"
 	riskDS "github.com/stackrox/rox/central/risk/datastore"
-	"github.com/stackrox/rox/central/role/resources"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/concurrency"
-	"github.com/stackrox/rox/pkg/env"
 	"github.com/stackrox/rox/pkg/errorhelpers"
 	"github.com/stackrox/rox/pkg/logging"
 	"github.com/stackrox/rox/pkg/nodes/enricher"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/sac/resources"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	pkgSearch "github.com/stackrox/rox/pkg/search"
 )
@@ -39,7 +37,6 @@ type datastoreImpl struct {
 	keyedMutex *concurrency.KeyedMutex
 
 	storage  store.Store
-	indexer  index.Indexer
 	searcher search.Searcher
 
 	risks riskDS.DataStore
@@ -48,11 +45,10 @@ type datastoreImpl struct {
 	nodeComponentRanker *ranking.Ranker
 }
 
-func newDatastoreImpl(storage store.Store, indexer index.Indexer, searcher search.Searcher, risks riskDS.DataStore,
+func newDatastoreImpl(storage store.Store, searcher search.Searcher, risks riskDS.DataStore,
 	nodeRanker *ranking.Ranker, nodeComponentRanker *ranking.Ranker) *datastoreImpl {
 	ds := &datastoreImpl{
 		storage:  storage,
-		indexer:  indexer,
 		searcher: searcher,
 
 		risks: risks,
@@ -100,12 +96,9 @@ func (ds *datastoreImpl) SearchRawNodes(ctx context.Context, q *v1.Query) ([]*st
 
 // CountNodes delegates to the underlying store.
 func (ds *datastoreImpl) CountNodes(ctx context.Context) (int, error) {
-	if ok, err := nodesSAC.ReadAllowed(ctx); err != nil {
+	if _, err := nodesSAC.ReadAllowed(ctx); err != nil {
 		return 0, err
-	} else if ok {
-		return ds.storage.Count(ctx)
 	}
-
 	return ds.Count(ctx, pkgSearch.EmptyQuery())
 }
 
@@ -183,6 +176,14 @@ func (ds *datastoreImpl) GetManyNodeMetadata(ctx context.Context, ids []string) 
 	return nodes, nil
 }
 
+func (ds *datastoreImpl) WalkByQuery(ctx context.Context, q *v1.Query, fn func(node *storage.Node) error) error {
+	wrappedFn := func(node *storage.Node) error {
+		ds.updateNodePriority(node)
+		return fn(node)
+	}
+	return ds.storage.WalkByQuery(ctx, q, wrappedFn)
+}
+
 // UpsertNode dedupes the node with the underlying storage and adds the node to the index.
 func (ds *datastoreImpl) UpsertNode(ctx context.Context, node *storage.Node) error {
 	defer metrics.SetDatastoreFunctionDuration(time.Now(), typ, "UpsertNode")
@@ -257,12 +258,6 @@ func (ds *datastoreImpl) deleteNodeFromStore(ctx context.Context, ids ...string)
 
 func (ds *datastoreImpl) Exists(ctx context.Context, id string) (bool, error) {
 	defer metrics.SetDatastoreFunctionDuration(time.Now(), typ, "Exists")
-
-	if !env.PostgresDatastoreEnabled.BooleanSetting() {
-		if ok, err := ds.canReadNode(ctx, id); err != nil || !ok {
-			return false, err
-		}
-	}
 	return ds.storage.Exists(ctx, id)
 }
 

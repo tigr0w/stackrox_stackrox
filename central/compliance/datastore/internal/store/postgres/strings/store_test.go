@@ -10,7 +10,9 @@ import (
 
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/postgres/pgtest"
+	"github.com/stackrox/rox/pkg/protoassert"
 	"github.com/stackrox/rox/pkg/sac"
+	"github.com/stackrox/rox/pkg/search"
 	"github.com/stackrox/rox/pkg/testutils"
 	"github.com/stretchr/testify/suite"
 )
@@ -35,6 +37,7 @@ func (s *ComplianceStringsStoreSuite) SetupTest() {
 	ctx := sac.WithAllAccess(context.Background())
 	tag, err := s.testDB.Exec(ctx, "TRUNCATE compliance_strings CASCADE")
 	s.T().Log("compliance_strings", tag)
+	s.store = New(s.testDB.DB)
 	s.NoError(err)
 }
 
@@ -61,12 +64,12 @@ func (s *ComplianceStringsStoreSuite) TestStore() {
 	foundComplianceStrings, exists, err = store.Get(ctx, complianceStrings.GetId())
 	s.NoError(err)
 	s.True(exists)
-	s.Equal(complianceStrings, foundComplianceStrings)
+	protoassert.Equal(s.T(), complianceStrings, foundComplianceStrings)
 
-	complianceStringsCount, err := store.Count(ctx)
+	complianceStringsCount, err := store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(1, complianceStringsCount)
-	complianceStringsCount, err = store.Count(withNoAccessCtx)
+	complianceStringsCount, err = store.Count(withNoAccessCtx, search.EmptyQuery())
 	s.NoError(err)
 	s.Zero(complianceStringsCount)
 
@@ -75,11 +78,6 @@ func (s *ComplianceStringsStoreSuite) TestStore() {
 	s.True(complianceStringsExists)
 	s.NoError(store.Upsert(ctx, complianceStrings))
 	s.ErrorIs(store.Upsert(withNoAccessCtx, complianceStrings), sac.ErrResourceAccessDenied)
-
-	foundComplianceStrings, exists, err = store.Get(ctx, complianceStrings.GetId())
-	s.NoError(err)
-	s.True(exists)
-	s.Equal(complianceStrings, foundComplianceStrings)
 
 	s.NoError(store.Delete(ctx, complianceStrings.GetId()))
 	foundComplianceStrings, exists, err = store.Get(ctx, complianceStrings.GetId())
@@ -99,13 +97,13 @@ func (s *ComplianceStringsStoreSuite) TestStore() {
 
 	s.NoError(store.UpsertMany(ctx, complianceStringss))
 
-	complianceStringsCount, err = store.Count(ctx)
+	complianceStringsCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(200, complianceStringsCount)
 
 	s.NoError(store.DeleteMany(ctx, complianceStringsIDs))
 
-	complianceStringsCount, err = store.Count(ctx)
+	complianceStringsCount, err = store.Count(ctx, search.EmptyQuery())
 	s.NoError(err)
 	s.Equal(0, complianceStringsCount)
 }

@@ -33,6 +33,8 @@ import {
     namespaceBadgeColor,
     namespaceBadgeText,
 } from './common/NetworkGraphIcons';
+import useNetworkPolicySimulator from './hooks/useNetworkPolicySimulator';
+import { NetworkScopeHierarchy } from './types/networkScopeHierarchy';
 
 export type Models = {
     activeModel: CustomModel;
@@ -49,14 +51,15 @@ function getFilteredEdges(
             const { source, target } = edge;
             const { type } = selectedNode.data;
             if (type === 'NAMESPACE' || type === 'EXTERNAL_GROUP') {
-                // if a namespace is selected, add children's node edges
+                // if a "grouped type" is selected, add children's node edges
                 const { children } = selectedNode;
                 if (children?.includes(source) || children?.includes(target)) {
                     filteredEdges.push({ ...edge, visible: true });
                 }
-                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-                // @ts-ignore
-            } else if (source === selectedNode.data?.id || target === selectedNode.data?.id) {
+            } else if (
+                'id' in selectedNode.data &&
+                (source === selectedNode.data.id || target === selectedNode.data.id)
+            ) {
                 filteredEdges.push({ ...edge, visible: true });
             }
         });
@@ -149,7 +152,7 @@ function getDisplayNodes(
             };
             if (showObjectTypeLabels) {
                 deploymentData = {
-                    ...data,
+                    ...deploymentData,
                     badge: deploymentBadgeText,
                     badgeColor: deploymentBadgeColor,
                     badgeTextColor: '#FFFFFF',
@@ -271,12 +274,13 @@ function fadeOutUnconnectedNodes(
 }
 
 type NetworkGraphContainerProps = {
+    isReadyForVisualization: boolean;
     models: Models;
     edgeState: EdgeState;
     displayOptions: DisplayOption[];
     simulation: Simulation;
-    selectedClusterId: string;
     clusterDeploymentCount: number;
+    scopeHierarchy: NetworkScopeHierarchy;
 };
 
 // the order of model modification is as follows:
@@ -288,13 +292,19 @@ type NetworkGraphContainerProps = {
 //
 // 1 (edgeState) -> 2 (selectedNode/edgeState) -> 3 (displayOptions)
 function NetworkGraphContainer({
+    isReadyForVisualization,
     models,
     edgeState,
     displayOptions,
     simulation,
-    selectedClusterId,
     clusterDeploymentCount,
+    scopeHierarchy,
 }: NetworkGraphContainerProps) {
+    const { simulator, setNetworkPolicyModification } = useNetworkPolicySimulator({
+        simulation,
+        scopeHierarchy,
+    });
+
     // these are the unfiltered, unmodified data models
     const { activeModel, extraneousModel } = models;
 
@@ -304,9 +314,9 @@ function NetworkGraphContainer({
 
     // 2. selectedNode/edgeState data model filtering ------------------------------------
     // selected node state is stored in the URL
-    const { detailId: encodedDetailId } = useParams();
-    const detailId = decodeURIComponent(encodedDetailId);
-    const selectedNode = getNodeById(baseModel?.nodes, detailId);
+    const { nodeId: encodedNodeId } = useParams();
+    const nodeId = decodeURIComponent(encodedNodeId);
+    const selectedNode = getNodeById(baseModel?.nodes, nodeId);
     // extraneous catch-all in/egress flows nodes to add/remove from extraneous nodes model
     const extraneousNodes = createExtraneousNodes(clusterDeploymentCount);
     // this is the current filtered model that has not been modified yet
@@ -352,13 +362,23 @@ function NetworkGraphContainer({
         edges: modifiedEdges,
     };
 
+    const isSimulating =
+        simulator.state === 'GENERATED' ||
+        simulator.state === 'UNDO' ||
+        simulator.state === 'UPLOAD' ||
+        (simulation.isOn && simulation.type === 'baseline');
+
     return (
         <NetworkGraph
+            isReadyForVisualization={isReadyForVisualization}
             model={updatedModel}
             simulation={simulation}
-            selectedClusterId={selectedClusterId || ''}
+            simulator={simulator}
+            setNetworkPolicyModification={setNetworkPolicyModification}
             selectedNode={selectedNode}
             edgeState={edgeState}
+            scopeHierarchy={scopeHierarchy}
+            isSimulating={isSimulating}
         />
     );
 }

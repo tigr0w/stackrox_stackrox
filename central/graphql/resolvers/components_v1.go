@@ -2,17 +2,17 @@ package resolvers
 
 import (
 	"context"
+	"time"
 
-	protoTypes "github.com/gogo/protobuf/types"
 	"github.com/graph-gophers/graphql-go"
-	"github.com/pkg/errors"
 	acConverter "github.com/stackrox/rox/central/activecomponent/converter"
 	"github.com/stackrox/rox/central/graphql/resolvers/deploymentctx"
 	"github.com/stackrox/rox/central/graphql/resolvers/loaders"
 	"github.com/stackrox/rox/central/image/mappings"
 	v1 "github.com/stackrox/rox/generated/api/v1"
 	"github.com/stackrox/rox/generated/storage"
-	"github.com/stackrox/rox/pkg/env"
+	"github.com/stackrox/rox/pkg/features"
+	"github.com/stackrox/rox/pkg/protocompat"
 	"github.com/stackrox/rox/pkg/scancomponent"
 	"github.com/stackrox/rox/pkg/search"
 )
@@ -50,13 +50,8 @@ func (resolver *imageScanResolver) ComponentCount(ctx context.Context, args RawQ
 type EmbeddedImageScanComponentResolver struct {
 	os          string
 	root        *Resolver
-	lastScanned *protoTypes.Timestamp
+	lastScanned *time.Time
 	data        *storage.EmbeddedImageScanComponent
-}
-
-// PlottedVulns returns the data required by top risky component scatter-plot on vuln mgmt dashboard
-func (eicr *EmbeddedImageScanComponentResolver) PlottedVulns(_ context.Context, _ RawQuery) (*PlottedVulnerabilitiesResolver, error) {
-	return nil, errors.New("not implemented")
 }
 
 // UnusedVarSink represents a query sink
@@ -122,11 +117,14 @@ func (eicr *EmbeddedImageScanComponentResolver) LayerIndex() (*int32, error) {
 
 // LastScanned is the last time the component was scanned in an image.
 func (eicr *EmbeddedImageScanComponentResolver) LastScanned(_ context.Context) (*graphql.Time, error) {
-	return timestamp(eicr.lastScanned)
+	if eicr.lastScanned == nil {
+		return nil, nil
+	}
+	return &graphql.Time{Time: *eicr.lastScanned}, nil
 }
 
 // TopVuln returns the first vulnerability with the top CVSS score.
-func (eicr *EmbeddedImageScanComponentResolver) TopVuln(_ context.Context) (VulnerabilityResolver, error) {
+func (eicr *EmbeddedImageScanComponentResolver) TopVuln(_ context.Context) (*EmbeddedVulnerabilityResolver, error) {
 	var maxCvss *storage.EmbeddedVulnerability
 	for _, vuln := range eicr.data.GetVulns() {
 		if maxCvss == nil || vuln.GetCvss() > maxCvss.GetCvss() {
@@ -140,7 +138,7 @@ func (eicr *EmbeddedImageScanComponentResolver) TopVuln(_ context.Context) (Vuln
 }
 
 // Vulns resolves the vulnerabilities contained in the image component.
-func (eicr *EmbeddedImageScanComponentResolver) Vulns(_ context.Context, args PaginatedQuery) ([]VulnerabilityResolver, error) {
+func (eicr *EmbeddedImageScanComponentResolver) Vulns(_ context.Context, args PaginatedQuery) ([]*EmbeddedVulnerabilityResolver, error) {
 	query, err := args.AsV1QueryOrEmpty()
 	if err != nil {
 		return nil, err
@@ -165,15 +163,11 @@ func (eicr *EmbeddedImageScanComponentResolver) Vulns(_ context.Context, args Pa
 		})
 	}
 
-	resolvers, err := paginate(query.GetPagination(), vulns, nil)
+	vulns, err = paginate(query.GetPagination(), vulns, nil)
 	if err != nil {
 		return nil, err
 	}
-	ret := make([]VulnerabilityResolver, 0, len(resolvers))
-	for _, resolver := range resolvers {
-		ret = append(ret, resolver)
-	}
-	return ret, err
+	return vulns, nil
 }
 
 // VulnCount resolves the number of vulnerabilities contained in the image component.
@@ -251,7 +245,7 @@ func (eicr *EmbeddedImageScanComponentResolver) DeploymentCount(ctx context.Cont
 
 // ActiveState shows the activeness of a component in a deployment context.
 func (eicr *EmbeddedImageScanComponentResolver) ActiveState(ctx context.Context, _ PaginatedQuery) (*activeStateResolver, error) {
-	if !env.ActiveVulnMgmt.BooleanSetting() {
+	if !features.ActiveVulnMgmt.Enabled() {
 		return &activeStateResolver{}, nil
 	}
 	deploymentID := deploymentctx.FromContext(ctx)
@@ -409,9 +403,10 @@ func mapImagesToComponentResolvers(root *Resolver, images []*storage.Image, quer
 					data: component,
 				}
 			}
-			latestTime := idToComponent[thisComponentID].lastScanned
-			if latestTime == nil || image.GetScan().GetScanTime().Compare(latestTime) > 0 {
-				idToComponent[thisComponentID].lastScanned = image.GetScan().GetScanTime()
+			latestTime := protocompat.ConvertTimeToTimestampOrNil(idToComponent[thisComponentID].lastScanned)
+			if latestTime == nil || protocompat.CompareTimestamps(image.GetScan().GetScanTime(), latestTime) > 0 {
+				imageScanTime := protocompat.ConvertTimestampToTimeOrNil(image.GetScan().GetScanTime())
+				idToComponent[thisComponentID].lastScanned = imageScanTime
 			}
 		}
 	}

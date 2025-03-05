@@ -8,30 +8,28 @@ import {
     Tab,
     TabTitleText,
     Tabs,
-    TabsComponent,
 } from '@patternfly/react-core';
 import { useParams } from 'react-router-dom';
 import { gql, useQuery } from '@apollo/client';
 
 import PageTitle from 'Components/PageTitle';
 import BreadcrumbItemLink from 'Components/BreadcrumbItemLink';
-import useURLStringUnion from 'hooks/useURLStringUnion';
-
 import NotFoundMessage from 'Components/NotFoundMessage';
-import { getOverviewCvesPath } from '../searchUtils';
+import TableErrorComponent from 'Components/PatternFly/TableErrorComponent';
+import useURLStringUnion from 'hooks/useURLStringUnion';
+import useURLPagination from 'hooks/useURLPagination';
+
 import DeploymentPageHeader, {
     DeploymentMetadata,
     deploymentMetadataFragment,
 } from './DeploymentPageHeader';
-import TableErrorComponent from '../components/TableErrorComponent';
-import { detailsTabValues } from '../types';
+import { getOverviewPagePath } from '../../utils/searchUtils';
+import { detailsTabValues } from '../../types';
+import { DEFAULT_VM_PAGE_SIZE } from '../../constants';
 import DeploymentPageResources from './DeploymentPageResources';
 import DeploymentPageVulnerabilities from './DeploymentPageVulnerabilities';
-
-const workloadCveOverviewDeploymentsPath = getOverviewCvesPath({
-    cveStatusTab: 'Observed',
-    entityTab: 'Deployment',
-});
+import DeploymentPageDetails from './DeploymentPageDetails';
+import useWorkloadCveViewContext from '../hooks/useWorkloadCveViewContext';
 
 const deploymentMetadataQuery = gql`
     ${deploymentMetadataFragment}
@@ -44,7 +42,17 @@ const deploymentMetadataQuery = gql`
 
 function DeploymentPage() {
     const { deploymentId } = useParams() as { deploymentId: string };
+    const { getAbsoluteUrl, pageTitle } = useWorkloadCveViewContext();
     const [activeTabKey, setActiveTabKey] = useURLStringUnion('detailsTab', detailsTabValues);
+
+    const workloadCveOverviewDeploymentsPath = getAbsoluteUrl(
+        getOverviewPagePath('Workload', {
+            vulnerabilityState: 'OBSERVED',
+            entityTab: 'Deployment',
+        })
+    );
+
+    const pagination = useURLPagination(DEFAULT_VM_PAGE_SIZE);
 
     const metadataRequest = useQuery<{ deployment: DeploymentMetadata | null }, { id: string }>(
         deploymentMetadataQuery,
@@ -58,8 +66,8 @@ function DeploymentPage() {
 
     return (
         <>
-            <PageTitle title={`Workload CVEs - Deployment ${deploymentName ?? ''}`} />
-            <PageSection variant="light" className="pf-u-py-md">
+            <PageTitle title={`${pageTitle} - Deployment ${deploymentName ?? ''}`} />
+            <PageSection variant="light" className="pf-v5-u-py-md">
                 <Breadcrumb>
                     <BreadcrumbItemLink to={workloadCveOverviewDeploymentsPath}>
                         Deployments
@@ -94,30 +102,45 @@ function DeploymentPage() {
                         <DeploymentPageHeader data={metadataRequest.data?.deployment} />
                     </PageSection>
                     <PageSection
-                        className="pf-u-display-flex pf-u-flex-direction-column pf-u-flex-grow-1"
+                        className="pf-v5-u-display-flex pf-v5-u-flex-direction-column pf-v5-u-flex-grow-1"
                         padding={{ default: 'noPadding' }}
                     >
                         <Tabs
                             activeKey={activeTabKey}
-                            onSelect={(e, key) => setActiveTabKey(key)}
-                            component={TabsComponent.nav}
-                            className="pf-u-pl-md pf-u-background-color-100"
+                            onSelect={(e, key) => {
+                                setActiveTabKey(key);
+                                pagination.setPage(1);
+                            }}
+                            className="pf-v5-u-pl-md pf-v5-u-background-color-100"
                             mountOnEnter
                             unmountOnExit
                         >
                             <Tab
-                                className="pf-u-display-flex pf-u-flex-direction-column pf-u-flex-grow-1"
+                                className="pf-v5-u-display-flex pf-v5-u-flex-direction-column pf-v5-u-flex-grow-1"
                                 eventKey="Vulnerabilities"
                                 title={<TabTitleText>Vulnerabilities</TabTitleText>}
                             >
-                                <DeploymentPageVulnerabilities deploymentId={deploymentId} />
+                                <DeploymentPageVulnerabilities
+                                    deploymentId={deploymentId}
+                                    pagination={pagination}
+                                />
                             </Tab>
                             <Tab
-                                className="pf-u-display-flex pf-u-flex-direction-column pf-u-flex-grow-1"
+                                className="pf-v5-u-display-flex pf-v5-u-flex-direction-column pf-v5-u-flex-grow-1"
+                                eventKey="Details"
+                                title={<TabTitleText>Details</TabTitleText>}
+                            >
+                                <DeploymentPageDetails deploymentId={deploymentId} />
+                            </Tab>
+                            <Tab
+                                className="pf-v5-u-display-flex pf-v5-u-flex-direction-column pf-v5-u-flex-grow-1"
                                 eventKey="Resources"
                                 title={<TabTitleText>Resources</TabTitleText>}
                             >
-                                <DeploymentPageResources deploymentId={deploymentId} />
+                                <DeploymentPageResources
+                                    deploymentId={deploymentId}
+                                    pagination={pagination}
+                                />
                             </Tab>
                         </Tabs>
                     </PageSection>
