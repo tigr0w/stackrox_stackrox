@@ -94,7 +94,7 @@ require (
 	github.com/onsi/gomega v1.38.2
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
-	github.com/openshift-online/ocm-sdk-go v0.1.483
+	github.com/openshift-online/ocm-sdk-go v0.1.485
 	github.com/openshift/api v0.0.0-20251122153900-88cca31a44c9
 	github.com/openshift/client-go v0.0.0-20251123231646-4685125c2287
 	github.com/openshift/runtime-utils v0.0.0-20230921210328-7bdb5b9c177b
@@ -162,13 +162,13 @@ require (
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 	helm.sh/helm/v3 v3.19.2
-	k8s.io/api v0.34.1
-	k8s.io/apiextensions-apiserver v0.34.0
-	k8s.io/apimachinery v0.34.1
-	k8s.io/apiserver v0.34.0
-	k8s.io/cli-runtime v0.34.0
-	k8s.io/client-go v0.34.1
-	k8s.io/kubectl v0.34.0
+	k8s.io/api v0.34.2
+	k8s.io/apiextensions-apiserver v0.34.2
+	k8s.io/apimachinery v0.34.2
+	k8s.io/apiserver v0.34.2
+	k8s.io/cli-runtime v0.34.2
+	k8s.io/client-go v0.34.2
+	k8s.io/kubectl v0.34.2
 	k8s.io/kubelet v0.32.10
 	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
 	kubevirt.io/api v1.6.3
@@ -421,8 +421,8 @@ require (
 	github.com/olekukonko/errors v1.1.0 // indirect
 	github.com/olekukonko/ll v0.1.2 // indirect
 	github.com/opencontainers/runtime-spec v1.2.1 // indirect
-	github.com/openshift-online/ocm-api-model/clientapi v0.0.438 // indirect
-	github.com/openshift-online/ocm-api-model/model v0.0.438 // indirect
+	github.com/openshift-online/ocm-api-model/clientapi v0.0.439 // indirect
+	github.com/openshift-online/ocm-api-model/model v0.0.439 // indirect
 	github.com/openshift/custom-resource-status v1.1.2 // indirect
 	github.com/operator-framework/operator-lib v0.17.0 // indirect
 	github.com/package-url/packageurl-go v0.1.3 // indirect
@@ -510,9 +510,9 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/code-generator v0.34.1 // indirect
-	k8s.io/component-base v0.34.0 // indirect
-	k8s.io/component-helpers v0.34.0 // indirect
+	k8s.io/code-generator v0.34.2 // indirect
+	k8s.io/component-base v0.34.2 // indirect
+	k8s.io/component-helpers v0.34.2 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250604051438-85fd79dbfd9f // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250710124328-f3f2b991d03b // indirect
