@@ -60,6 +60,7 @@ jobs:
         gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
     - name: Trigger test cluster creation
+      id: create-cluster
       uses: stackrox/actions/infra/create-cluster@79f8a64e6701be953c23ef1718fcc186a2fb0d0d # ratchet:stackrox/actions/infra/create-cluster@v1
       with:
         token: ${{ secrets.INFRA_TOKEN }}
@@ -151,7 +152,8 @@ jobs:
         FinalPost(store_qa_tests_data=True).run()
 
     - name: Delete cluster
-      if: always()
+      if: always() && steps.create-cluster.outcome == 'success'
+      continue-on-error: true
       run: infractl delete "${CLUSTER_NAME}"
 
     - name: Publish test summary
@@ -204,6 +206,7 @@ jobs:
         gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
     - name: Trigger test cluster creation
+      id: create-cluster
       uses: stackrox/actions/infra/create-cluster@79f8a64e6701be953c23ef1718fcc186a2fb0d0d # ratchet:stackrox/actions/infra/create-cluster@v1
       with:
         token: ${{ secrets.INFRA_TOKEN }}
@@ -294,7 +297,8 @@ jobs:
         FinalPost(store_qa_tests_data=True).run()
 
     - name: Delete cluster
-      if: always()
+      if: always() && steps.create-cluster.outcome == 'success'
+      continue-on-error: true
       run: infractl delete "${CLUSTER_NAME}"
 
     - name: Publish test summary
@@ -347,6 +351,7 @@ jobs:
         gcp-account: ${{ secrets.GCP_SERVICE_ACCOUNT_STACKROX_CI }}
 
     - name: Trigger test cluster creation
+      id: create-cluster
       uses: stackrox/actions/infra/create-cluster@79f8a64e6701be953c23ef1718fcc186a2fb0d0d # ratchet:stackrox/actions/infra/create-cluster@v1
       with:
         token: ${{ secrets.INFRA_TOKEN }}
@@ -424,7 +429,8 @@ jobs:
         FinalPost(store_qa_tests_data=False).run()
 
     - name: Delete cluster
-      if: always()
+      if: always() && steps.create-cluster.outcome == 'success'
+      continue-on-error: true
       run: infractl delete "${CLUSTER_NAME}"
 
     - name: Publish test summary
